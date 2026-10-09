@@ -1,8 +1,9 @@
 <script setup>
 import AgentTasksPage from './AgentTasksPage.vue'
 import ImagePreview from './ImagePreview.vue'
-import { computed, inject, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
+  ArrowDownToLine,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -38,6 +39,18 @@ const agentProcessExpanded = ref(localStorage.getItem('mio_agent_process_expande
 const activeConversation = computed(() => context.conversations.find((item) => item.id === context.selectedConversationId) || null)
 // 阉割 QQ 共享对话：对话列表不再显示 qq 类型会话
 const visibleConversations = computed(() => (context.conversations || []).filter((item) => item.kind !== 'qq'))
+
+// ============ 跟随对话开关（替换原“当前会话标题”按钮） ============
+const followChat = ref(localStorage.getItem('mio_chat_follow') !== 'false')
+function xzScrollToBottom() {
+  const el = context.chatScroll
+  if (el) el.scrollTop = el.scrollHeight
+}
+function toggleFollowChat() {
+  followChat.value = !followChat.value
+  localStorage.setItem('mio_chat_follow', String(followChat.value))
+  if (followChat.value) nextTick(() => xzScrollToBottom())
+}
 
 async function openConversation(conversationId) {
   if (conversationId !== context.selectedConversationId) cancelQqCleanup()
@@ -95,6 +108,11 @@ let xzSessionId = ''
 let xzWs = null
 let xzReconnectTimer = null
 let xzRetryDelay = 3000
+
+// 开启跟随且消息/思考状态变化时，自动滚动到底部
+watch([xzTurns, xzThinking], () => {
+  if (followChat.value) nextTick(() => xzScrollToBottom())
+})
 
 // 音频播放（48kHz 双声道 float32 planar，后端代理解码）
 let xzAudioCtx = null
@@ -267,8 +285,8 @@ onBeforeUnmount(() => { window.clearTimeout(xzReconnectTimer); if (xzWs) try { x
       @dragleave="context.handleFileDragLeave"
       @drop="context.handleFileDrop"
     >
-      <button class="conversation-drawer-trigger" type="button" title="对话窗口" @click="conversationDrawerOpen = !conversationDrawerOpen">
-        <MessageSquareText :size="16" /><span>{{ context.conversations.find((item) => item.id === context.selectedConversationId)?.title || '对话窗口' }}</span>
+      <button class="conversation-drawer-trigger follow-chat-toggle" type="button" :class="{ 'follow-off': !followChat }" :title="followChat ? '当前跟随对话：新消息自动滚到底部（点击关闭）' : '已暂停跟随对话：不再自动滚动（点击开启）'" @click="toggleFollowChat">
+        <ArrowDownToLine :size="16" /><span>跟随对话</span><i :class="{ online: followChat }" />
       </button>
       <div v-if="!context.isAgentWorkspace && context.latestTaskHandoff?.task_id" class="chat-handoff-notice" role="status">
         <span><ListChecks :size="15" /><strong>已交给 Agent 继续处理</strong><small>详细执行过程在 Agent 页面查看</small></span>

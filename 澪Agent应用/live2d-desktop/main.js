@@ -206,7 +206,7 @@ function openPetAdmin() {
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: false, preload: path.join(__dirname, 'preload.js') },
   })
   // 桌宠管理面板：直接进入 main 模式（私人空间对话页），Agent 工作台已阉割
-  petAdminWindow.loadURL(`${API_BASE}/agent-app/?workspace=main&v=20261009-src-v11`)
+  petAdminWindow.loadURL(`${API_BASE}/agent-app/?workspace=main&v=20261009-src-v12`)
   petAdminWindow.on('closed', () => { petAdminWindow = null })
 }
 
@@ -871,7 +871,7 @@ function registerIpc() {
   })
   ipcMain.handle('mio-desktop:get-version', () => ({
     app: 'Mio Live2D 桌宠',
-    frontend: 'runtime-v10',
+    frontend: 'runtime-v12',
     electron: process.versions.electron,
     chrome: process.versions.chrome,
     node: process.versions.node,
