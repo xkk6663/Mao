@@ -38,7 +38,7 @@
   const contextMenu = document.getElementById('context-menu')
   const activityIndicator = document.getElementById('activity-indicator')
   const speechBubbleButton = contextMenu.querySelector('[data-action="speech-bubble"]')
-  const speechLanguageButton = contextMenu.querySelector('[data-action="speech-language"]')
+  const speechLanguageButton = contextMenu.querySelector('[data-action="screenshot-ask"]')
   const speechBubble = document.getElementById('speech-bubble')
   const speechBubbleText = document.getElementById('speech-bubble-text')
   const modelSelect = document.getElementById('model-select')
@@ -1568,9 +1568,7 @@
         : '隐藏说话气泡'
     }
     if (speechLanguageButton) {
-      speechLanguageButton.textContent = settings.pet_speech_language === 'ja'
-        ? '语音语言：日语'
-        : '语音语言：中文'
+      speechLanguageButton.textContent = '截图提问'
     }
   }
 
@@ -1823,10 +1821,28 @@
     const bridge = await waitForBridge()
     if (action === 'chat') await bridge.open_chat()
     if (action === 'size') sizePanel.hidden = false
-    if (action === 'speech-language') {
-      const language = settings.pet_speech_language === 'ja' ? 'zh' : 'ja'
-      try { await persistCompanionSetting('pet_speech_language', language) } catch (_) {}
-      updateContextMenuLabels()
+    if (action === 'screenshot-ask') {
+      // 截图提问：截全屏 → 小智视觉分析 → 注入对话（文字+语音+口型联动）
+      showSpeechBubble('让我看看你的屏幕…', 3000)
+      try {
+        const shot = await request('/api/companion/screen-shot', { method: 'POST', body: '{}' })
+        if (!shot.ok) throw new Error('截图失败')
+        const vision = await request('/api/xiaozhi/vision', {
+          method: 'POST',
+          body: JSON.stringify({
+            image_base64: shot.image_base64,
+            question: '用调侃吐槽的语气，简短评价我屏幕上正在做的事。',
+          }),
+        })
+        if (!vision.ok) throw new Error(vision.detail || '小智视觉失败')
+        const say = await request('/api/xiaozhi/say', {
+          method: 'POST',
+          body: JSON.stringify({ text: '你看看我的屏幕：' + (vision.text || '') }),
+        })
+        if (!say.ok) throw new Error('注入失败')
+      } catch (err) {
+        showSpeechBubble(`截图提问失败：${err.message}`, 5000)
+      }
     }
     if (action === 'speech-bubble') {
       const enabled = settings.live2d_speech_bubble_enabled === false

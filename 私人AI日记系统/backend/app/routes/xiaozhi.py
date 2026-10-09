@@ -148,19 +148,44 @@ def _full_screen_jpeg(capture_cls) -> str | None:
         return None
 
 
-async def _inject_say(text: str) -> bool:
+async def _inject_say(text: str, wait_upstream: float = 20.0) -> bool:
     """把文本注入小智会话（模拟用户发言）→ 小智语音/表情/口型联动。
 
-    与 ChatPage 手动发送保持一致：先 abort 打断当前会话，再 listen。
+    官方云限制：空闲会话的 detect 长文本会被拒绝（"Detect is only for wake words"），
+    必须先发短文本唤醒词（detect）把会话激活，再注入长文本才能得到 STT/LLM/TTS。
+    唤醒回复会先播一句废话，立即 abort 打断。
+    流程：abort → detect(短唤醒词) → 等唤醒确认 → abort(打断唤醒回复) → detect(长文本)。
+    官方云 1005 断连期：等待自动重连成功后再注入（最长 wait_upstream 秒）。
     返回是否成功注入（仅表示消息已发出，不代表官方云一定返回语音）。
     """
     conn = _upstream
+    if conn is None and wait_upstream > 0:
+        deadline = time.time() + wait_upstream
+        while time.time() < deadline:
+            await asyncio.sleep(1.5)
+            conn = _upstream
+            if conn is not None:
+                break
     if conn is None:
         logger.warning("注入小智语音失败：官方云未连接（hello 未建立）")
         return False
     try:
-        # 先打断当前会话，避免官方云忽略新输入
+        # 1. 打断当前会话，避免官方云忽略新输入
         await conn.send(json.dumps({"type": "abort", "reason": "user_interrupt", "session_id": _session_id}, ensure_ascii=False))
+        await asyncio.sleep(0.3)
+        # 2. 短文本唤醒（官方云要求 detect 先用于唤醒词，长文本会被拒）
+        await conn.send(json.dumps({
+            "type": "listen",
+            "state": "detect",
+            "text": "你好",
+            "source": "text",
+            "session_id": _session_id,
+        }, ensure_ascii=False))
+        # 3. 等官方云确认唤醒并开始回复，然后 abort 打断唤醒废话
+        await asyncio.sleep(1.0)
+        await conn.send(json.dumps({"type": "abort", "reason": "user_interrupt", "session_id": _session_id}, ensure_ascii=False))
+        await asyncio.sleep(0.3)
+        # 4. 注入真正的问题（长文本）
         msg = {
             "type": "listen",
             "state": "detect",
@@ -217,8 +242,6 @@ async def xiaozhi_observe_stop() -> dict:
 @router.post("/say")
 async def xiaozhi_say(payload: XiaozhiSayRequest) -> dict:
     """把文本注入小智会话（模拟用户发言）→ 小智语音/表情/口型联动。"""
-    if _upstream is None:
-        raise HTTPException(status_code=409, detail="小智连接未建立，请先打开小智对话")
     text = str(payload.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="文本不能为空")
