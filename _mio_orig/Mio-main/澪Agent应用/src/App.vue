@@ -2612,9 +2612,6 @@ async function setPetChatWindowState(open) {
       <div class="window-drag-zone pywebview-drag-region" @dblclick="controlDesktopWindow('maximize')">
         <strong>{{ activeView === 'settings' ? '设置' : navItems.find((item) => item.id === activeView)?.label }}</strong>
       </div>
-      <button v-if="activeView !== 'settings'" class="shell-toggle shell-toggle-right" type="button" :title="rightSidebarVisible ? '隐藏右侧栏' : '显示右侧栏'" @click="toggleRightSidebar">
-        <component :is="rightSidebarVisible ? PanelRightClose : PanelRightOpen" :size="17" />
-      </button>
     </header>
 
     <aside
@@ -2687,33 +2684,6 @@ async function setPetChatWindowState(open) {
       </section>
       <CompanionPage v-else />
     </main>
-
-    <aside
-      v-if="rightSidebarVisible"
-      :class="['integrated-right-rail', { 'agent-right-rail': isAgentWorkspace, expanded: rightSidebarPinned || ((isAgentWorkspace ? agentRightSidebarHoverExpand : savedAppPreferences.right_sidebar_hover_expand) && rightSidebarHovered), pinned: rightSidebarPinned }]"
-      @mouseenter="rightSidebarHovered = true"
-      @mouseleave="rightSidebarHovered = false"
-    >
-      <AgentRightRail v-if="isAgentWorkspace" :pinned="rightSidebarPinned" @toggle-pin="toggleRightSidebarPinned" @navigate="navigatePrimaryView" />
-      <template v-else>
-      <header class="rail-mood">
-        <div><Wifi :size="18" /><span><small>小智连接</small><strong :class="xzStatus.connected ? 'xz-ok-text' : 'xz-bad-text'">{{ xzStatus.connected ? '已连接' : '断开' }}</strong></span></div>
-        <button type="button" :title="rightSidebarPinned ? '取消固定展开' : '固定展开'" @click="toggleRightSidebarPinned"><component :is="rightSidebarPinned ? PinOff : Pin" :size="14" /></button>
-      </header>
-      <section class="rail-relationship"><MessageSquareText :size="17" /><span><small>会话 ID</small><strong class="xz-session-text">{{ xzStatus.session_id || '-' }}</strong></span></section>
-      <section class="rail-growth">
-        <div><Eye :size="17" /><span><small>视觉能力</small><strong :class="xzStatus.vision ? 'xz-ok-text' : 'xz-bad-text'">{{ xzStatus.vision ? '已捕获' : '未捕获' }}</strong></span></div>
-        <p v-if="xzStatus.vision && xzStatus.vision_url" :title="xzStatus.vision_url">视觉端点已配置</p>
-        <p v-else>官方视觉服务未捕获</p>
-      </section>
-      <section class="rail-state-list">
-        <div><span>自动观察</span><p :class="xzStatus.observe_enabled ? 'xz-ok-text' : ''">{{ xzStatus.observe_enabled ? '开启' : '关闭' }}</p></div>
-        <div v-if="xzStatus.observe_enabled"><span>下次观察</span><p>{{ xzStatus.observe_next > 0 ? xzStatus.observe_next + ' 秒后' : '等待中' }}</p></div>
-        <div><span>视觉端点</span><p class="xz-url-text">{{ xzStatus.vision ? '已配置' : '未配置' }}</p></div>
-      </section>
-      <button class="rail-token" type="button" title="刷新小智状态" @click="loadXzStatus"><RefreshCw :size="17" /><span><small>状态刷新</small><strong>30 秒自动</strong></span></button>
-      </template>
-    </aside>
 
     <AppDialog
       v-model="appDialog.value"

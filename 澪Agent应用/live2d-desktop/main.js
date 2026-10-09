@@ -206,7 +206,7 @@ function openPetAdmin() {
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: false, preload: path.join(__dirname, 'preload.js') },
   })
   // 桌宠管理面板：直接进入 main 模式（私人空间对话页），Agent 工作台已阉割
-  petAdminWindow.loadURL(`${API_BASE}/agent-app/?workspace=main&v=20261009-src-v13`)
+  petAdminWindow.loadURL(`${API_BASE}/agent-app/?workspace=main&v=20261009-src-v14`)
   petAdminWindow.on('closed', () => { petAdminWindow = null })
 }
 
