@@ -377,6 +377,11 @@ class ConfigurationService:
         for key in self._dep_DEFAULT_CONFIG():
             if key in changes:
                 data[key] = changes[key]
+        # 额外业务字段（如 live2d_model_schedule）不在默认配置键表，也必须写入，
+        # 否则"自动更换/时间/模式"等设置保存后会被静默丢弃、回默认值
+        for key in changes:
+            if key not in self._dep_DEFAULT_CONFIG():
+                data[key] = changes[key]
         if "cloud_tts_api_key" in changes:
             key_value = str(changes.get("cloud_tts_api_key") or "").strip()
             if key_value == "__clear__":
@@ -397,7 +402,16 @@ class ConfigurationService:
                     profile[key] = changes[key]
             profiles[default_id] = profile
             data["voice_profiles"] = profiles
-        data = {key: value for key, value in self.load_normalized_config(data).items() if key in self._dep_DEFAULT_CONFIG()}
+        normalized = self.load_normalized_config(data)
+        known_keys = set(self._dep_DEFAULT_CONFIG())
+        # 保留默认配置键 + 配置中已存在的额外键（如 live2d_model_schedule），
+        # 避免新增业务字段在保存时被过滤器丢弃导致"设置保存不了、回默认值"
+        extra_keys = {key for key in data if key not in known_keys}
+        data = {
+            key: value
+            for key, value in normalized.items()
+            if key in known_keys or key in extra_keys
+        }
         self._dep_settings().companion_dir.mkdir(parents=True, exist_ok=True)
         temporary = self._dep_settings().companion_config_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
