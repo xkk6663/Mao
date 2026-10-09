@@ -109,10 +109,10 @@ let xzWs = null
 let xzReconnectTimer = null
 let xzRetryDelay = 3000
 
-// 开启跟随且消息/思考状态变化时，自动滚动到底部
+// 开启跟随且消息/思考状态变化时，自动滚动到底部（flush post：确保 DOM 渲染后再滚）
 watch([xzTurns, xzThinking], () => {
   if (followChat.value) nextTick(() => xzScrollToBottom())
-})
+}, { flush: 'post' })
 
 // 音频播放（48kHz 双声道 float32 planar，后端代理解码）
 let xzAudioCtx = null
@@ -194,6 +194,8 @@ function xzHandleText(raw) {
         xzThinking.value = false
         xzBubble({ type: 'text', text: j.text })
         xzPetEvent({ type: 'speaking', speaking: true })
+        // 小智输出新句子时强制跟随到底部（进度跟随）
+        if (followChat.value) nextTick(() => xzScrollToBottom())
       } else if (j.state === 'stop') {
         xzBubble({ type: 'stop' }); xzBubble({ type: 'speak_stop' })
         xzPetEvent({ type: 'speaking', speaking: false })
@@ -235,6 +237,8 @@ function xzSend() {
   xzInput.value = ''
   xzTurns.value.push({ role: 'user', text })
   xzThinking.value = true
+  // 发送后立即跟随到底部
+  if (followChat.value) nextTick(() => xzScrollToBottom())
   xzWs.send(JSON.stringify({ session_id: xzSessionId, type: 'abort', reason: 'user_interrupt' }))
   xzBubble({ type: 'thinking', text: '' })
   xzWs.send(JSON.stringify({ session_id: xzSessionId, type: 'listen', state: 'detect', text, source: 'text' }))
