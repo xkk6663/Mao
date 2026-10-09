@@ -2610,20 +2610,11 @@ async function setPetChatWindowState(open) {
         <component :is="leftSidebarVisible ? PanelLeftClose : PanelLeftOpen" :size="17" />
       </button>
       <div class="window-drag-zone pywebview-drag-region" @dblclick="controlDesktopWindow('maximize')">
-        <strong>{{ isAgentWorkspace ? `Mio Agent · ${agentNavItems.find((item) => item.id === activeView)?.label || '工作台'}` : activeView === 'settings' ? '设置' : navItems.find((item) => item.id === activeView)?.label }}</strong>
+        <strong>{{ activeView === 'settings' ? '设置' : navItems.find((item) => item.id === activeView)?.label }}</strong>
       </div>
-      <button v-if="activeView !== 'settings'" class="workspace-title-switch" type="button" :title="isAgentWorkspace ? '返回 Mio 主窗口' : '打开 Mio Agent'" @click="switchDesktopWorkspace(isAgentWorkspace ? 'main' : 'agent')">
-        <ArrowLeft v-if="isAgentWorkspace" :size="15" /><Bot v-else :size="15" />
-        <span>{{ isAgentWorkspace ? '返回 Mio' : 'Mio Agent' }}</span>
-      </button>
       <button v-if="activeView !== 'settings'" class="shell-toggle shell-toggle-right" type="button" :title="rightSidebarVisible ? '隐藏右侧栏' : '显示右侧栏'" @click="toggleRightSidebar">
         <component :is="rightSidebarVisible ? PanelRightClose : PanelRightOpen" :size="17" />
       </button>
-      <div class="window-controls" aria-label="窗口控制">
-        <button type="button" title="最小化" aria-label="最小化" @click="controlDesktopWindow('minimize')"><Minus :size="15" /></button>
-        <button type="button" title="最大化或还原" aria-label="最大化或还原" @click="controlDesktopWindow('maximize')"><Maximize2 :size="13" /></button>
-        <button class="close" type="button" title="关闭到后台" aria-label="关闭到后台" @click="controlDesktopWindow('close')"><X :size="15" /></button>
-      </div>
     </header>
 
     <aside

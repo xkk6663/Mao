@@ -36,6 +36,8 @@ const selectedQqMessageIds = ref([])
 const activeImageAttachment = ref(null)
 const agentProcessExpanded = ref(localStorage.getItem('mio_agent_process_expanded') !== 'false')
 const activeConversation = computed(() => context.conversations.find((item) => item.id === context.selectedConversationId) || null)
+// 阉割 QQ 共享对话：对话列表不再显示 qq 类型会话
+const visibleConversations = computed(() => (context.conversations || []).filter((item) => item.kind !== 'qq'))
 
 async function openConversation(conversationId) {
   if (conversationId !== context.selectedConversationId) cancelQqCleanup()
@@ -242,7 +244,7 @@ onBeforeUnmount(() => { window.clearTimeout(xzReconnectTimer); if (xzWs) try { x
       </header>
       <button class="conversation-new-button" type="button" @click="context.createNewConversation"><Plus :size="15" />新对话</button>
       <div class="conversation-drawer-list">
-        <article v-for="conversation in context.conversations" :key="conversation.id" :class="{ active: context.selectedConversationId === conversation.id }">
+        <article v-for="conversation in visibleConversations" :key="conversation.id" :class="{ active: context.selectedConversationId === conversation.id }">
           <button type="button" @click="openConversation(conversation.id)">
             <span><strong>{{ conversation.title }}</strong><small>{{ conversation.preview || (conversation.kind === 'qq' ? '与 QQ 共享上下文' : conversation.kind === 'pet' ? '桌宠独立对话' : '还没有消息') }}</small></span>
             <time>{{ context.formatSidebarTime(conversation.updated_at) }}</time>
