@@ -22,3 +22,57 @@
 **/updates/jobs/
 私人AI日记系统/数据/
 澪Agent应用/预览/
+
+# --- 本地模型与下载源 ---
+**/models/
+l2d_downloads/
+l2d_official_models/
+dist_backup_20261009/
+
+# --- 敏感配置（设备身份含 token） ---
+xiaozhi_device.json
+
+# --- 临时诊断文件（历史遗留） ---
+_*.txt
+*_out.txt
+*_test.txt
+*_diag*.py
+*_diag*.js
+*_diag*.ps1
+electron_*_diag*
+enum_*.ps1
+enum_*.py
+diag*.ps1
+diag*.txt
+*.tgz
+opus-recorder-pkg/
+audio_devices.py
+switch_test.py
+test_sound.py
+test_cmd.ps1
+hello.ps1
+fix_cmd*.ps1
+query_status.ps1
+restart_pet.ps1
+setup_autostart.ps1
+setup_backend.ps1
+reset_position.ps1
+diag2.ps1
+diag_phys.ps1
+diag_venv.ps1
+xiaozhi_*_test.py
+xiaozhi_android_style.py
+xiaozhi_render.md
+xiaozhi_downlink_probe.py
+xiaozhi_vision_mp*.py
+electron_orig_check*.js
+electron_orig_click.js
+electron_sound_test.js
+_chat_check.js
+cmd_content.txt
+menu_diag.txt
+winmove_test.ps1
+# GitHub 解压乱码副本目录（不参与管理）
+_mio_orig/Mio-main/婢*/
+orig_*.png
+orig_*.txt

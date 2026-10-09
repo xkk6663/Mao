@@ -55,6 +55,7 @@ from .routes import (
     settings as settings_routes,
     stats,
     weekly,
+    xiaozhi,
 )
 
 
@@ -272,6 +273,7 @@ def create_app() -> FastAPI:
     app.include_router(settings_routes.router)
     app.include_router(stats.router)
     app.include_router(weekly.router)
+    app.include_router(xiaozhi.router)
 
     if settings.agent_frontend_dir.exists():
         agent_frontend_root = settings.agent_frontend_dir.resolve()

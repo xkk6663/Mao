@@ -1,0 +1,5 @@
+﻿[field=image] 失败: HTTP Error 400: Bad Request
+[field=file] status=200: {"success":true,"filename":"c38d29vgalnunpkdf1w8daebu.jpg","text":"图片是一个带黑色边框的白色矩形，正中央有一个红色的实心圆形。在红色圆形的偏左上方位置，印有黑色的文字“HELLO123”。"}
+[field=frame] 失败: HTTP Error 400: Bad Request
+[field=jpeg] 失败: HTTP Error 400: Bad Request
+[field=photo] 失败: HTTP Error 400: Bad Request

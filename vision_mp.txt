@@ -1,0 +1,63 @@
+﻿python.exe : Traceback (most recent call last):
+所在位置 行:1 字符: 69
++ ... ython.exe'; & $py 'C:\Users\xiao1\Mio\xiaozhi_vision_mp.py' 2>&1 | Ou ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Traceback (most recent call last)::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "C:\Users\xiao1\Mio\私人AI日记系统\backend\.venv\Lib\site-packages\websockets\asyncio\client.py", line 544, in __await
+_impl__
+    self.connection = await self.create_connection()
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiao1\Mio\私人AI日记系统\backend\.venv\Lib\site-packages\websockets\asyncio\client.py", line 470, in create_
+connection
+    _, connection = await loop.create_connection(factory, **kwargs)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiao1\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 1080, in create_connec
+tion
+    infos = await self._ensure_resolved(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiao1\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 1456, in _ensure_resol
+ved
+    return await loop.getaddrinfo(host, port, family=family, type=type,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiao1\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 901, in getaddrinfo
+    return await self.run_in_executor(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+asyncio.exceptions.CancelledError
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\xiao1\Mio\私人AI日记系统\backend\.venv\Lib\site-packages\websockets\asyncio\client.py", line 542, in __await
+_impl__
+    async with asyncio_timeout(self.open_timeout):
+  File "C:\Users\xiao1\AppData\Local\Programs\Python\Python312\Lib\asyncio\timeouts.py", line 115, in __aexit__
+    raise TimeoutError from exc_val
+TimeoutError
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\xiao1\Mio\xiaozhi_vision_mp.py", line 97, in <module>
+    asyncio.run(main())
+  File "C:\Users\xiao1\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\xiao1\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiao1\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 687, in run_until_comp
+lete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\xiao1\Mio\xiaozhi_vision_mp.py", line 48, in main
+    async with websockets.connect(UPSTREAM, additional_headers=headers, max_size=None, open_timeout=10) as ws:
+  File "C:\Users\xiao1\Mio\私人AI日记系统\backend\.venv\Lib\site-packages\websockets\asyncio\client.py", line 590, in __aente
+r__
+    return await self
+           ^^^^^^^^^^
+  File "C:\Users\xiao1\Mio\私人AI日记系统\backend\.venv\Lib\site-packages\websockets\asyncio\client.py", line 581, in __await
+_impl__
+    raise TimeoutError("timed out during opening handshake") from exc
+TimeoutError: timed out during opening handshake

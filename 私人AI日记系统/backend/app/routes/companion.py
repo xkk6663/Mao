@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from difflib import SequenceMatcher
+import random
 import re
 import subprocess
 import tempfile
@@ -15,6 +16,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .. import (
+    audio_diag,
     call_session_service,
     companion_service,
     db,
@@ -521,6 +523,38 @@ async def companion_agent_show():
     return result
 
 
+@router.get("/audio/devices")
+async def companion_audio_devices():
+    """枚举系统音频输出设备（体检用）。"""
+    return audio_diag.enumerate_output_devices()
+
+
+@router.post("/audio/test")
+async def companion_audio_test(payload: dict | None = None):
+    """用系统 API 播放测试音到默认设备（体检用）。"""
+    payload = payload or {}
+    return audio_diag.play_system_test_tone(
+        freq=int(payload.get("freq", 440)),
+        seconds=float(payload.get("seconds", 1.2)),
+    )
+
+
+@router.get("/version")
+async def companion_version():
+    """后端版本信息（桌宠管理页展示用）。"""
+    import platform
+    data = {
+        "name": "Mio 私人AI日记系统 · 桌宠后端",
+        "python": platform.python_version(),
+    }
+    try:
+        import av
+        data["av"] = av.__version__
+    except Exception:  # noqa: BLE001
+        data["av"] = "-"
+    return {"ok": True, "data": data}
+
+
 async def _wake_pet_from_screen() -> None:
     try:
         await screen_observation_service.analyze_once(force=True, wake=True)
@@ -726,6 +760,113 @@ async def companion_settings(
 @router.get("/live2d/models")
 async def companion_live2d_models():
     return {"models": await asyncio.to_thread(companion_service.available_live2d_models)}
+
+
+# ---- Live2D 模型定时自动更换 ----
+_model_schedule_task: asyncio.Task | None = None
+_model_schedule_lock = asyncio.Lock()
+_last_model_switch_day = ""
+
+
+class Live2dScheduleRequest(BaseModel):
+    enabled: bool | None = None
+    time: str | None = None  # "HH:MM"
+    mode: str | None = None  # random / sequential
+
+
+def _model_schedule_config() -> dict:
+    cfg = companion_service.load_config()
+    s = cfg.get("live2d_model_schedule") or {}
+    return {
+        "enabled": bool(s.get("enabled", False)),
+        "time": str(s.get("time") or "09:00"),
+        "mode": str(s.get("mode") or "random"),
+        "last_switched": str(s.get("last_switched") or ""),
+    }
+
+
+def _pick_next_model(current_id: str, model_ids: list[str], mode: str) -> str:
+    if not model_ids:
+        return current_id
+    if str(mode) == "sequential":
+        try:
+            idx = model_ids.index(current_id)
+        except ValueError:
+            idx = -1
+        return model_ids[(idx + 1) % len(model_ids)]
+    others = [m for m in model_ids if m != current_id]
+    pool = others or model_ids
+    return random.choice(pool)
+
+
+async def _model_schedule_loop() -> None:
+    global _last_model_switch_day
+    while True:
+        try:
+            cfg = _model_schedule_config()
+            today = time.strftime("%Y-%m-%d")
+            if (
+                cfg["enabled"]
+                and cfg["last_switched"] != today
+                and time.strftime("%H:%M") >= cfg["time"]
+            ):
+                models = await companion_live2d_models()
+                model_ids = [str(m["id"]) for m in models.get("models", []) if m.get("id")]
+                if model_ids:
+                    current = str(companion_service.load_config().get("live2d_model_id") or "")
+                    if current not in model_ids:
+                        current = model_ids[0]
+                    next_id = _pick_next_model(current, model_ids, cfg["mode"])
+                    if next_id and next_id != current:
+                        await asyncio.to_thread(
+                            companion_service.save_config,
+                            {"live2d_model_id": next_id},
+                        )
+                    cfg_data = companion_service.load_config()
+                    schedule = dict(cfg_data.get("live2d_model_schedule") or {})
+                    schedule["last_switched"] = today
+                    await asyncio.to_thread(
+                        companion_service.save_config,
+                        {"live2d_model_schedule": schedule},
+                    )
+                    _last_model_switch_day = today
+                    logger.info("每日定时换模型: %s -> %s", current, next_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("定时换模型任务异常: %s", exc)
+        await asyncio.sleep(30)
+
+
+async def _ensure_model_schedule_task() -> None:
+    global _model_schedule_task
+    async with _model_schedule_lock:
+        if _model_schedule_task is None or _model_schedule_task.done():
+            _model_schedule_task = asyncio.create_task(_model_schedule_loop())
+
+
+@router.get("/live2d/schedule")
+async def companion_live2d_schedule_get():
+    await _ensure_model_schedule_task()
+    return _model_schedule_config()
+
+
+@router.patch("/live2d/schedule")
+async def companion_live2d_schedule_patch(payload: Live2dScheduleRequest):
+    cfg = companion_service.load_config()
+    schedule = dict(cfg.get("live2d_model_schedule") or {})
+    changes = payload.model_dump(exclude_none=True)
+    for key, value in changes.items():
+        if key == "enabled":
+            schedule["enabled"] = bool(value)
+        elif key == "time":
+            schedule["time"] = str(value)[:5]
+        elif key == "mode":
+            schedule["mode"] = str(value) if str(value) in {"random", "sequential"} else "random"
+    await asyncio.to_thread(
+        companion_service.save_config,
+        {"live2d_model_schedule": schedule},
+    )
+    await _ensure_model_schedule_task()
+    return _model_schedule_config()
 
 
 @router.post("/live2d/models/import")
@@ -1955,6 +2096,38 @@ async def companion_screen_stop():
 @router.get("/screen/preview")
 async def companion_screen_preview():
     return _preview_response("还没有屏幕画面预览。")
+
+
+class ScreenShotRequest(BaseModel):
+    bbox: list[int] | None = None  # [x, y, w, h] 虚拟桌面绝对坐标
+
+
+@router.post("/screen-shot")
+async def companion_screen_shot(payload: ScreenShotRequest | None = None):
+    """全屏截图（JPEG base64）；bbox 存在时截取指定区域。返回虚拟桌面完整尺寸供坐标映射。"""
+    import io
+
+    from ..screen_capture import MssCapture
+
+    def _shot(bbox: list[int] | None) -> tuple[str, int, int]:
+        cap = MssCapture()
+        img = cap.capture(all_screens=True).convert("RGB")
+        full_w, full_h = img.size
+        if bbox and len(bbox) == 4:
+            x, y, w, h = (int(v) for v in bbox)
+            if w > 0 and h > 0:
+                img = img.crop((x, y, x + w, y + h))
+        img.thumbnail((1920, 1080))
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=88)
+        return base64.b64encode(buf.getvalue()).decode(), full_w, full_h
+
+    try:
+        bbox = (payload or ScreenShotRequest()).bbox
+        image_base64, full_w, full_h = await asyncio.to_thread(_shot, bbox)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"截图失败: {exc}") from exc
+    return {"ok": True, "image_base64": image_base64, "width": full_w, "height": full_h, "bbox": bbox}
 
 
 @router.post("/local-vision/runtime/{action}")

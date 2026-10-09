@@ -2,6 +2,7 @@ const {
   app,
   BrowserWindow,
   dialog,
+  globalShortcut,
   ipcMain,
   Menu,
   nativeImage,
@@ -13,6 +14,7 @@ const fs = require('fs')
 const http = require('http')
 const path = require('path')
 const crypto = require('crypto')
+const { execFile } = require('child_process')
 const {
   modelCapabilities,
   previewCandidate,
@@ -49,6 +51,7 @@ if (process.env.MIO_PET_DISABLE_GPU === '1') app.disableHardwareAcceleration()
 let mainWindow = null
 let lockControlWindow = null
 let chatWindow = null
+let xiaozhiWindow = null
 let tray = null
 let modelServer = null
 let modelServerOrigin = ''
@@ -186,6 +189,25 @@ async function openAgentWindow() {
     log('agent.show_failed', error.message || String(error))
     return { ok: false, error: error.message || String(error) }
   }
+}
+
+let petAdminWindow = null
+function openPetAdmin() {
+  if (petAdminWindow && !petAdminWindow.isDestroyed()) {
+    petAdminWindow.show()
+    petAdminWindow.focus()
+    return
+  }
+  petAdminWindow = new BrowserWindow({
+    width: 1180, height: 780,
+    title: 'Mio',
+    backgroundColor: '#f5f7f9',
+    autoHideMenuBar: true,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: false, preload: path.join(__dirname, 'preload.js') },
+  })
+  // 桌宠管理面板：直接进入 main 模式（私人空间对话页），Agent 工作台已阉割
+  petAdminWindow.loadURL(`${API_BASE}/agent-app/?workspace=main&v=20261009-src-v10`)
+  petAdminWindow.on('closed', () => { petAdminWindow = null })
 }
 
 function loadRuntimeState() {
@@ -483,8 +505,8 @@ function hideChatWindow() {
 
 function createChatWindow(anchor) {
   chatWindow = new BrowserWindow({
-    width: 520,
-    height: 84,
+    width: 400,
+    height: 66,
     show: false,
     frame: false,
     transparent: true,
@@ -506,7 +528,7 @@ function createChatWindow(anchor) {
   })
   reportWindowAction('pet-chat-input', chatWindow, 'created')
   chatWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-  chatWindow.loadURL(`${API_BASE}/agent-app/?v=electron-pet-chat#pet-chat-window`)
+  chatWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/xiaozhi/pet-chat-xiaozhi.html?v=8`)
   chatWindow.once('ready-to-show', () => {
     positionChatWindow(anchor)
     chatWindow.show()
@@ -524,6 +546,11 @@ function createChatWindow(anchor) {
   chatWindow.webContents.on('did-fail-load', (_event, code, description) => {
     log('chat_window.load_failed', `${code} ${description}`)
   })
+}
+
+function createXiaozhiWindow() {
+  // 打开小智对话（横条输入窗）
+  toggleChatWindow()
 }
 
 function showChatWindow(anchor) {
@@ -645,8 +672,9 @@ function updateTrayMenu() {
       click: (item) => setClickThroughLocked(Boolean(item.checked), true),
     },
     { label: '显示桌宠', click: () => restoreWindowVisibility() },
+    { label: '打开小智对话', click: () => toggleChatWindow() },
     { label: '导入 Live2D 模型', click: () => importModel() },
-    { label: '打开 Mio', click: () => openAgentWindow() },
+    { label: '桌宠管理', click: () => openPetAdmin() },
     { type: 'separator' },
     { label: '退出桌宠', click: () => { quitting = true; app.quit() } },
   ]))
@@ -665,6 +693,45 @@ function setClickThroughLocked(enabled, notifyRenderer = false) {
   }
   sendLockControlState()
   if (changed) updateTrayMenu()
+}
+
+// ---- 副屏虚拟边界（DIP 与物理像素换算，修正跨屏坐标） ----
+const SYSTEM_PS = 'pwsh.exe'
+const PHYS_BOUNDS_SCRIPT = 'C:\\Users\\xiao1\\Mio\\phys_bounds.ps1'
+
+function applyMainWindowVirtualBounds() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  try {
+    execFile(SYSTEM_PS, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', PHYS_BOUNDS_SCRIPT],
+      { windowsHide: true, timeout: 8000 }, (error, stdout) => {
+        if (error) { log('window.extend_failed', String(error.message || error)); return }
+        const line = String(stdout || '').trim().split(/\r?\n/).pop()
+        const parts = line.split(',').map(Number)
+        if (parts.length < 5 || !parts.every(Number.isFinite) || parts[4] <= 0) {
+          log('window.extend_bad_output', line); return
+        }
+        const [physL, physT, physR, physB, primaryPhysW] = parts
+        const primaryLogicalW = screen.getPrimaryDisplay().bounds.width
+        const scale = primaryPhysW / Math.max(1, primaryLogicalW)
+        mainWindow.setBounds({
+          x: Math.round(physL / scale),
+          y: Math.round(physT / scale),
+          width: Math.round((physR - physL) / scale),
+          height: Math.round((physB - physT) / scale),
+        }, false)
+        reportWindowAction('pet-root', mainWindow, 'repositioned-virtual')
+        log('window.virtual_bounds', `${physL},${physT},${physR},${physB} scale=${scale.toFixed(3)}`)
+      })
+  } catch (error) {
+    log('window.extend_failed', String(error && error.message || error))
+  }
+}
+
+function registerDisplayListeners() {
+  // 显示器增减/分辨率变化后自动修正桌宠虚拟边界
+  screen.on('display-added', () => setTimeout(applyMainWindowVirtualBounds, 400))
+  screen.on('display-removed', () => setTimeout(applyMainWindowVirtualBounds, 400))
+  screen.on('display-metrics-changed', () => setTimeout(applyMainWindowVirtualBounds, 600))
 }
 
 function createWindow() {
@@ -696,8 +763,12 @@ function createWindow() {
   restoreWindowVisibility()
   mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   setMouseInteractive(false)
-  mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron`)
+  try { mainWindow.webContents.session.clearCache() } catch (_e) {}
+  try { mainWindow.webContents.session.setCacheSizeLimit(0) } catch (_e) {}
+  mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron&v=20261009-runtime-v12`)
   log('window.load', `${API_BASE}/agent-app/live2d-pet/index.html`)
+  // 启动后多次尝试修正跨屏虚拟边界（等渲染完成）
+  ;[1200, 3200, 8000, 15000].forEach((ms) => setTimeout(applyMainWindowVirtualBounds, ms))
   mainWindow.once('ready-to-show', () => restoreWindowVisibility())
   mainWindow.on('show', () => reportWindowAction('pet-root', mainWindow, 'shown'))
   mainWindow.on('focus', () => reportWindowAction('pet-root', mainWindow, 'focused'))
@@ -784,7 +855,28 @@ function registerIpc() {
     sendModelsChanged()
     return { ok: true, selectedModelId: available ? id : '' }
   })
-  ipcMain.handle('mio-desktop:open-agent', () => openAgentWindow())
+  ipcMain.handle('mio-desktop:open-agent', () => openPetAdmin())
+  ipcMain.on('mio-desktop:open-xiaozhi', () => createXiaozhiWindow())
+  ipcMain.on('mio-desktop:open-screen-crop', () => openScreenCrop())
+  ipcMain.on('mio-pet-chat:xiaozhi-bubble', (_event, payload) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('mio-xiaozhi:bubble', payload)
+    }
+  })
+  // 小智表情/口型事件转发给桌宠主窗（speaking/motion 等）
+  ipcMain.on('mio-desktop:pet-event', (_event, ev) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('mio-pet-event', ev)
+    }
+  })
+  ipcMain.handle('mio-desktop:get-version', () => ({
+    app: 'Mio Live2D 桌宠',
+    frontend: 'runtime-v10',
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node,
+    build: '2026-10-09',
+  }))
   ipcMain.on('mio-desktop:close', () => { quitting = true; app.quit() })
 }
 
@@ -805,6 +897,8 @@ else {
     await startModelServer()
     log('runtime.ready', `modelServer=${modelServerOrigin}`)
     registerIpc()
+    registerDisplayListeners()
+    registerScreenShortcut()
     createWindow()
     createTray()
     startParentWatchdog()
@@ -814,6 +908,45 @@ else {
 app.on('window-all-closed', (event) => {
   if (!quitting) event.preventDefault()
 })
+
+// ---- 全局快捷键：Ctrl+Shift+S 沉浸式框选屏幕（截图提问） ----
+let cropWindow = null
+let screenShortcutAccelerator = 'CommandOrControl+Shift+S'
+function registerScreenShortcut() {
+  try {
+    globalShortcut.register(screenShortcutAccelerator, () => {
+      openScreenCrop()
+    })
+    log('shortcut.registered', screenShortcutAccelerator)
+  } catch (error) {
+    log('shortcut.error', String(error && error.message || error))
+  }
+}
+function openScreenCrop() {
+  if (cropWindow && !cropWindow.isDestroyed()) {
+    cropWindow.focus()
+    return
+  }
+  cropWindow = new BrowserWindow({
+    transparent: true,
+    frame: false,
+    fullscreen: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    movable: false,
+    focusable: true,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: false },
+  })
+  cropWindow.setAlwaysOnTop(true, 'screen-saver')
+  cropWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/overlay.html?v=1`)
+  cropWindow.on('closed', () => { cropWindow = null })
+  cropWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'Escape') {
+      if (cropWindow && !cropWindow.isDestroyed()) cropWindow.close()
+    }
+  })
+}
 
 app.on('before-quit', () => {
   quitting = true

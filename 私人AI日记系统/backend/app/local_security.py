@@ -90,8 +90,8 @@ class LocalControlMiddleware:
                 if message.get("type") == "http.response.start":
                     headers = list(message.get("headers", ()))
                     headers.extend((
-                        (b"x-frame-options", b"DENY"),
-                        (b"content-security-policy", b"frame-ancestors 'none'"),
+                        (b"x-frame-options", b"SAMEORIGIN"),
+                        (b"content-security-policy", b"frame-ancestors 'self'"),
                         (b"referrer-policy", b"no-referrer"),
                     ))
                     message = {**message, "headers": headers}

@@ -1,0 +1,10 @@
+﻿
+ProcessId ExecutablePath                                                                    
+--------- --------------                                                                    
+    20560 C:\Users\xiao1\Mio\澪Agent应用\live2d-desktop\node_modules\electron\dist\electron.exe
+    25056 C:\Users\xiao1\Mio\澪Agent应用\live2d-desktop\node_modules\electron\dist\electron.exe
+    25636 C:\Users\xiao1\Mio\澪Agent应用\live2d-desktop\node_modules\electron\dist\electron.exe
+    19244 C:\Users\xiao1\Mio\澪Agent应用\live2d-desktop\node_modules\electron\dist\electron.exe
+    42484 C:\Users\xiao1\Mio\澪Agent应用\live2d-desktop\node_modules\electron\dist\electron.exe
+
+

@@ -1,0 +1,16 @@
+﻿== 重启 Electron 桌宠 ==
+重启前 electron pids: 11560,22980,23896,25728,33340
+重启后残留 pids: 
+== 通过一键脚本拉起 ==
+========== Mio 桌宠启动 ==========
+[1/2] 后端已在运行，跳过
+[2/2] 桌宠未运行，正在启动...
+      桌宠窗口已拉起，几秒内出现
+========== 完成 ==========
+== 验证窗口与位置 ==
+electron pids: 12236,19604,20816,33980,39264
+pid=19604 hwnd=0x52126E rect=L1404,T807,R1455,B858 w=51 h=51 title='固定并穿透' class='Chrome_WidgetWin_1'
+pid=19604 hwnd=0x3811E8 rect=L0,T0,R1464,B870 w=1464 h=870 title='Mio Live2D 桌宠' class='Chrome_WidgetWin_1'
+状态: "position_x": 752,
+状态: "position_y": 302,
+状态: "desktop_renderer_connected": true,

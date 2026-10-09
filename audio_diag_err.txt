@@ -1,0 +1,1 @@
+﻿{"ok": true, "default": {"name": "耳机 (2- HECATE G2无线版)", "id": "?"}, "devices": [{"name": "耳机 (2- HECATE G2无线版)", "id": "?", "is_default": true, "volume": 7, "muted": false}, {"name": "扬声器 (Realtek(R) Audio)", "id": "?", "is_default": true, "volume": 17, "muted": false}]}
