@@ -1,7 +1,7 @@
 <script setup>
 import { inject, onMounted, ref } from 'vue'
 import PetAppearancePanel from './PetAppearancePanel.vue'
-import { Activity, Box, Check, Gamepad2, Monitor, Play, Power, RefreshCw, RotateCw, Sparkles, Volume2, Wifi } from '@lucide/vue'
+import { Activity, Box, Check, Gamepad2, Monitor, Play, Power, RefreshCw, RotateCw, Sparkles, Volume2 } from '@lucide/vue'
 
 const context = inject('mio-companion-page')
 if (!context) throw new Error('桌宠页上下文未初始化')
@@ -259,18 +259,5 @@ onMounted(() => { loadModels(); loadHealth(); loadXzStatus() })
       <p class="companion-panel-msg">{{ healthMsg }}</p>
     </section>
     </div>
-
-    <aside class="companion-sidebar" aria-label="小智状态">
-      <header><div><Wifi :size="17" /><span><h2>小智状态</h2><p>对话、视觉与屏幕观察</p></span></div><button type="button" title="刷新" @click="loadXzStatus"><RefreshCw :size="14" /></button></header>
-      <dl class="xz-status-list">
-        <div><dt>对话连接</dt><dd :class="xz.connected ? 'health-ok' : 'health-bad'">{{ xz.connected ? '已连接' : '断开' }}</dd></div>
-        <div><dt>会话 ID</dt><dd class="xz-session">{{ xz.session_id || '-' }}</dd></div>
-        <div><dt>视觉能力</dt><dd :class="xz.vision ? 'health-ok' : 'health-bad'">{{ xz.vision ? '已捕获' : '未捕获' }}</dd></div>
-        <div><dt>自动观察</dt><dd :class="xz.observe_enabled ? 'health-ok' : 'health-bad'">{{ xz.observe_enabled ? '开启' : '关闭' }}</dd></div>
-        <div v-if="xz.observe_enabled"><dt>下次观察</dt><dd>{{ xz.observe_next > 0 ? xz.observe_next + ' 秒后' : '等待中' }}</dd></div>
-      </dl>
-      <div v-if="xz.vision && xz.vision_url" class="xz-vision-url" :title="xz.vision_url">视觉端点：{{ xz.vision_url }}</div>
-      <p v-if="xzMsg" class="companion-panel-msg">{{ xzMsg }}</p>
-    </aside>
   </section>
 </template>
