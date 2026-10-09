@@ -25,7 +25,6 @@ import {
   Upload,
   UserRound,
   Volume2,
-  Wifi,
   X,
 } from '@lucide/vue'
 
@@ -114,33 +113,6 @@ let xzRetryDelay = 3000
 watch([xzTurns, xzThinking], () => {
   if (followChat.value) nextTick(() => xzScrollToBottom())
 }, { flush: 'post' })
-
-// ============ 小智状态全屏（替代原右侧小智状态栏） ============
-const xzStatusPanelOpen = ref(false)
-const xzStatusData = ref({ connected: false, session_id: '', vision: false, vision_url: '', observe_enabled: false, observe_next: 0 })
-let xzStatusTimer = null
-async function loadXzStatus() {
-  try {
-    const [s, v, o] = await Promise.all([
-      fetch('/api/xiaozhi/status').then((r) => r.json()),
-      fetch('/api/xiaozhi/vision-info').then((r) => r.json()),
-      fetch('/api/xiaozhi/observe/status').then((r) => r.json()),
-    ])
-    xzStatusData.value = {
-      connected: Boolean(s?.connected),
-      session_id: s?.session_id || '',
-      vision: Boolean(v?.vision),
-      vision_url: v?.url || v?.vision_url || '',
-      observe_enabled: Boolean(o?.enabled),
-      observe_next: Number(o?.next_in_seconds || 0),
-    }
-  } catch (e) { /* 静默 */ }
-}
-function toggleXzStatusPanel() {
-  xzStatusPanelOpen.value = !xzStatusPanelOpen.value
-  if (xzStatusPanelOpen.value) loadXzStatus()
-}
-function closeXzStatusPanel() { xzStatusPanelOpen.value = false }
 
 // 音频播放（48kHz 双声道 float32 planar，后端代理解码）
 let xzAudioCtx = null
@@ -271,32 +243,11 @@ function xzSend() {
   xzBubble({ type: 'thinking', text: '' })
   xzWs.send(JSON.stringify({ session_id: xzSessionId, type: 'listen', state: 'detect', text, source: 'text' }))
 }
-// ============ 全屏对话（替代原“小智已连接”状态栏） ============
-const isFullscreen = ref(Boolean(document.fullscreenElement))
-function toggleFullscreen() {
-  const el = document.documentElement
-  if (document.fullscreenElement) {
-    if (document.exitFullscreen) document.exitFullscreen()
-  } else if (el.requestFullscreen) {
-    el.requestFullscreen().catch(() => {})
-  }
-}
-function onFsChange() { isFullscreen.value = Boolean(document.fullscreenElement) }
 function xzKeydown(e) {
   if (e.key === 'Enter' && !e.shiftKey) { xzSend(); e.preventDefault() }
 }
-onMounted(() => {
-  xzConnect()
-  document.addEventListener('fullscreenchange', onFsChange)
-  loadXzStatus()
-  xzStatusTimer = window.setInterval(loadXzStatus, 30000)
-})
-onBeforeUnmount(() => {
-  document.removeEventListener('fullscreenchange', onFsChange)
-  window.clearTimeout(xzReconnectTimer)
-  window.clearInterval(xzStatusTimer)
-  if (xzWs) try { xzWs.close() } catch (e) {}; xzStopPlayback()
-})
+onMounted(() => xzConnect())
+onBeforeUnmount(() => { window.clearTimeout(xzReconnectTimer); if (xzWs) try { xzWs.close() } catch (e) {}; xzStopPlayback() })
 </script>
 
 <template>
@@ -371,7 +322,7 @@ onBeforeUnmount(() => {
         <div class="composer">
           <textarea v-model="xzInput" class="composer-input" rows="1" placeholder="和小智聊点什么..." @keydown="xzKeydown" />
           <div class="composer-actions">
-            <button type="button" class="composer-icon-button" title="小智状态" @click="toggleXzStatusPanel"><Wifi :size="16" /></button>
+            <span :class="['xz-link-status', { connected: xzConnected }]">{{ xzConnected ? '小智已连接' : '小智连接中…' }}</span>
             <span class="composer-flex-spacer" />
             <button type="button" class="send-button" :disabled="!xzInput.trim()" @click="xzSend"><Send :size="17" /></button>
           </div>
@@ -381,26 +332,4 @@ onBeforeUnmount(() => {
   </div>
 
   <ImagePreview v-if="activeImageAttachment" :key="activeImageAttachment.url" :attachment="activeImageAttachment" @close="closeImagePreview" />
-
-  <Teleport to="body">
-    <div v-if="xzStatusPanelOpen" class="xz-status-fullscreen" @click.self="closeXzStatusPanel">
-      <section class="xz-status-card" role="dialog" aria-modal="true" aria-label="小智状态">
-        <header>
-          <div><Wifi :size="18" /><span><strong>小智状态</strong><small>对话、视觉与屏幕观察</small></span></div>
-          <button type="button" class="icon-button" title="关闭" @click="closeXzStatusPanel"><X :size="18" /></button>
-        </header>
-        <div class="xz-status-grid">
-          <article><span>对话连接</span><strong :class="xzStatusData.connected ? 'xz-ok-text' : 'xz-bad-text'">{{ xzStatusData.connected ? '已连接' : '断开' }}</strong></article>
-          <article><span>会话 ID</span><strong class="xz-session-text">{{ xzStatusData.session_id || '-' }}</strong></article>
-          <article><span>视觉能力</span><strong :class="xzStatusData.vision ? 'xz-ok-text' : 'xz-bad-text'">{{ xzStatusData.vision ? '已捕获' : '未捕获' }}</strong></article>
-          <article><span>自动观察</span><strong :class="xzStatusData.observe_enabled ? 'xz-ok-text' : ''">{{ xzStatusData.observe_enabled ? '开启' : '关闭' }}</strong></article>
-          <article v-if="xzStatusData.observe_enabled"><span>下次观察</span><strong>{{ xzStatusData.observe_next > 0 ? xzStatusData.observe_next + ' 秒后' : '等待中' }}</strong></article>
-          <article class="xz-status-url"><span>视觉端点</span><strong class="xz-url-text" :title="xzStatusData.vision_url">{{ xzStatusData.vision_url || '未配置' }}</strong></article>
-        </div>
-        <footer>
-          <button type="button" class="primary-button" @click="loadXzStatus"><RefreshCw :size="15" />刷新状态</button>
-        </footer>
-      </section>
-    </div>
-  </Teleport>
 </template>
