@@ -76,3 +76,5 @@ winmove_test.ps1
 _mio_orig/Mio-main/婢*/
 orig_*.png
 orig_*.txt
+
+\.Bin/

@@ -77,6 +77,7 @@ _observe_cfg: dict = {
 _observe_next_at: float = 0.0
 _observe_task: asyncio.Task | None = None
 _observe_lock = asyncio.Lock()
+_observe_last_result: str = "尚未触发"
 
 
 class ObserveRequest(BaseModel):
@@ -106,7 +107,7 @@ def _pick_next_observe_at() -> float:
 
 
 async def _observe_loop() -> None:
-    global _observe_next_at
+    global _observe_next_at, _observe_last_result
     from ..screen_capture import MssCapture
     while True:
         try:
@@ -121,8 +122,10 @@ async def _observe_loop() -> None:
                             img,
                             str(_observe_cfg.get("prompt") or "用调侃吐槽的语气，简短评价我屏幕上正在做的事。"),
                         )
-                        await _inject_say(text)
+                        ok = await _inject_say(text)
+                        _observe_last_result = ("语音已注入" if ok else "官方云未连接，语音未出") + " · " + str(text)[:50]
                 except Exception as exc:  # noqa: BLE001
+                    _observe_last_result = "观察失败：" + str(exc)[:60]
                     logger.warning("随机观察触发失败: %s", exc)
                 _observe_next_at = _pick_next_observe_at()
         except Exception as exc:  # noqa: BLE001
@@ -145,11 +148,19 @@ def _full_screen_jpeg(capture_cls) -> str | None:
         return None
 
 
-async def _inject_say(text: str) -> None:
+async def _inject_say(text: str) -> bool:
+    """把文本注入小智会话（模拟用户发言）→ 小智语音/表情/口型联动。
+
+    与 ChatPage 手动发送保持一致：先 abort 打断当前会话，再 listen。
+    返回是否成功注入（仅表示消息已发出，不代表官方云一定返回语音）。
+    """
     conn = _upstream
     if conn is None:
-        return
+        logger.warning("注入小智语音失败：官方云未连接（hello 未建立）")
+        return False
     try:
+        # 先打断当前会话，避免官方云忽略新输入
+        await conn.send(json.dumps({"type": "abort", "reason": "user_interrupt", "session_id": _session_id}, ensure_ascii=False))
         msg = {
             "type": "listen",
             "state": "detect",
@@ -158,8 +169,11 @@ async def _inject_say(text: str) -> None:
             "session_id": _session_id,
         }
         await conn.send(json.dumps(msg, ensure_ascii=False))
+        logger.info("注入小智语音成功: %s", str(text)[:40])
+        return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("注入小智对话失败: %s", exc)
+        return False
 
 
 async def _ensure_observe_task() -> None:
@@ -172,7 +186,7 @@ async def _ensure_observe_task() -> None:
 @router.get("/observe/status")
 async def xiaozhi_observe_status() -> dict:
     await _ensure_observe_task()
-    return {**_observe_cfg, "next_in_seconds": max(0, int(_observe_next_at - time.time()))}
+    return {**_observe_cfg, "next_in_seconds": max(0, int(_observe_next_at - time.time())), "last_result": _observe_last_result}
 
 
 @router.post("/observe/start")
@@ -208,7 +222,9 @@ async def xiaozhi_say(payload: XiaozhiSayRequest) -> dict:
     text = str(payload.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="文本不能为空")
-    await _inject_say(text)
+    ok = await _inject_say(text)
+    if not ok:
+        raise HTTPException(status_code=409, detail="注入失败：小智连接不可用")
     return {"ok": True, "text": text}
 
 
@@ -266,16 +282,16 @@ def _vision_explain_sync(image_base64: str, question: str) -> str:
             "Authorization": f"Bearer {vision.get('token') or ''}",
         },
     )
-    # 网络偶发 DNS/连接失败：重试 3 次（间隔 2s），提高稳定性
+    # 网络偶发 DNS/连接失败：重试 2 次（间隔 2s），单次 20s 超时，避免视觉请求长时间挂起
     last_err: Exception | None = None
-    for attempt in range(3):
+    for attempt in range(2):
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=20) as resp:
                 body = resp.read().decode("utf-8", errors="replace")
             break
         except Exception as exc:  # noqa: BLE001
             last_err = exc
-            if attempt < 2:
+            if attempt < 1:
                 time.sleep(2)
     else:
         raise last_err  # type: ignore[misc]
@@ -446,6 +462,8 @@ async def _pump_upstream(conn) -> None:
                         j = json.loads(msg)
                         if j.get("type") == "mcp":
                             _capture_vision_from_mcp(j.get("payload"))
+                        if j.get("type") in ("llm", "tts", "error", "listen", "abort"):
+                            logger.info("上游消息 type=%s", j.get("type"))
                     except Exception:  # noqa: BLE001
                         pass
                     await target.send_text(msg)
@@ -481,21 +499,22 @@ async def _ensure_upstream() -> tuple[object | None, str | None]:
     }
     try:
         conn = await websockets.connect(XIAOZHI_UPSTREAM, additional_headers=headers, max_size=None, open_timeout=10)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("上游连接失败: %s", exc)
-        return None, f"官方云连接失败: {exc}"
-    _upstream = conn
-    try:
+        # 先完成 hello 会话握手，确认官方云接受后才开放全局连接，
+        # 避免 hello 被拒(如 1005)时注入接口出现“假成功”
         await conn.send(json.dumps(HELLO, ensure_ascii=False))
         msg = await asyncio.wait_for(conn.recv(), timeout=10)
         j = json.loads(msg)
-        if j.get("type") == "hello":
-            _session_id = j.get("session_id")
-        else:
+        if j.get("type") != "hello":
             logger.warning("上游 hello 响应异常: %s", msg[:200])
+            try:
+                await conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+            return None, f"官方云 hello 响应异常: {msg[:120]}"
+        _session_id = j.get("session_id")
+        _upstream = conn
     except Exception as exc:  # noqa: BLE001
         logger.error("上游 hello 失败: %s", exc)
-        _upstream = None
         try:
             await conn.close()
         except Exception:  # noqa: BLE001

@@ -1881,6 +1881,22 @@
   })
 
   window.addEventListener('resize', fitModel)
+  // 小智语音口型（pet-xz-audio.js 驱动）：说话期间驱动 ParamMouthOpenY
+  window.addEventListener('mio-xz-speaking', (e) => {
+    const detail = (e && e.detail) || {}
+    if (detail.active) {
+      speakingUntil = Date.now() + Math.max(3000, Number(detail.durationMs) || 5000)
+      currentActivity = 'speaking'
+    } else if (currentActivity === 'speaking') {
+      speakingUntil = 0
+      currentActivity = 'idle'
+    }
+  })
+  // 小智表情联动：llm.emotion → 桌宠表情（含情绪参数）
+  window.addEventListener('mio-xz-emotion', (e) => {
+    const emo = ((e && e.detail && e.detail.emotion) || '').toLowerCase()
+    if (emo) { currentEmotion = emo; emotionUntil = Date.now() + 6000 }
+  })
   window.addEventListener('beforeunload', () => {
     stopSpeech('')
     if (socket) socket.close()
