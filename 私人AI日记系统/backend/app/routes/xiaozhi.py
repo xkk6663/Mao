@@ -365,8 +365,9 @@ async def _inject_say(text: str, wait_upstream: float = 6.0) -> bool:
         # 1. 打断任何进行中的会话
         await conn.send(json.dumps({"type": "abort", "reason": "user_interrupt", "session_id": _session_id}, ensure_ascii=False))
         await asyncio.sleep(0.3)
-        # 2. 若 30s 内已唤醒过则免唤醒；否则发短文本唤醒词并等其回复真实播完
-        need_wake = (time.time() - _last_wake_ts) > 30
+        # 2. 若 120s 内已唤醒过则免唤醒（官方云近期活跃时 listen 可直接识别，
+        #    避免每次对话都触发唤醒词问候"你来啦"）；否则发短文本唤醒词并快速进入注入
+        need_wake = (time.time() - _last_wake_ts) > 120
         if need_wake:
             await conn.send(json.dumps({
                 "type": "listen",
@@ -376,12 +377,12 @@ async def _inject_say(text: str, wait_upstream: float = 6.0) -> bool:
                 "session_id": _session_id,
             }, ensure_ascii=False))
             wake_ts_before = _last_tts_stop
-            wait_until = time.time() + 8.0
+            wait_until = time.time() + 2.5   # 唤醒确认窗口（不等问候播完，快速进入注入）
             while time.time() < wait_until:
                 await asyncio.sleep(0.3)
                 if _last_tts_stop > wake_ts_before:
                     break
-            await asyncio.sleep(0.5)  # 唤醒回复播完后再留半拍（实测快时序首次注入成功率更高）
+            await asyncio.sleep(0.3)
             _last_wake_ts = time.time()
         # 3. 音频流注入（先注入一次）
         frames = await _send_audio_stream(conn, text)
