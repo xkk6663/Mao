@@ -149,6 +149,7 @@ def _full_screen_jpeg(capture_cls) -> str | None:
 
 
 _last_wake_ts: float = 0.0  # 上次唤醒时间戳（30s 内会话可能仍活跃，可免唤醒直接注入）
+_last_tts_stop: float = 0.0  # 上游最后一次 TTS 播完时间戳（用于判断唤醒回复是否已完整播完）
 
 
 async def _inject_say(text: str, wait_upstream: float = 6.0) -> bool:
@@ -163,7 +164,7 @@ async def _inject_say(text: str, wait_upstream: float = 6.0) -> bool:
     官方云 1005 断连期：等待自动重连成功后再注入（最长 wait_upstream 秒）。
     返回是否成功注入（仅表示消息已发出，不代表官方云一定返回语音）。
     """
-    global _last_wake_ts
+    global _last_wake_ts, _last_tts_stop
     conn = _upstream
     if conn is None and wait_upstream > 0:
         deadline = time.time() + wait_upstream
@@ -179,7 +180,7 @@ async def _inject_say(text: str, wait_upstream: float = 6.0) -> bool:
         # 1. 打断任何进行中的会话
         await conn.send(json.dumps({"type": "abort", "reason": "user_interrupt", "session_id": _session_id}, ensure_ascii=False))
         await asyncio.sleep(0.3)
-        # 2. 若 30s 内已唤醒过则免唤醒；否则发短文本唤醒词并等其回复完整播完
+        # 2. 若 30s 内已唤醒过则免唤醒；否则发短文本唤醒词并等其回复真实播完（监听 tts stop）
         need_wake = (time.time() - _last_wake_ts) > 30
         if need_wake:
             await conn.send(json.dumps({
@@ -189,7 +190,14 @@ async def _inject_say(text: str, wait_upstream: float = 6.0) -> bool:
                 "source": "text",
                 "session_id": _session_id,
             }, ensure_ascii=False))
-            await asyncio.sleep(3.0)  # 等唤醒回复播完，确认会话活跃（不 abort，避免会话被搞乱）
+            # 等唤醒回复 TTS 完整播完：轮询 _last_tts_stop 更新（最多 6s）
+            wake_ts_before = _last_tts_stop
+            wait_until = time.time() + 6.0
+            while time.time() < wait_until:
+                await asyncio.sleep(0.3)
+                if _last_tts_stop > wake_ts_before:
+                    break
+            await asyncio.sleep(0.5)  # 播完后再留半拍，确保服务器就绪
             _last_wake_ts = time.time()
         # 3. 注入真正的问题（长文本）
         msg = {
@@ -467,7 +475,7 @@ async def _heartbeat_loop(conn) -> None:
 
 async def _pump_upstream(conn) -> None:
     """上游消息持续转发给最近活跃订阅者；断线自动清理并允许重建。"""
-    global _upstream
+    global _upstream, _last_tts_stop
     decoder = _OpusDecoder()
     _pump_audio_count = 0
     _pump_audio_bytes = 0
@@ -491,6 +499,8 @@ async def _pump_upstream(conn) -> None:
                         j = json.loads(msg)
                         if j.get("type") == "mcp":
                             _capture_vision_from_mcp(j.get("payload"))
+                        if j.get("type") == "tts" and j.get("state") == "stop":
+                            _last_tts_stop = time.time()
                         if j.get("type") in ("llm", "tts", "error", "listen", "abort"):
                             logger.info("上游消息 type=%s", j.get("type"))
                     except Exception:  # noqa: BLE001

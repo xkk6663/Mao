@@ -185,12 +185,20 @@
     inputEl.value = '';
     addMsg('user', text, '你说');
     stopPlayback();
-    // 官方云限制：空闲会话 detect 长文本会被拒，先短词唤醒；等唤醒回复播完(3s)再注入长文本（不能abort打断，会搞乱会话导致中断）
-    send({ session_id: sessionId, type: 'listen', state: 'detect', text: '你好', source: 'text' });
-    setTimeout(function () {
+    // 官方云限制：空闲会话 detect 长文本会被拒，先短词唤醒；等唤醒回复播完再注入长文本
+    // 30s 内已唤醒过则直接注入（免重复唤醒废话）
+    var lastWake = Number(localStorage.getItem('xz_last_wake') || 0);
+    if (Date.now() - lastWake < 30000) {
       send({ session_id: sessionId, type: 'listen', state: 'detect', text: text, source: 'text' });
       showThinking();
-    }, 3000);
+      return;
+    }
+    send({ session_id: sessionId, type: 'listen', state: 'detect', text: '你好', source: 'text' });
+    setTimeout(function () {
+      localStorage.setItem('xz_last_wake', String(Date.now()));
+      send({ session_id: sessionId, type: 'listen', state: 'detect', text: text, source: 'text' });
+      showThinking();
+    }, 3500);
   }
 
   // ---------- 事件 ----------
