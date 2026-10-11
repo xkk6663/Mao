@@ -290,7 +290,7 @@ def create_app() -> FastAPI:
                 cache_control = (
                     "no-store"
                     if requested.name == "index.html" or "live2d-pet" in relative_parts
-                    else "public, max-age=31536000, immutable"
+                    else "no-cache"
                 )
                 return FileResponse(requested, headers={"Cache-Control": cache_control})
             return FileResponse(
