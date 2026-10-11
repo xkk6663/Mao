@@ -234,21 +234,18 @@
     ensureAudioCtx()
     stopPlayback()
     input.value = ''
-    if (ws && ws.readyState === 1) {
-      // 官方云限制：空闲会话 detect 长文本会被拒，先短词唤醒；等唤醒回复播完再注入长文本
-      // 30s 内已唤醒过则直接注入（免重复唤醒废话）
-      const lastWake = Number(localStorage.getItem('xz_last_wake') || 0)
-      if (Date.now() - lastWake < 30000) {
-        ws.send(JSON.stringify({ session_id: sessionId, type: 'listen', state: 'detect', text: text, source: 'text' }))
-        return
-      }
-      bubble({ type: 'thinking', text: '' })
-      ws.send(JSON.stringify({ session_id: sessionId, type: 'listen', state: 'detect', text: '你好', source: 'text' }))
-      setTimeout(() => {
-        localStorage.setItem('xz_last_wake', String(Date.now()))
-        ws.send(JSON.stringify({ session_id: sessionId, type: 'listen', state: 'detect', text: text, source: 'text' }))
-      }, 3500)
-    }
+    // 走后端音频流注入（官方语音通道）：后端负责 abort→唤醒→listen start→TTS音频流→stop，
+    // 官方云 ASR 识别后 LLM 回答并播报。比前端 detect 长文本稳定（官方 detect 仅用于唤醒词）。
+    bubble({ type: 'thinking', text: '' })
+    fetch('/api/xiaozhi/say', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text })
+    }).then((r) => r.json()).then((j) => {
+      if (!j.ok) bubble({ type: 'text', text: '⚠ 注入失败：' + (j.detail || '未知错误') })
+    }).catch(() => {
+      bubble({ type: 'text', text: '⚠ 网络错误，注入失败' })
+    })
   }
 
   // ---- 语音输入（Web Speech API 识别中文 → 自动发送）----
