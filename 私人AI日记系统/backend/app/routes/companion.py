@@ -905,6 +905,35 @@ async def companion_live2d_model_delete(model_id: str):
     return {"deleted": True, **(await asyncio.to_thread(_status_payload))}
 
 
+@router.get("/live2d/models/{model_id}/assets/{asset_path:path}")
+async def companion_live2d_model_asset(model_id: str, asset_path: str):
+    """模型文件服务：model3/moc3/纹理/动作 等资源（Live2D 加载器按 model3.json 相对路径解析）。"""
+    root = companion_service.live2d_model_root(model_id)
+    if root is None:
+        raise HTTPException(status_code=404, detail="没有找到这个 Live2D 模型。")
+    if not asset_path:
+        raise HTTPException(status_code=400, detail="非法资源路径。")
+    requested = (root / asset_path).resolve()
+    root_resolved = root.resolve()
+    if not requested.is_relative_to(root_resolved) or not requested.is_file():
+        raise HTTPException(status_code=404, detail="模型资源不存在。")
+    suffix = requested.suffix.lower()
+    media_type = {
+        ".json": "application/json",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".moc3": "application/octet-stream",
+        ".motion3.json": "application/json",
+        ".physics3.json": "application/json",
+        ".pose3.json": "application/json",
+        ".userdata3.json": "application/json",
+        ".cdi3.json": "application/json",
+    }.get(suffix, "application/octet-stream")
+    return FileResponse(requested, media_type=media_type, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/live2d/models/{model_id}/preview")
 async def companion_live2d_model_preview(model_id: str):
     path = companion_service.live2d_model_preview_path(model_id)

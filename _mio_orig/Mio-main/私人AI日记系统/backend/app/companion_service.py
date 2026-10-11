@@ -2442,6 +2442,7 @@ import_live2d_model_directory = _live2d_assets_service.import_live2d_model_direc
 delete_live2d_model = _live2d_assets_service.delete_live2d_model
 live2d_model_preview_path = _live2d_assets_service.live2d_model_preview_path
 save_live2d_model_preview_data_url = _live2d_assets_service.save_live2d_model_preview_data_url
+live2d_model_root = _live2d_assets_service.live2d_model_root
 
 from .companion.appearance import AppearanceService
 _appearance_service = AppearanceService(

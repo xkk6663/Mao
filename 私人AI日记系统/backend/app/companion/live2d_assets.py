@@ -43,6 +43,17 @@ class Live2DAssetsService:
         return path
 
 
+    def live2d_model_root(self, model_id: str) -> Path | None:
+        """返回自定义模型根目录（不存在则 None）。"""
+        if not model_id:
+            return None
+        root = (self._live2d_models_dir() / str(model_id)).resolve()
+        root_parent = self._live2d_models_dir().resolve()
+        if not root.is_relative_to(root_parent) or not root.is_dir():
+            return None
+        return root
+
+
     def _live2d_runtime_path(self) -> Path:
         return self.live2d_state_dir() / "runtime.json"
 
@@ -233,6 +244,7 @@ class Live2DAssetsService:
                 "name": str(metadata.get("name") or model_root.name),
                 "description": str(metadata.get("sourceLabel") or "本地导入的 Live2D 模型"),
                 "model_path": str(model_path.relative_to(model_root)).replace("\\", "/"),
+                "modelUrl": f"/api/companion/live2d/models/{model_root.name}/assets/{str(model_path.relative_to(model_root)).replace(chr(92), '/')}",
                 "preview_path": preview_relative if preview_path else "",
                 "preview_url": f"/api/companion/live2d/models/{model_root.name}/preview" if preview_path else "",
                 "license": str((metadata.get("authorization") or {}).get("notice") or "授权状态未确认"),
