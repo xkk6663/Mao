@@ -131,11 +131,11 @@ async def _observe_loop() -> None:
                         )
                         # 观察截图写入会话历史（同步到聊天界面）
                         _chat_append("user", "image", text="（屏幕观察）", image_base64=img, tag="observe")
-                        ok = await _inject_say(text, source="observe")
-                        _observe_last_result = ("语音已注入" if ok else "官方云未连接，语音未出") + " · " + str(text)[:50]
-                        if ok:
-                            # 观察评价写入历史 → 聊天界面显示为"她说"（AI 在评价屏幕）
-                            _chat_append("pet", "text", text, tag="observe")
+                        # 观察评价写入历史 → 聊天界面显示为"她说"（AI 在评价屏幕）
+                        _chat_append("pet", "text", text, tag="observe")
+                        # 本地 TTS 播放（稳定链路，不依赖官方云 ASR 识别注入文本）
+                        ok = await _speak_local(text, "observe")
+                        _observe_last_result = ("语音已播放" if ok else "本地语音播放失败") + " · " + str(text)[:50]
                 except Exception as exc:  # noqa: BLE001
                     _observe_last_result = "观察失败：" + str(exc)[:60]
                     logger.warning("随机观察触发失败: %s", exc)
@@ -272,6 +272,42 @@ def _sapi_tts_wav(text: str) -> bytes:
     fs.Close()
     with open(r"C:\Users\xiao1\Mio\tts_tmp.wav", "rb") as f:
         return f.read()
+
+
+async def _speak_local(text: str, source: str = "vision") -> bool:
+    """本地 TTS 合成 → 广播 48kHz 单声道 float32 PCM（桌宠播放+口型）。
+    不依赖官方云 ASR：图片分析/屏幕观察的分析文本走本地播放——稳定、长文本完整播放、
+    不产生"你说[分析]"回声错乱。"""
+    if not text:
+        return False
+    try:
+        wav = await asyncio.to_thread(_sapi_tts_wav, str(text)[:200])
+        with wave.open(io.BytesIO(wav), "rb") as w:
+            sr = w.getframerate()
+            ch = w.getnchannels()
+            pcm = w.readframes(w.getnframes())
+        arr = np.frombuffer(pcm, dtype=np.int16).reshape(-1, ch)
+        if ch == 2:
+            arr = arr.mean(axis=1, dtype=np.int16)
+        arr = arr.astype(np.int16)
+        if sr != 48000:
+            resampler = av.AudioResampler(format="s16", layout="mono", rate=48000)
+            f0 = av.AudioFrame.from_ndarray(arr, format="s16", layout="mono")
+            f0.sample_rate = sr
+            res = resampler.resample(f0)
+            pcm16 = b"".join(bytes(f.planes[0]) for f in res)
+        else:
+            pcm16 = arr.tobytes()
+        f32 = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32768.0
+        total = int(f32.shape[0])
+        if total == 0:
+            return False
+        await _broadcast_bytes(struct.pack("<II", total, 1) + f32.tobytes())
+        logger.info("本地语音播放 source=%s chars=%d samples=%d", source, len(str(text)), total)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("本地语音播放失败: %s", exc)
+        return False
 
 
 def _wav_to_opus_frames(wav_bytes: bytes, samples_per_frame: int = 960) -> list[bytes]:
@@ -625,12 +661,10 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
         _chat_append("user", "image", text=question, image_base64=image_base64, tag="chat")
         # 2. 官方视觉分析
         text = await asyncio.to_thread(_vision_explain_sync, image_base64, question)
-        # 3. 分析文本注入（音频流 → 官方云语音回答）
-        ok = await _inject_say(text, source="vision")
-        if not ok:
-            raise HTTPException(status_code=409, detail="图片分析完成但语音注入失败：小智连接不可用")
-        # 4. 分析文本写入历史 → 聊天界面显示为"她说"（AI 在描述图片，不是用户发言）
+        # 3. 分析文本写入历史 → 聊天界面显示为"她说"（AI 在描述图片，不是用户发言）
         _chat_append("pet", "text", text, tag="vision")
+        # 4. 本地 TTS 播放（稳定链路：不依赖官方 ASR 识别注入文本 → 杜绝"你说[分析]"错乱与无声音）
+        await _speak_local(text, "vision")
         return {"ok": True, "text": text}
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
