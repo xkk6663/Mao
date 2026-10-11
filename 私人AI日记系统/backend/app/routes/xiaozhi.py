@@ -148,16 +148,22 @@ def _full_screen_jpeg(capture_cls) -> str | None:
         return None
 
 
+_last_wake_ts: float = 0.0  # 上次唤醒时间戳（30s 内会话可能仍活跃，可免唤醒直接注入）
+
+
 async def _inject_say(text: str, wait_upstream: float = 6.0) -> bool:
     """把文本注入小智会话（模拟用户发言）→ 小智语音/表情/口型联动。
 
     官方云限制：空闲会话的 detect 长文本会被拒绝（"Detect is only for wake words"），
     必须先发短文本唤醒词（detect）把会话激活，再注入长文本才能得到 STT/LLM/TTS。
-    唤醒回复会先播一句废话，立即 abort 打断。
-    流程：abort → detect(短唤醒词) → 等唤醒确认 → abort(打断唤醒回复) → detect(长文本)。
+    【稳定性关键】不能在唤醒后立即 abort 打断唤醒回复——实验证明 abort 会搞乱官方云
+    会话状态，导致后续长文本无响应（用户听感=响一下→中断）。正确做法：等唤醒回复
+    完整播完（sleep 3s）再注入长文本，音频连续。
+    30 秒内已唤醒过（会话大概率仍活跃）则跳过唤醒，直接注入长文本（省一句废话）。
     官方云 1005 断连期：等待自动重连成功后再注入（最长 wait_upstream 秒）。
     返回是否成功注入（仅表示消息已发出，不代表官方云一定返回语音）。
     """
+    global _last_wake_ts
     conn = _upstream
     if conn is None and wait_upstream > 0:
         deadline = time.time() + wait_upstream
@@ -170,22 +176,22 @@ async def _inject_say(text: str, wait_upstream: float = 6.0) -> bool:
         logger.warning("注入小智语音失败：官方云未连接（hello 未建立）")
         return False
     try:
-        # 1. 打断当前会话，避免官方云忽略新输入
+        # 1. 打断任何进行中的会话
         await conn.send(json.dumps({"type": "abort", "reason": "user_interrupt", "session_id": _session_id}, ensure_ascii=False))
         await asyncio.sleep(0.3)
-        # 2. 短文本唤醒（官方云要求 detect 先用于唤醒词，长文本会被拒）
-        await conn.send(json.dumps({
-            "type": "listen",
-            "state": "detect",
-            "text": "你好",
-            "source": "text",
-            "session_id": _session_id,
-        }, ensure_ascii=False))
-        # 3. 等官方云确认唤醒并开始回复，然后 abort 打断唤醒废话
-        await asyncio.sleep(1.0)
-        await conn.send(json.dumps({"type": "abort", "reason": "user_interrupt", "session_id": _session_id}, ensure_ascii=False))
-        await asyncio.sleep(0.3)
-        # 4. 注入真正的问题（长文本）
+        # 2. 若 30s 内已唤醒过则免唤醒；否则发短文本唤醒词并等其回复完整播完
+        need_wake = (time.time() - _last_wake_ts) > 30
+        if need_wake:
+            await conn.send(json.dumps({
+                "type": "listen",
+                "state": "detect",
+                "text": "你好",
+                "source": "text",
+                "session_id": _session_id,
+            }, ensure_ascii=False))
+            await asyncio.sleep(3.0)  # 等唤醒回复播完，确认会话活跃（不 abort，避免会话被搞乱）
+            _last_wake_ts = time.time()
+        # 3. 注入真正的问题（长文本）
         msg = {
             "type": "listen",
             "state": "detect",

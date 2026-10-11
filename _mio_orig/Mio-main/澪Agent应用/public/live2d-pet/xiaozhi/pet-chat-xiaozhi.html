@@ -235,16 +235,12 @@
     stopPlayback()
     input.value = ''
     if (ws && ws.readyState === 1) {
-      // 官方云限制：空闲会话 detect 长文本会被拒，先短词唤醒再注入
-      ws.send(JSON.stringify({ session_id: sessionId, type: 'abort', reason: 'user_interrupt' }))
+      // 官方云限制：空闲会话 detect 长文本会被拒，先短词唤醒；等唤醒回复播完(3s)再注入长文本（不能abort打断，会搞乱会话导致中断）
       bubble({ type: 'thinking', text: '' })
       ws.send(JSON.stringify({ session_id: sessionId, type: 'listen', state: 'detect', text: '你好', source: 'text' }))
       setTimeout(() => {
-        ws.send(JSON.stringify({ session_id: sessionId, type: 'abort', reason: 'user_interrupt' })) // 打断唤醒废话
-        setTimeout(() => {
-          ws.send(JSON.stringify({ session_id: sessionId, type: 'listen', state: 'detect', text: text, source: 'text' }))
-        }, 300)
-      }, 1000)
+        ws.send(JSON.stringify({ session_id: sessionId, type: 'listen', state: 'detect', text: text, source: 'text' }))
+      }, 3000)
     }
   }
 

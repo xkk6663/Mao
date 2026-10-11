@@ -185,15 +185,12 @@
     inputEl.value = '';
     addMsg('user', text, '你说');
     stopPlayback();
-    // 官方云限制：空闲会话 detect 长文本会被拒，先短词唤醒再注入
+    // 官方云限制：空闲会话 detect 长文本会被拒，先短词唤醒；等唤醒回复播完(3s)再注入长文本（不能abort打断，会搞乱会话导致中断）
     send({ session_id: sessionId, type: 'listen', state: 'detect', text: '你好', source: 'text' });
     setTimeout(function () {
-      send({ session_id: sessionId, type: 'abort', reason: 'user_interrupt' }); // 打断唤醒废话
-      setTimeout(function () {
-        send({ session_id: sessionId, type: 'listen', state: 'detect', text: text, source: 'text' });
-        showThinking();
-      }, 300);
-    }, 1000);
+      send({ session_id: sessionId, type: 'listen', state: 'detect', text: text, source: 'text' });
+      showThinking();
+    }, 3000);
   }
 
   // ---------- 事件 ----------
