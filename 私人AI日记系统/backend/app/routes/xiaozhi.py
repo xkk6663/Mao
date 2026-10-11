@@ -148,7 +148,7 @@ def _full_screen_jpeg(capture_cls) -> str | None:
         return None
 
 
-async def _inject_say(text: str, wait_upstream: float = 20.0) -> bool:
+async def _inject_say(text: str, wait_upstream: float = 6.0) -> bool:
     """把文本注入小智会话（模拟用户发言）→ 小智语音/表情/口型联动。
 
     官方云限制：空闲会话的 detect 长文本会被拒绝（"Detect is only for wake words"），

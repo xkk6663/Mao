@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from difflib import SequenceMatcher
+import logging
 import random
 import re
 import subprocess
@@ -10,6 +11,8 @@ import tempfile
 import time
 from pathlib import Path
 from urllib.parse import quote
+
+logger = logging.getLogger("companion.routes")
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, WebSocket
 from fastapi.responses import FileResponse, Response, StreamingResponse
