@@ -37,10 +37,25 @@
   .msg.sys { align-self:center; background:transparent; color:var(--muted); font-size:12px; padding:2px 8px; }
   .msg .meta { display:block; font-size:11px; color:var(--muted); margin-bottom:2px; }
   .msg.user .meta { color:rgba(255,255,255,0.75); }
+  .msg.img { padding:6px; max-width:70%; }
+  .msg.img.user { align-self:flex-end; background:var(--bubble-u); }
+  .msg.img img { display:block; max-width:220px; max-height:160px; border-radius:8px; background:#fff; }
+  .msg.img .cap { display:block; font-size:12px; margin-top:4px; color:var(--muted); }
+  .msg.img.user .cap { color:rgba(255,255,255,0.8); }
   .thinking { align-self:flex-start; display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; padding:4px 0; }
   .thinking .spin { width:14px; height:14px; border:2px solid #d6d9e0; border-top-color:var(--accent); border-radius:50%; animation:rot 0.9s linear infinite; }
   @keyframes rot { to { transform:rotate(360deg); } }
+  .speaking { align-self:flex-start; display:flex; align-items:center; gap:6px; color:var(--accent); font-size:12px; padding:2px 0; }
+  .speaking .bar { width:4px; height:12px; background:var(--accent); border-radius:2px; animation:wave 0.8s ease-in-out infinite; }
+  .speaking .bar:nth-child(2) { animation-delay:0.15s; }
+  .speaking .bar:nth-child(3) { animation-delay:0.3s; }
+  @keyframes wave { 0%,100% { transform:scaleY(0.4); } 50% { transform:scaleY(1); } }
   .inputbar { display:flex; gap:8px; padding:10px 12px 12px; border-top:1px solid #e8eaee; }
+  .inputbar .imgbtn {
+    border:1px solid #dcdfe4; border-radius:10px; background:#fff; color:var(--muted);
+    font-size:16px; cursor:pointer; width:38px; display:flex; align-items:center; justify-content:center;
+  }
+  .inputbar .imgbtn:hover { border-color:var(--accent); color:var(--accent); }
   .inputbar input {
     flex:1; border:1px solid #dcdfe4; border-radius:10px; padding:9px 12px; font-size:14px; outline:none; background:#fff;
   }
@@ -49,7 +64,7 @@
     border:none; border-radius:10px; padding:0 18px; background:var(--accent); color:#fff; font-size:14px; cursor:pointer;
   }
   .inputbar button:disabled { opacity:0.45; cursor:default; }
-  .hint { font-size:11px; color:var(--muted); text-align:center; padding:0 12px 10px; }
+  .hint { font-size:11px; color:var(--muted); text-align:center; padding:0 12px 8px; }
 </style>
 </head>
 <body>
@@ -59,10 +74,12 @@
     <button class="close" id="closeBtn" title="关闭">&#10005;</button>
   </div>
   <div class="msgs" id="msgs"></div>
-  <div class="hint">接入小智官方控制台（免费）· 支持文字对话 / 思考状态 / 语音播报</div>
+  <div class="hint">接入小智官方控制台（免费）· 文字/图片对话 · 会话历史实时同步</div>
   <div class="inputbar">
+    <button class="imgbtn" id="imgBtn" title="发送图片">&#128247;</button>
     <input id="input" type="text" placeholder="输入消息，回车发送…" autocomplete="off">
     <button id="sendBtn">发送</button>
+    <input type="file" id="fileInput" accept="image/*" style="display:none">
   </div>
 <script src="xiaozhi-chat.js"></script>
 </body>

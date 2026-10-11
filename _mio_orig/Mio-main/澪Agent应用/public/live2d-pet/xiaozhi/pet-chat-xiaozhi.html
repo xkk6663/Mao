@@ -79,8 +79,10 @@
     <span class="dot offline" id="dot"></span>
     <span class="diag" id="diag"></span>
     <input id="input" type="text" placeholder="和小智说点什么…" autocomplete="off" spellcheck="false">
+    <button type="button" class="mic" id="imgBtn" title="发送图片" style="width:32px;height:32px;border-radius:50%;border:none;cursor:pointer;background:rgba(255,255,255,0.12);color:#fff;font-size:14px;display:flex;align-items:center;justify-content:center;-webkit-app-region:no-drag;">📷</button>
     <button type="button" class="mic" id="mic" title="语音输入">🎤</button>
     <button type="button" class="send" id="send" disabled>发送</button>
+    <input type="file" id="fileInput" accept="image/*" style="display:none">
   </div>
 <script>
 (function () {
@@ -251,6 +253,36 @@
   // ---- 语音输入（Web Speech API 识别中文 → 自动发送）----
   let recognition = null
   let isRecording = false
+
+  // ---- 图片对话（与截图提问同一链路：vision 分析 → 音频流注入 → 语音回答）----
+  const imgBtn = document.getElementById('imgBtn')
+  const fileInput = document.getElementById('fileInput')
+  function sendImage() {
+    const file = fileInput.files && fileInput.files[0]
+    if (!file) return
+    if (file.size > 4 * 1024 * 1024) { bubble({ type: 'text', text: '⚠ 图片过大（>4MB）' }); return }
+    const reader = new FileReader()
+    reader.onload = function () {
+      const base64 = String(reader.result).split(',')[1] || ''
+      if (!base64) { bubble({ type: 'text', text: '⚠ 读取图片失败' }); return }
+      bubble({ type: 'text', text: '📷 图片已发送，识别中…' })
+      bubble({ type: 'thinking', text: '' })
+      fetch('/api/xiaozhi/vision', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_base64: base64, question: '请详细描述这张图片里的内容。' })
+      }).then((r) => r.json()).then((j) => {
+        if (!j.ok) bubble({ type: 'text', text: '⚠ 图片分析失败：' + (j.detail || '未知错误') })
+      }).catch(() => {
+        bubble({ type: 'text', text: '⚠ 网络错误，图片分析失败' })
+      })
+    }
+    reader.readAsDataURL(file)
+    fileInput.value = ''
+  }
+  imgBtn.addEventListener('click', function () { fileInput.click() })
+  fileInput.addEventListener('change', sendImage)
+
   function initRecognition() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition
     if (!SR) { micBtn.style.display = 'none'; return }

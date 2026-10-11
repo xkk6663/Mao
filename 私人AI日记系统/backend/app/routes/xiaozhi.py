@@ -125,6 +125,8 @@ async def _observe_loop() -> None:
                             img,
                             str(_observe_cfg.get("prompt") or "用调侃吐槽的语气，简短评价我屏幕上正在做的事。"),
                         )
+                        # 观察截图写入会话历史（同步到聊天界面）
+                        _chat_append("user", "image", text="（屏幕观察）", image_base64=img, tag="observe")
                         ok = await _inject_say(text)
                         _observe_last_result = ("语音已注入" if ok else "官方云未连接，语音未出") + " · " + str(text)[:50]
                 except Exception as exc:  # noqa: BLE001
@@ -155,6 +157,25 @@ _last_wake_ts: float = 0.0  # 上次唤醒时间戳（30s 内会话可能仍活�
 _last_tts_stop: float = 0.0  # 上游最后一次 TTS 播完时间戳（用于判断唤醒回复是否已完整播完）
 _last_stt_ts: float = 0.0    # 上游最后一次 STT 识别时间戳（用于确认注入的语音是否被官方云识别）
 _last_stt_text: str = ""     # 上游最后一次 STT 识别文本
+
+# ---- 会话历史（长连接建立以来的所有来往记录，文字/图片）----
+# 每条: {ts, role(user/pet/system), type(text/image), text, image_base64, tag(chat/observe/screenshot/stt/llm)}
+_CHAT_HISTORY_MAX = 500
+_chat_history: list[dict] = []
+
+
+def _chat_append(role: str, type_: str, text: str = "", image_base64: str | None = None, tag: str = "") -> None:
+    """写入会话历史（单线程事件循环内 append 原子，无锁）。"""
+    _chat_history.append({
+        "ts": round(time.time(), 3),
+        "role": role,
+        "type": type_,
+        "text": str(text)[:2000],
+        "image_base64": image_base64,
+        "tag": tag,
+    })
+    if len(_chat_history) > _CHAT_HISTORY_MAX:
+        del _chat_history[: len(_chat_history) - _CHAT_HISTORY_MAX]
 
 
 def _sapi_tts_wav(text: str) -> bytes:
@@ -386,6 +407,7 @@ async def xiaozhi_say(payload: XiaozhiSayRequest) -> dict:
     text = str(payload.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="文本不能为空")
+    _chat_append("user", "text", text, tag="chat")
     ok = await _inject_say(text)
     if not ok:
         raise HTTPException(status_code=409, detail="注入失败：小智连接不可用")
@@ -467,6 +489,14 @@ def _vision_explain_sync(image_base64: str, question: str) -> str:
     return str(text)
 
 
+@router.get("/chat-history")
+async def xiaozhi_chat_history(limit: int = 100) -> dict:
+    """返回长连接以来的会话历史（最近 N 条，图片含 base64 data URL）。"""
+    n = max(1, min(int(limit or 100), _CHAT_HISTORY_MAX))
+    history = list(_chat_history[-n:])
+    return {"ok": True, "total": len(_chat_history), "history": history}
+
+
 @router.get("/vision-info")
 async def xiaozhi_vision_info() -> dict:
     return {
@@ -478,10 +508,23 @@ async def xiaozhi_vision_info() -> dict:
 
 @router.post("/vision")
 async def xiaozhi_vision(payload: VisionRequest) -> dict:
+    """上传/截图图片 → 小智官方视觉分析 → 注入对话（语音回答）。
+    与聊天发图同一条链路：图片写入会话历史，分析文本注入后由官方云语音回答。"""
     if _vision is None:
         raise HTTPException(status_code=409, detail="小智视觉能力不可用：请先打开小智对话建立连接")
+    question = str(payload.question or "").strip() or "请详细描述这张图片里的内容。"
+    image_base64 = str(payload.image_base64 or "").strip()
+    if not image_base64:
+        raise HTTPException(status_code=400, detail="图片不能为空")
     try:
-        text = await asyncio.to_thread(_vision_explain_sync, payload.image_base64, payload.question)
+        # 1. 图片写入会话历史（同步到聊天界面）
+        _chat_append("user", "image", text=question, image_base64=image_base64, tag="chat")
+        # 2. 官方视觉分析
+        text = await asyncio.to_thread(_vision_explain_sync, image_base64, question)
+        # 3. 分析文本注入（音频流 → 官方云语音回答）
+        ok = await _inject_say(text)
+        if not ok:
+            raise HTTPException(status_code=409, detail="图片分析完成但语音注入失败：小智连接不可用")
         return {"ok": True, "text": text}
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -631,6 +674,12 @@ async def _pump_upstream(conn) -> None:
                         if j.get("type") == "stt":
                             _last_stt_ts = time.time()
                             _last_stt_text = str(j.get("text") or "")
+                            # 用户语音/注入内容识别结果 → 写入会话历史
+                            _chat_append("user", "text", _last_stt_text, tag="stt")
+                        if j.get("type") == "llm":
+                            _llm_text = str(j.get("text") or "")
+                            if _llm_text:
+                                _chat_append("pet", "text", _llm_text, tag="llm")
                         if j.get("type") in ("llm", "tts", "error", "listen", "abort"):
                             logger.info("上游消息 type=%s", j.get("type"))
                     except Exception:  # noqa: BLE001

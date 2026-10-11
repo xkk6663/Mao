@@ -1,14 +1,19 @@
-/* 小智官方云对话客户端（经本地后端 /api/xiaozhi/ws 代理） */
+/* 小智官方云对话客户端（经本地后端 /api/xiaozhi/ws 代理）
+ * 会话界面 = 长连接以来的所有来往记录（历史驱动渲染，3s 轮询同步截图提问/观察结果）
+ * 支持：文字对话（后端音频流注入）/ 图片对话（官方视觉→语音回答）/ 历史可视化 */
 (function () {
   'use strict';
 
   var $ = function (id) { return document.getElementById(id); };
-  var msgsEl = $('msgs'), inputEl = $('input'), sendBtn = $('sendBtn'), statusDot = $('statusDot');
+  var msgsEl = $('msgs'), inputEl = $('input'), sendBtn = $('sendBtn'),
+      imgBtn = $('imgBtn'), fileInput = $('fileInput'), statusDot = $('statusDot');
 
   var ws = null;
   var connected = false;
   var sessionId = '';
+  var histShown = 0;      // 已渲染的历史条数
   var thinkingEl = null;
+  var speakingEl = null;
 
   // ---------- 音频播放 ----------
   var AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -93,6 +98,24 @@
     return div;
   }
 
+  function addMsgImage(kind, imageBase64, caption) {
+    var div = document.createElement('div');
+    div.className = 'msg img ' + kind;
+    if (caption) {
+      var m = document.createElement('span');
+      m.className = 'cap';
+      m.textContent = caption;
+      div.appendChild(m);
+    }
+    var img = document.createElement('img');
+    var src = imageBase64.indexOf('data:') === 0 ? imageBase64 : 'data:image/jpeg;base64,' + imageBase64;
+    img.src = src;
+    div.appendChild(img);
+    msgsEl.appendChild(div);
+    msgsEl.scrollTop = msgsEl.scrollHeight;
+    return div;
+  }
+
   function showThinking() {
     if (thinkingEl) return;
     thinkingEl = document.createElement('div');
@@ -109,11 +132,108 @@
     }
   }
 
+  function showSpeaking() {
+    if (speakingEl) return;
+    speakingEl = document.createElement('div');
+    speakingEl.className = 'speaking';
+    speakingEl.innerHTML = '<span class="bar"></span><span class="bar"></span><span class="bar"></span><span>正在说话…</span>';
+    msgsEl.appendChild(speakingEl);
+    msgsEl.scrollTop = msgsEl.scrollHeight;
+  }
+
+  function hideSpeaking() {
+    if (speakingEl) {
+      speakingEl.remove();
+      speakingEl = null;
+    }
+  }
+
   function setStatus(state) {
     statusDot.className = 'dot ' + state;
   }
 
-  // ---------- WebSocket ----------
+  // ---------- 会话历史（唯一消息来源，3s 轮询） ----------
+  function fetchHistory() {
+    return fetch('/api/xiaozhi/chat-history?limit=200')
+      .then(function (r) { return r.json(); })
+      .catch(function () { return { ok: false, history: [] }; });
+  }
+
+  function renderHistory(history) {
+    for (var i = histShown; i < history.length; i++) {
+      var it = history[i];
+      if (it.type === 'image') {
+        var cap = it.role === 'user' ? (it.text || (it.tag === 'observe' ? '（屏幕观察）' : '（图片）')) : '';
+        addMsgImage(it.role === 'user' ? 'user' : 'ai', it.image_base64, cap);
+      } else if (it.role === 'user') {
+        addMsg('user', it.text, it.tag === 'observe' ? '屏幕观察' : (it.tag === 'stt' ? '你说' : '你说'));
+      } else if (it.role === 'pet') {
+        addMsg('ai', it.text, '她说');
+      } else {
+        addMsg('sys', it.text);
+      }
+    }
+    histShown = history.length;
+  }
+
+  function pollHistory() {
+    fetchHistory().then(function (j) {
+      if (j.ok && j.history && j.history.length > histShown) {
+        renderHistory(j.history);
+      }
+    });
+  }
+
+  // ---------- 发送 ----------
+  function sendText() {
+    var text = inputEl.value.trim();
+    if (!text || !connected) return;
+    inputEl.value = '';
+    showThinking();
+    // 走后端音频流注入（官方语音通道）：后端负责 abort→唤醒→listen start→TTS音频流→stop，
+    // 官方云 ASR 识别后 LLM 回答并播报。文本/回答由会话历史统一渲染。
+    fetch('/api/xiaozhi/say', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text })
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      if (!j.ok) { hideThinking(); addMsg('sys', '⚠ 注入失败：' + (j.detail || '未知错误')); }
+    }).catch(function () {
+      hideThinking(); addMsg('sys', '⚠ 网络错误，注入失败');
+    });
+    setTimeout(pollHistory, 400);
+  }
+
+  function sendImage() {
+    var file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    if (file.size > 4 * 1024 * 1024) { addMsg('sys', '⚠ 图片过大（>4MB），请压缩后重试'); return; }
+    var reader = new FileReader();
+    reader.onload = function () {
+      var base64 = String(reader.result).split(',')[1] || '';
+      if (!base64) { addMsg('sys', '⚠ 读取图片失败'); return; }
+      addMsgImage('user', base64, '（图片已发送，识别中…）');
+      showThinking();
+      fetch('/api/xiaozhi/vision', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_base64: base64, question: '请详细描述这张图片里的内容。' })
+      }).then(function (r) { return r.json(); }).then(function (j) {
+        if (!j.ok) {
+          hideThinking();
+          addMsg('sys', '⚠ 图片分析失败：' + (j.detail || '未知错误'));
+        }
+      }).catch(function () {
+        hideThinking();
+        addMsg('sys', '⚠ 网络错误，图片分析失败');
+      });
+      setTimeout(pollHistory, 600);
+    };
+    reader.readAsDataURL(file);
+    fileInput.value = '';
+  }
+
+  // ---------- WebSocket（连接状态 / 音频 / 说话状态；文本显示由历史驱动） ----------
   function connect() {
     setStatus('connecting');
     var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
@@ -127,7 +247,6 @@
     ws.onclose = function () {
       connected = false;
       setStatus('offline');
-      addMsg('sys', '连接断开，正在重连…');
       setTimeout(connect, 3000);
     };
     ws.onerror = function () { /* onclose 处理 */ };
@@ -149,25 +268,14 @@
         connected = true;
         setStatus('connected');
         sessionId = j.session_id || '';
-        addMsg('sys', '已连接小智 · 可以开始聊天啦');
+        if (histShown === 0) pollHistory();  // 首次连接拉历史
         break;
-      case 'stt':
-        if (j.text) addMsg('user', j.text, '你说');
+      case 'tts':
+        if (j.state === 'start') { hideThinking(); showSpeaking(); }
+        else if (j.state === 'stop') { hideSpeaking(); hideThinking(); pollHistory(); }
         break;
       case 'llm':
         showThinking();
-        if (j.emotion) addMsg('sys', '情绪：' + j.emotion + (j.text ? ' ' + j.text : ''));
-        break;
-      case 'tts':
-        if (j.state === 'start') {
-          hideThinking();
-          addMsg('sys', '正在说话…');
-        } else if (j.state === 'sentence_start') {
-          if (j.text) addMsg('ai', j.text, '她说');
-        } else if (j.state === 'stop') {
-          hideThinking();
-          addMsg('sys', '—');
-        }
         break;
       case 'error':
         setStatus('offline');
@@ -176,33 +284,6 @@
       default:
         break;
     }
-    msgsEl.scrollTop = msgsEl.scrollHeight;
-  }
-
-  function sendText() {
-    var text = inputEl.value.trim();
-    if (!text || !connected) return;
-    inputEl.value = '';
-    addMsg('user', text, '你说');
-    stopPlayback();
-    showThinking();
-    // 走后端音频流注入（官方语音通道）：后端负责 abort→唤醒→listen start→TTS音频流→stop，
-    // 官方云 ASR 识别后 LLM 回答并播报。比前端 detect 长文本稳定（官方 detect 仅用于唤醒词）。
-    fetch('/api/xiaozhi/say', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text })
-    }).then(function (r) {
-      return r.json();
-    }).then(function (j) {
-      if (!j.ok) {
-        endThinking();
-        addMsg('pet', '（注入失败：' + (j.detail || '未知错误') + '）', '澪');
-      }
-    }).catch(function () {
-      endThinking();
-      addMsg('pet', '（网络错误，注入失败）', '澪');
-    });
   }
 
   // ---------- 事件 ----------
@@ -210,10 +291,15 @@
   inputEl.addEventListener('keydown', function (e) {
     if (e.key === 'Enter') sendText();
   });
+  imgBtn.addEventListener('click', function () { fileInput.click(); });
+  fileInput.addEventListener('change', sendImage);
   $('closeBtn').addEventListener('click', function () { window.close(); });
 
   // 首次点击页面时恢复音频上下文（浏览器自动播放策略）
   document.addEventListener('pointerdown', function () { ensureAudioCtx(); }, { once: true });
+
+  // 历史轮询：3s 拉取一次，同步截图提问/观察/回答
+  setInterval(pollHistory, 3000);
 
   connect();
 })();
