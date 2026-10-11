@@ -1,3 +1,0 @@
-primary=True bounds=L0,T0,R1463,B914 size=1463x914
-primary=False bounds=L2560,T0,R3360,B480 size=800x480
-virtual_screen=L0,T0,R3360,B914

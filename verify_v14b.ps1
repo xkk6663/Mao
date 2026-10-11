@@ -1,5 +1,0 @@
-$c = [IO.File]::ReadAllText("C:\Users\xiao1\Mio\澪Agent应用\dist\assets\ChatPage-CiS35K0j.js", (New-Object Text.UTF8Encoding($false)))
-"composer-icon-button: " + ($c -match "composer-icon-button")
-"xz-status-grid: " + ($c -match "xz-status-grid")
-"Wifi图标: " + ($c -match "Wifi")
-"vision-info端点: " + ($c -match "vision-info")

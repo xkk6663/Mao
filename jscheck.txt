@@ -1,3 +1,0 @@
-﻿OK main.js
-OK preload.js
-OK pet-chat-preload.js

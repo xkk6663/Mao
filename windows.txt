@@ -1,1 +1,0 @@
-pid=28052 hwnd=0x3712c4 rect=L1404,T807,R1455,B858 visible=True title='固定并穿透' class='Chrome_WidgetWin_1'

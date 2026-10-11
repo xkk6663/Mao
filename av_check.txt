@@ -1,9 +1,0 @@
-﻿python.exe : Traceback (most recent call last):
-所在位置 行:1 字符: 1
-+ & 'C:\Users\xiao1\Mio\私人AI日记系统\backend\.venv\Scripts\python.exe' -c " ...
-+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : NotSpecified: (Traceback (most recent call last)::String) [], RemoteException
-    + FullyQualifiedErrorId : NativeCommandError
- 
-  File "<string>", line 1, in <module>
-ModuleNotFoundError: No module named 'av'

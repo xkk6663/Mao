@@ -1,5 +1,0 @@
-﻿decoderWorker.min.js: 19966B
-decoderWorker.min.wasm: 149534B
-encoderWorker.min.js: 385096B
-recorder.min.js: 8046B
-waveWorker.min.js: 6345B
