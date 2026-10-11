@@ -54,6 +54,7 @@ HELLO = {
 # ---- 全局单例上游状态 ----
 _upstream: websockets.asyncio.client.ClientConnection | None = None
 _upstream_lock = asyncio.Lock()
+_inject_lock = asyncio.Lock()  # 注入串行化：同一时刻只允许一个注入进行（连续快速发消息时官方只响应一次）
 _session_id: str | None = None
 _subscribers: dict[WebSocket, float] = {}  # ws -> last_active_ts
 _sub_queues: dict[WebSocket, asyncio.Queue] = {}  # ws -> 发送队列（保序）
@@ -380,8 +381,13 @@ async def _wait_stt_confirmed(timeout: float = 8.0) -> bool:
 
 
 async def _inject_say(text: str, wait_upstream: float = 6.0, source: str = "user") -> bool:
-    """把文本注入小智会话（模拟用户发言）→ 小智语音/表情/口型联动。
+    """注入入口：串行化锁（连续快速发消息时官方只响应一次，未加锁会互相 abort 导致吞消息）。"""
+    async with _inject_lock:
+        return await _inject_say_impl(text, wait_upstream, source)
 
+
+async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = "user") -> bool:
+    """把文本注入小智会话（模拟用户发言）→ 小智语音/表情/口型联动。
     source: "user"=用户真实输入（STT 识别结果正常写"你说"历史）
             "vision"/"observe"=内部注入（AI 分析文本，STT 结果不写"你说"历史，
             避免"把云端发回的信息当成用户发的"角色错乱）。
