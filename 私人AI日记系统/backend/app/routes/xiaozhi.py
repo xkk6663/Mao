@@ -26,6 +26,7 @@ from pathlib import Path
 import av
 import numpy as np
 import websockets
+from websockets.asyncio.client import connect as ws_async_connect
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
@@ -55,6 +56,7 @@ _upstream: websockets.asyncio.client.ClientConnection | None = None
 _upstream_lock = asyncio.Lock()
 _session_id: str | None = None
 _subscribers: dict[WebSocket, float] = {}  # ws -> last_active_ts
+_sub_queues: dict[WebSocket, asyncio.Queue] = {}  # ws -> 发送队列（保序）
 _active_ws: WebSocket | None = None
 _vision: dict | None = None  # 小智官方云下发的视觉能力 {"url": str, "token": str}
 
@@ -158,24 +160,61 @@ _last_tts_stop: float = 0.0  # 上游最后一次 TTS 播完时间戳（用于�
 _last_stt_ts: float = 0.0    # 上游最后一次 STT 识别时间戳（用于确认注入的语音是否被官方云识别）
 _last_stt_text: str = ""     # 上游最后一次 STT 识别文本
 
-# ---- 会话历史（长连接建立以来的所有来往记录，文字/图片）----
+# ---- 会话历史（长连接建立以来的所有来往记录，文字/图片；持久化到文件，重启不丢）----
 # 每条: {ts, role(user/pet/system), type(text/image), text, image_base64, tag(chat/observe/screenshot/stt/llm)}
 _CHAT_HISTORY_MAX = 500
+CHAT_HISTORY_FILE = Path(os.getenv("MIO_CHAT_HISTORY_FILE", r"C:\Users\xiao1\Mio\xiaozhi_chat_history.json"))
 _chat_history: list[dict] = []
+_history_save_task: asyncio.Task | None = None
+
+
+def _load_chat_history() -> None:
+    """启动时从文件加载历史（图片 base64 可能很大，加载时截断大字段以保内存）。"""
+    global _chat_history
+    try:
+        if CHAT_HISTORY_FILE.exists():
+            with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                _chat_history = [it for it in data if isinstance(it, dict)][-_CHAT_HISTORY_MAX:]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("加载会话历史失败: %s", exc)
+        _chat_history = []
+
+
+async def _save_chat_history() -> None:
+    """防抖保存历史到文件（每批最多 2s 一次）。"""
+    global _history_save_task
+    try:
+        while True:
+            await asyncio.sleep(2)
+            try:
+                with open(CHAT_HISTORY_FILE, "w", encoding="utf-8") as f:
+                    json.dump(_chat_history, f, ensure_ascii=False)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("保存会话历史失败: %s", exc)
+    except asyncio.CancelledError:
+        pass
 
 
 def _chat_append(role: str, type_: str, text: str = "", image_base64: str | None = None, tag: str = "") -> None:
-    """写入会话历史（单线程事件循环内 append 原子，无锁）。"""
+    """写入会话历史（单线程事件循环内 append 原子，无锁；2s 防抖落盘）。"""
+    global _history_save_task
     _chat_history.append({
         "ts": round(time.time(), 3),
         "role": role,
         "type": type_,
-        "text": str(text)[:2000],
-        "image_base64": image_base64,
+        "text": str(text)[:2000],        "image_base64": image_base64,
         "tag": tag,
     })
     if len(_chat_history) > _CHAT_HISTORY_MAX:
         del _chat_history[: len(_chat_history) - _CHAT_HISTORY_MAX]
+    if _history_save_task is None or _history_save_task.done():
+        _history_save_task = asyncio.create_task(_save_chat_history())
+
+
+# 模块导入时加载历史文件（同步文件读取，无需事件循环）
+_load_chat_history()
 
 
 def _sapi_tts_wav(text: str) -> bytes:
@@ -610,12 +649,54 @@ async def _pick_target() -> WebSocket | None:
 
 
 async def _broadcast(text: str) -> None:
-    """向所有订阅者广播文本消息。"""
+    """向所有订阅者广播文本消息（每订阅者队列，顺序发送，不阻塞上游泵）。"""
     for ws in list(_subscribers.keys()):
+        q = _sub_queues.get(ws)
+        if q is None:
+            continue
         try:
-            await ws.send_text(text)
+            q.put_nowait(("text", text))
+        except asyncio.QueueFull:
+            try:
+                q.get_nowait()
+                q.put_nowait(("text", text))
+            except Exception:  # noqa: BLE001
+                pass
+
+
+async def _broadcast_bytes(data: bytes) -> None:
+    """向所有订阅者广播音频帧（队列顺序发送；队列满时丢最旧帧保实时，不阻塞）。"""
+    for ws in list(_subscribers.keys()):
+        q = _sub_queues.get(ws)
+        if q is None:
+            continue
+        try:
+            q.put_nowait(("bytes", data))
+        except asyncio.QueueFull:
+            try:
+                q.get_nowait()          # 丢最旧帧，保证新帧实时到达
+                q.put_nowait(("bytes", data))
+            except Exception:  # noqa: BLE001
+                pass
+
+
+async def _sub_writer(ws: WebSocket) -> None:
+    """订阅者发送循环：按入队顺序逐条发送（文本/音频帧），防乱序防阻塞。"""
+    q = _sub_queues.get(ws)
+    if q is None:
+        return
+    while True:
+        try:
+            kind, data = await q.get()
+            if kind == "text":
+                await ws.send_text(data)
+            else:
+                await ws.send_bytes(data)
+        except asyncio.CancelledError:
+            return
         except Exception:  # noqa: BLE001
             _subscribers.pop(ws, None)
+            return
 
 
 async def _reconnect_loop(initial_delay: float = 3.0) -> None:
@@ -638,7 +719,7 @@ async def _heartbeat_loop(conn) -> None:
     while True:
         await asyncio.sleep(30)
         try:
-            await conn.send(json.dumps({"type": "ping"}))
+            await conn.ping()
         except Exception:  # noqa: BLE001
             return
 
@@ -652,14 +733,30 @@ async def _pump_upstream(conn) -> None:
     try:
         while True:
             msg = await conn.recv()
-            target = await _pick_target()
-            if target is None:
+            if not _subscribers:
+                # 无订阅者时只解析 MCP/历史，不转发
+                try:
+                    j = json.loads(msg)
+                    if j.get("type") == "mcp":
+                        _capture_vision_from_mcp(j.get("payload"))
+                    if j.get("type") == "stt":
+                        _last_stt_ts = time.time()
+                        _last_stt_text = str(j.get("text") or "")
+                        _chat_append("user", "text", _last_stt_text, tag="stt")
+                    if j.get("type") == "llm":
+                        _llm_text = str(j.get("text") or "")
+                        if _llm_text:
+                            _chat_append("pet", "text", _llm_text, tag="llm")
+                    if j.get("type") == "tts" and j.get("state") == "stop":
+                        _last_tts_stop = time.time()
+                except Exception:  # noqa: BLE001
+                    pass
                 continue
             try:
                 if isinstance(msg, bytes):
                     pcm = decoder.decode(msg)
                     if pcm is not None:
-                        await target.send_bytes(pcm)
+                        await _broadcast_bytes(pcm)   # 广播给所有订阅者（桌宠稳定播放，不因活跃切换丢帧）
                         _pump_audio_count += 1
                         _pump_audio_bytes += len(pcm)
                         if _pump_audio_count % 10 == 0:
@@ -684,7 +781,7 @@ async def _pump_upstream(conn) -> None:
                             logger.info("上游消息 type=%s", j.get("type"))
                     except Exception:  # noqa: BLE001
                         pass
-                    await target.send_text(msg)
+                    await _broadcast(msg)   # 文本广播（所有订阅者收同一份消息）
             except Exception:  # noqa: BLE001
                 _subscribers.pop(target, None)
     except Exception as exc:  # noqa: BLE001
@@ -716,7 +813,15 @@ async def _ensure_upstream() -> tuple[object | None, str | None]:
         "Authorization": "Bearer test-token",
     }
     try:
-        conn = await websockets.connect(XIAOZHI_UPSTREAM, additional_headers=headers, max_size=None, open_timeout=10)
+        # 用新版 websockets asyncio 客户端（legacy 客户端回 pong 时有 drain assert 竞态 bug，
+        # 会导致官方云连接 1005 断连；新版已修复）
+        conn = await ws_async_connect(
+            XIAOZHI_UPSTREAM,
+            additional_headers=headers,
+            max_size=None,
+            open_timeout=10,
+            ping_interval=30,   # 主动保活心跳（官方云空闲断连）
+        )
         # 先完成 hello 会话握手，确认官方云接受后才开放全局连接，
         # 避免 hello 被拒(如 1005)时注入接口出现“假成功”
         await conn.send(json.dumps(HELLO, ensure_ascii=False))
@@ -769,6 +874,9 @@ async def _relay_browser_message(ws: WebSocket, text: str) -> None:
 async def xiaozhi_proxy(ws: WebSocket) -> None:
     await ws.accept()
     _subscribers[ws] = time.time()
+    q: asyncio.Queue = asyncio.Queue(maxsize=512)
+    _sub_queues[ws] = q
+    writer_task = asyncio.create_task(_sub_writer(ws))
     try:
         async with _upstream_lock:
             conn, err = await _ensure_upstream()
@@ -802,6 +910,8 @@ async def xiaozhi_proxy(ws: WebSocket) -> None:
         logger.error("小智代理异常: %s", exc)
     finally:
         _subscribers.pop(ws, None)
+        _sub_queues.pop(ws, None)
+        writer_task.cancel()
         try:
             await ws.close(code=1000, reason="bye")
         except Exception:  # noqa: BLE001

@@ -257,9 +257,9 @@
   // ---- 图片对话（与截图提问同一链路：vision 分析 → 音频流注入 → 语音回答）----
   const imgBtn = document.getElementById('imgBtn')
   const fileInput = document.getElementById('fileInput')
-  function sendImage() {
-    const file = fileInput.files && fileInput.files[0]
+  function sendImageFile(file) {
     if (!file) return
+    if (!/^image\//.test(file.type)) { bubble({ type: 'text', text: '⚠ 仅支持图片文件' }); return }
     if (file.size > 4 * 1024 * 1024) { bubble({ type: 'text', text: '⚠ 图片过大（>4MB）' }); return }
     const reader = new FileReader()
     reader.onload = function () {
@@ -278,10 +278,28 @@
       })
     }
     reader.readAsDataURL(file)
+  }
+  function sendImage() {
+    const file = fileInput.files && fileInput.files[0]
+    if (!file) return
+    sendImageFile(file)
     fileInput.value = ''
   }
   imgBtn.addEventListener('click', function () { fileInput.click() })
   fileInput.addEventListener('change', sendImage)
+  // 粘贴图片上传（Ctrl+V）
+  document.addEventListener('paste', function (e) {
+    const items = (e.clipboardData || window.clipboardData)
+    if (!items) return
+    for (let i = 0; i < items.items.length; i++) {
+      const it = items.items[i]
+      if (it.type && it.type.indexOf('image/') === 0) {
+        const f = it.getAsFile()
+        if (f) { sendImageFile(f); e.preventDefault() }
+        return
+      }
+    }
+  })
 
   function initRecognition() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition

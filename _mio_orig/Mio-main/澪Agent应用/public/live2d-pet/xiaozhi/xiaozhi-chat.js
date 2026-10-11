@@ -207,6 +207,14 @@
   function sendImage() {
     var file = fileInput.files && fileInput.files[0];
     if (!file) return;
+    sendImageFile(file);
+    fileInput.value = '';
+  }
+
+  // 支持粘贴图片（Ctrl+V → 剪贴板图片 → 直接上传识别）
+  function sendImageFile(file) {
+    if (!file) return;
+    if (!/^image\//.test(file.type)) { addMsg('sys', '⚠ 仅支持图片文件'); return; }
     if (file.size > 4 * 1024 * 1024) { addMsg('sys', '⚠ 图片过大（>4MB），请压缩后重试'); return; }
     var reader = new FileReader();
     reader.onload = function () {
@@ -230,7 +238,6 @@
       setTimeout(pollHistory, 600);
     };
     reader.readAsDataURL(file);
-    fileInput.value = '';
   }
 
   // ---------- WebSocket（连接状态 / 音频 / 说话状态；文本显示由历史驱动） ----------
@@ -294,6 +301,20 @@
   imgBtn.addEventListener('click', function () { fileInput.click(); });
   fileInput.addEventListener('change', sendImage);
   $('closeBtn').addEventListener('click', function () { window.close(); });
+
+  // 粘贴图片上传（Ctrl+V / 右键粘贴）
+  document.addEventListener('paste', function (e) {
+    var items = (e.clipboardData || window.clipboardData);
+    if (!items) return;
+    for (var i = 0; i < items.items.length; i++) {
+      var it = items.items[i];
+      if (it.type && it.type.indexOf('image/') === 0) {
+        var f = it.getAsFile();
+        if (f) { sendImageFile(f); e.preventDefault(); }
+        return;
+      }
+    }
+  });
 
   // 首次点击页面时恢复音频上下文（浏览器自动播放策略）
   document.addEventListener('pointerdown', function () { ensureAudioCtx(); }, { once: true });
