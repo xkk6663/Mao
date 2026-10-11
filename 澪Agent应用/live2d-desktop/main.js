@@ -505,8 +505,8 @@ function hideChatWindow() {
 
 function createChatWindow(anchor) {
   chatWindow = new BrowserWindow({
-    width: 400,
-    height: 66,
+    width: 460,
+    height: 640,
     show: false,
     frame: false,
     transparent: true,
@@ -528,7 +528,7 @@ function createChatWindow(anchor) {
   })
   reportWindowAction('pet-chat-input', chatWindow, 'created')
   chatWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-  chatWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/xiaozhi/pet-chat-xiaozhi.html?v=8`)
+  chatWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/xiaozhi/xiaozhi-chat.html?v=9`)
   chatWindow.once('ready-to-show', () => {
     positionChatWindow(anchor)
     chatWindow.show()

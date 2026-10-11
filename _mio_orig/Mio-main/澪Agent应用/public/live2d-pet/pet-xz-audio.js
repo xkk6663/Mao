@@ -94,7 +94,8 @@
   var sessionId = ''
 
   function connect() {
-    var url = 'ws://' + location.host + '/api/xiaozhi/ws'
+    // role=main：桌宠本体是唯一音频播放者（后端只把音频帧发给 main，避免多窗口声音叠加）
+    var url = 'ws://' + location.host + '/api/xiaozhi/ws?role=main'
     var wsTry
     try { wsTry = new WebSocket(url) } catch (e) { scheduleReconnect(); return }
     ws = wsTry

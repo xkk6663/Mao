@@ -244,7 +244,8 @@
   function connect() {
     setStatus('connecting');
     var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-    var url = proto + location.host + '/api/xiaozhi/ws';
+    // role=chat：对话窗口只收文本（音频由桌宠本体 role=main 播放，避免声音叠加）
+    var url = proto + location.host + '/api/xiaozhi/ws?role=chat';
     try { ws = new WebSocket(url); } catch (e) { setStatus('offline'); return; }
 
     ws.onopen = function () {

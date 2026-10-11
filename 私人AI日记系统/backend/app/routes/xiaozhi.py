@@ -57,6 +57,7 @@ _upstream_lock = asyncio.Lock()
 _session_id: str | None = None
 _subscribers: dict[WebSocket, float] = {}  # ws -> last_active_ts
 _sub_queues: dict[WebSocket, asyncio.Queue] = {}  # ws -> 发送队列（保序）
+_sub_roles: dict[WebSocket, str] = {}  # ws -> 'main'(桌宠本体，唯一音频播放者) / 'chat'(对话窗口，只收文本)
 _active_ws: WebSocket | None = None
 _vision: dict | None = None  # 小智官方云下发的视觉能力 {"url": str, "token": str}
 
@@ -666,8 +667,10 @@ async def _broadcast(text: str) -> None:
 
 
 async def _broadcast_bytes(data: bytes) -> None:
-    """向所有订阅者广播音频帧（队列顺序发送；队列满时丢最旧帧保实时，不阻塞）。"""
-    for ws in list(_subscribers.keys()):
+    """音频帧只发给 'main'（桌宠本体）订阅者——多窗口并存时只有一个播放者，杜绝声音叠加。"""
+    mains = [ws for ws, role in _sub_roles.items() if role == "main" and ws in _subscribers]
+    targets = mains or list(_subscribers.keys())   # 无 main 时回退：发给全部（避免音频丢失）
+    for ws in targets:
         q = _sub_queues.get(ws)
         if q is None:
             continue
@@ -875,6 +878,14 @@ async def _relay_browser_message(ws: WebSocket, text: str) -> None:
 async def xiaozhi_proxy(ws: WebSocket) -> None:
     await ws.accept()
     _subscribers[ws] = time.time()
+    # role 参数：?role=main（桌宠本体，唯一音频播放者）/ ?role=chat（对话窗口）
+    role = "chat"
+    try:
+        qp = ws.query_params
+        role = "main" if (qp.get("role") == "main") else "chat"
+    except Exception:  # noqa: BLE001
+        pass
+    _sub_roles[ws] = role
     q: asyncio.Queue = asyncio.Queue(maxsize=512)
     _sub_queues[ws] = q
     writer_task = asyncio.create_task(_sub_writer(ws))
@@ -912,6 +923,7 @@ async def xiaozhi_proxy(ws: WebSocket) -> None:
     finally:
         _subscribers.pop(ws, None)
         _sub_queues.pop(ws, None)
+        _sub_roles.pop(ws, None)
         writer_task.cancel()
         try:
             await ws.close(code=1000, reason="bye")

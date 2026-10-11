@@ -172,7 +172,8 @@
   function setStatus(state) { dot.className = 'dot ' + state }
   function connect() {
     setStatus('connecting')
-    const url = 'ws://' + location.host + '/api/xiaozhi/ws'
+    // role=chat：对话窗口不接收音频帧（音频只发给桌宠本体 role=main，避免声音叠加）
+    const url = 'ws://' + location.host + '/api/xiaozhi/ws?role=chat'
     let wsTry
     try { wsTry = new WebSocket(url) } catch (e) { setStatus('offline'); scheduleReconnect(); return }
     ws = wsTry
