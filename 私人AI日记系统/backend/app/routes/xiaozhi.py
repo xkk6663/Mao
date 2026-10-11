@@ -78,7 +78,7 @@ _observe_cfg: dict = {
     "max_seconds": 900,
     "quiet_start": "23:00",  # 夜间免打扰
     "quiet_end": "08:00",
-    "prompt": "用调侃吐槽的语气，简短评价我屏幕上正在做的事。",
+    "prompt": "用调侃吐槽的语气，用60字以内的简洁口语评价我屏幕上正在做的事。",
 }
 _observe_next_at: float = 0.0
 _observe_task: asyncio.Task | None = None
@@ -126,7 +126,7 @@ async def _observe_loop() -> None:
                         text = await asyncio.to_thread(
                             _vision_explain_sync,
                             img,
-                            str(_observe_cfg.get("prompt") or "用调侃吐槽的语气，简短评价我屏幕上正在做的事。"),
+                            str(_observe_cfg.get("prompt") or "用调侃吐槽的语气，用60字以内的简洁口语评价我屏幕上正在做的事。"),
                         )
                         # 观察截图写入会话历史（同步到聊天界面）
                         _chat_append("user", "image", text="（屏幕观察）", image_base64=img, tag="observe")
@@ -164,7 +164,25 @@ _last_tts_stop: float = 0.0  # 上游最后一次 TTS 播完时间戳（用于�
 _last_stt_ts: float = 0.0    # 上游最后一次 STT 识别时间戳（用于确认注入的语音是否被官方云识别）
 _last_stt_text: str = ""     # 上游最后一次 STT 识别文本
 _llm_text: str = ""          # 上游最后一次 LLM 回答文本（回声过滤用）
+_last_injected_text: str = ""  # 最近一次内部注入（vision/observe）的文本（STT 匹配即丢弃，不写"你说"历史）
 _inject_stt_suppress_until: float = 0.0  # 内部注入（vision/observe）后 STT 写入"你说"历史的抑制截止时间
+
+
+def _is_injected_stt(stt_text: str) -> bool:
+    """注入文本过滤：内部注入（vision/observe）的语音被官方 STT 识别回传时，
+    与最近注入文本相同/互相包含 → 判定为注入回声，不写入"你说"历史。
+    比时间窗口可靠（官方 STT 延迟可能超过窗口）。"""
+    global _last_injected_text
+    if not stt_text or not _last_injected_text:
+        return False
+    a, b = stt_text.strip(), _last_injected_text.strip()
+    if not a or not b:
+        return False
+    if len(b) >= 6 and (a == b or a in b or b in a):
+        return True
+    if len(b) >= 10 and (a.startswith(b[:10]) or b.startswith(a[:10])):
+        return True
+    return False
 
 
 def _is_echo_stt(stt_text: str) -> bool:
@@ -377,6 +395,10 @@ async def _inject_say(text: str, wait_upstream: float = 6.0, source: str = "user
     30 秒内已唤醒过（会话仍活跃）则跳过唤醒直接走音频流。
     """
     global _last_wake_ts, _inject_stt_suppress_until
+    # 官方 ASR 对长音频识别会截断（>150字几乎必然失败，只回唤醒问候）：
+    # 内部注入（vision/observe 分析文本）强制压到 70 字以内，保证官方完整识别 + 完整语音播放
+    if source != "user" and len(text) > 70:
+        text = text[:68] + "…"
     conn = _upstream
     if conn is None and wait_upstream > 0:
         deadline = time.time() + wait_upstream
@@ -425,9 +447,10 @@ async def _inject_say(text: str, wait_upstream: float = 6.0, source: str = "user
             await _wait_stt_confirmed(8.0)
         logger.info("注入小智语音成功(音频流 %d 帧): %s", len(frames), str(text)[:40])
         # 内部注入（vision/observe）：接下来官方 STT 识别到的文本是注入内容本身，
-        # 不应写入"你说"历史（否则 AI 分析文本被当成用户发言）。抑制窗口 15s。
+        # 不应写入"你说"历史（否则 AI 分析文本被当成用户发言）。记录注入文本 + 抑制窗口 60s 兜底。
         if source != "user":
-            _inject_stt_suppress_until = time.time() + 15.0
+            _last_injected_text = text
+            _inject_stt_suppress_until = time.time() + 60.0
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("注入小智对话失败: %s", exc)
@@ -584,6 +607,10 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
     if _vision is None:
         raise HTTPException(status_code=409, detail="小智视觉能力不可用：请先打开小智对话建立连接")
     question = str(payload.question or "").strip() or "请详细描述这张图片里的内容。"
+    # 官方 ASR 对长音频识别会截断（>150字几乎必然失败）：
+    # 强制要求官方视觉用 60 字以内简洁口语回答，保证注入音频能完整识别并播放
+    if "字以内" not in question:
+        question = f"{question}（请用60字以内的简洁口语回答）"
     image_base64 = str(payload.image_base64 or "").strip()
     if not image_base64:
         raise HTTPException(status_code=400, detail="图片不能为空")
@@ -780,6 +807,8 @@ async def _pump_upstream(conn) -> None:
                         _last_stt_text = str(j.get("text") or "")
                         if time.time() < _inject_stt_suppress_until:
                             logger.info("抑制内部注入的 STT 写入历史: %s", str(_last_stt_text)[:30])
+                        elif _is_injected_stt(_last_stt_text):
+                            logger.info("丢弃注入回声 STT（与注入文本相同）: %s", str(_last_stt_text)[:30])
                         elif _is_echo_stt(_last_stt_text):
                             logger.info("丢弃回声 STT（与 LLM 回答相同）: %s", str(_last_stt_text)[:30])
                         else:
@@ -815,6 +844,8 @@ async def _pump_upstream(conn) -> None:
                             # 内部注入（vision/observe）识别结果不写"你说"历史，避免 AI 分析文本被当成用户发言
                             if time.time() < _inject_stt_suppress_until:
                                 logger.info("抑制内部注入的 STT 写入历史: %s", str(_last_stt_text)[:30])
+                            elif _is_injected_stt(_last_stt_text):
+                                logger.info("丢弃注入回声 STT（与注入文本相同）: %s", str(_last_stt_text)[:30])
                             elif _is_echo_stt(_last_stt_text):
                                 logger.info("丢弃回声 STT（与 LLM 回答相同）: %s", str(_last_stt_text)[:30])
                             else:
@@ -895,7 +926,12 @@ async def _ensure_upstream() -> tuple[object | None, str | None]:
 
 
 async def _relay_browser_message(ws: WebSocket, text: str) -> None:
-    """浏览器文本消息转发上游，自动补齐 session_id，并标记该连接为活跃。"""
+    """浏览器文本消息转发上游，自动补齐 session_id，并标记该连接为活跃。
+
+    【文字对话可靠链路】官方 listen/detect 文本通道只响应唤醒词，普通文本会被忽略
+    （实测无论长短均无响应）。因此拦截 listen/detect + 非唤醒文本 → 转本地音频流注入
+    （SAPI TTS → 官方 ASR），官方能完整识别短文本并语音回答；唤醒词仍透传官方原路径。
+    """
     global _active_ws
     _subscribers[ws] = time.time()
     _active_ws = ws
@@ -911,6 +947,17 @@ async def _relay_browser_message(ws: WebSocket, text: str) -> None:
         if isinstance(j, dict) and not j.get("session_id") and _session_id:
             j["session_id"] = _session_id
             text = json.dumps(j, ensure_ascii=False)
+        if isinstance(j, dict) and j.get("type") == "listen" and j.get("state") == "detect":
+            t = str(j.get("text") or "").strip()
+            if t and t not in ("你好", "嗨", "hello", "您好", "在吗"):
+                # 用户问题也压短（官方 ASR 对长音频会截断），超过 100 字截断
+                if len(t) > 100:
+                    t = t[:97] + "…"
+                _chat_append("user", "text", t, tag="chat")
+                ok = await _inject_say(t)
+                if ok:
+                    return
+                # 注入失败则回退原文案透传上游
         await conn.send(text)
     except Exception as exc:  # noqa: BLE001
         logger.warning("转发上游失败: %s", exc)
