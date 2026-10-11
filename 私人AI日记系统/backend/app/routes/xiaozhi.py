@@ -292,7 +292,8 @@ async def _speak_local(text: str, source: str = "vision") -> bool:
         arr = arr.astype(np.int16)
         if sr != 48000:
             resampler = av.AudioResampler(format="s16", layout="mono", rate=48000)
-            f0 = av.AudioFrame.from_ndarray(arr, format="s16", layout="mono")
+            # PyAV mono 需 planar 布局 (1, samples)；(samples,1) 会被误判为 planar 而报错
+            f0 = av.AudioFrame.from_ndarray(arr.reshape(1, -1), format="s16", layout="mono")
             f0.sample_rate = sr
             res = resampler.resample(f0)
             pcm16 = b"".join(bytes(f.planes[0]) for f in res)
@@ -322,7 +323,7 @@ def _wav_to_opus_frames(wav_bytes: bytes, samples_per_frame: int = 960) -> list[
     arr = arr.astype(np.int16)
     if sr != 16000:
         resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
-        f0 = av.AudioFrame.from_ndarray(arr, format="s16", layout="mono")
+        f0 = av.AudioFrame.from_ndarray(arr.reshape(1, -1), format="s16", layout="mono")
         f0.sample_rate = sr
         res = resampler.resample(f0)
         pcm16 = b"".join(bytes(f.planes[0]) for f in res)
