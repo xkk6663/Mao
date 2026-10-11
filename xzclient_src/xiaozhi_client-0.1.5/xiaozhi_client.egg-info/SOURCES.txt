@@ -1,0 +1,13 @@
+LICENSE
+README.md
+pyproject.toml
+xiaozhi_client/__init__.py
+xiaozhi_client/client.py
+xiaozhi_client/types.py
+xiaozhi_client.egg-info/PKG-INFO
+xiaozhi_client.egg-info/SOURCES.txt
+xiaozhi_client.egg-info/dependency_links.txt
+xiaozhi_client.egg-info/requires.txt
+xiaozhi_client.egg-info/top_level.txt
+xiaozhi_client/utils/__init__.py
+xiaozhi_client/utils/wav.py
