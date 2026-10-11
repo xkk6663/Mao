@@ -211,10 +211,23 @@
   })
 
   async function request(path, options = {}) {
-    const response = await fetch(path, {
-      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-      ...options,
-    })
+    // 全局超时：官方云断连时 say/vision 可能长时间阻塞，避免前端无限挂起（"卡住"）
+    const timeoutMs = options.timeoutMs || 12000
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    let response
+    try {
+      response = await fetch(path, {
+        headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+        signal: controller.signal,
+        ...options,
+      })
+    } catch (err) {
+      clearTimeout(timer)
+      if (err.name === 'AbortError') throw new Error('请求超时（' + Math.round(timeoutMs / 1000) + 's），可能小智官方云暂未响应')
+      throw err
+    }
+    clearTimeout(timer)
     if (!response.ok) {
       let message = `HTTP ${response.status}`
       try {
