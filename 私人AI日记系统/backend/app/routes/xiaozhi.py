@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import logging
 import os
@@ -19,9 +20,11 @@ import struct
 import time
 import uuid
 import urllib.request
+import wave
 from pathlib import Path
 
 import av
+import numpy as np
 import websockets
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -150,21 +153,143 @@ def _full_screen_jpeg(capture_cls) -> str | None:
 
 _last_wake_ts: float = 0.0  # 上次唤醒时间戳（30s 内会话可能仍活跃，可免唤醒直接注入）
 _last_tts_stop: float = 0.0  # 上游最后一次 TTS 播完时间戳（用于判断唤醒回复是否已完整播完）
+_last_stt_ts: float = 0.0    # 上游最后一次 STT 识别时间戳（用于确认注入的语音是否被官方云识别）
+_last_stt_text: str = ""     # 上游最后一次 STT 识别文本
+
+
+def _sapi_tts_wav(text: str) -> bytes:
+    """Windows SAPI 本地 TTS → 16kHz 16bit mono WAV（零依赖，无需下载）"""
+    import comtypes.client
+    import comtypes.gen.SpeechLib as SL
+    sp = comtypes.client.CreateObject("SAPI.SpVoice")
+    fs = comtypes.client.CreateObject("SAPI.SpFileStream")
+    fs.Format.Type = SL.SpeechAudioFormatType.SAFT16kHz16BitMono
+    fs.Open(r"C:\Users\xiao1\Mio\tts_tmp.wav", 3, False)
+    sp.AudioOutputStream = fs
+    sp.Speak(text)
+    fs.Close()
+    with open(r"C:\Users\xiao1\Mio\tts_tmp.wav", "rb") as f:
+        return f.read()
+
+
+def _wav_to_opus_frames(wav_bytes: bytes, samples_per_frame: int = 960) -> list[bytes]:
+    """PyAV: WAV → 60ms opus 帧（16kHz mono，官方云 ASR 输入格式）"""
+    with wave.open(io.BytesIO(wav_bytes), "rb") as w:
+        sr = w.getframerate()
+        ch = w.getnchannels()
+        pcm = w.readframes(w.getnframes())
+    arr = np.frombuffer(pcm, dtype=np.int16).reshape(-1, ch)
+    if ch == 2:
+        arr = arr.mean(axis=1, dtype=np.int16)
+    arr = arr.astype(np.int16)
+    if sr != 16000:
+        resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
+        f0 = av.AudioFrame.from_ndarray(arr, format="s16", layout="mono")
+        f0.sample_rate = sr
+        res = resampler.resample(f0)
+        pcm16 = b"".join(bytes(f.planes[0]) for f in res)
+    else:
+        pcm16 = arr.tobytes()
+    ctx = av.CodecContext.create("opus", "w")
+    ctx.sample_rate = 16000
+    ctx.bit_rate = 32000
+    ctx.format = "fltp"
+    ctx.layout = "mono"
+    ctx.open()
+    frames = []
+    pcm_f = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32768.0
+    for i in range(0, len(pcm_f), samples_per_frame):
+        chunk = pcm_f[i:i + samples_per_frame]
+        if len(chunk) < samples_per_frame:
+            chunk = np.pad(chunk, (0, samples_per_frame - len(chunk)))
+        f = av.AudioFrame(format="fltp", layout="mono", samples=samples_per_frame)
+        f.sample_rate = 16000
+        f.pts = i // samples_per_frame
+        f.planes[0].update(chunk.tobytes())
+        for pkt in ctx.encode(f):
+            frames.append(bytes(pkt))
+    for pkt in ctx.encode(None):
+        frames.append(bytes(pkt))
+    return frames
+
+
+async def _send_audio_stream(conn, text: str) -> list[bytes] | None:
+    """合成并发送音频流：listen start → opus 帧(+静音尾巴) → listen stop。返回帧列表（None=失败）。
+
+    【静音尾巴】官方云 ASR 靠 VAD 检测"语音结束"（静音段）才触发识别；若发完语音立即
+    stop，VAD 未检测到结束，音频会被官方云挂起/缓存到下次 listen 才处理（实测：唤醒后
+    首次注入无响应，第二次 say 才识别出第一次的文本）。故语音帧后追加 ~1s 静音，
+    让 VAD 判定语音结束并立即触发 ASR。
+    """
+    try:
+        voice = await asyncio.to_thread(_wav_to_opus_frames, _sapi_tts_wav(text))
+        # 模拟真实麦克风语音段：前导静音(0.5s) → 语音 → 尾部静音(1s)，
+        # 让官方云 VAD 检测到完整"语音开始→结束"边界才触发 ASR
+        head = await asyncio.to_thread(_silence_opus_frames, 0.5)
+        tail = await asyncio.to_thread(_silence_opus_frames, 1.0)
+        opus_frames = head + voice + tail
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("TTS/编码失败: %s", exc)
+        return None
+    try:
+        await conn.send(json.dumps({"type": "listen", "state": "start", "mode": "auto", "session_id": _session_id}, ensure_ascii=False))
+        await asyncio.sleep(0.3)
+        for f in opus_frames:
+            await conn.send(f)
+        await asyncio.sleep(0.3)
+        await conn.send(json.dumps({"type": "listen", "state": "stop", "session_id": _session_id}, ensure_ascii=False))
+        return opus_frames
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("音频流发送失败: %s", exc)
+        return None
+
+
+def _silence_opus_frames(seconds: float, samples_per_frame: int = 960) -> list[bytes]:
+    """生成 N 秒静音的 opus 帧（16kHz mono 60ms/帧）"""
+    ctx = av.CodecContext.create("opus", "w")
+    ctx.sample_rate = 16000
+    ctx.bit_rate = 32000
+    ctx.format = "fltp"
+    ctx.layout = "mono"
+    ctx.open()
+    n = int(seconds * 16000 / samples_per_frame)
+    frames = []
+    for i in range(n):
+        f = av.AudioFrame(format="fltp", layout="mono", samples=samples_per_frame)
+        f.sample_rate = 16000
+        f.pts = i
+        f.planes[0].update(b"\x00\x00\x00\x00" * samples_per_frame)
+        for pkt in ctx.encode(f):
+            frames.append(bytes(pkt))
+    for pkt in ctx.encode(None):
+        frames.append(bytes(pkt))
+    return frames
+
+
+async def _wait_stt_confirmed(timeout: float = 8.0) -> bool:
+    """等待官方云 STT 识别到非唤醒词文本（确认注入语音已被 ASR 处理）。"""
+    global _last_stt_ts, _last_stt_text
+    before_ts, before_text = _last_stt_ts, _last_stt_text
+    wait_until = time.time() + timeout
+    while time.time() < wait_until:
+        await asyncio.sleep(0.5)
+        if _last_stt_ts > before_ts and _last_stt_text not in ("你好", ""):
+            return True
+    return False
 
 
 async def _inject_say(text: str, wait_upstream: float = 6.0) -> bool:
     """把文本注入小智会话（模拟用户发言）→ 小智语音/表情/口型联动。
 
-    官方云限制：空闲会话的 detect 长文本会被拒绝（"Detect is only for wake words"），
-    必须先发短文本唤醒词（detect）把会话激活，再注入长文本才能得到 STT/LLM/TTS。
-    【稳定性关键】不能在唤醒后立即 abort 打断唤醒回复——实验证明 abort 会搞乱官方云
-    会话状态，导致后续长文本无响应（用户听感=响一下→中断）。正确做法：等唤醒回复
-    完整播完（sleep 3s）再注入长文本，音频连续。
-    30 秒内已唤醒过（会话大概率仍活跃）则跳过唤醒，直接注入长文本（省一句废话）。
-    官方云 1005 断连期：等待自动重连成功后再注入（最长 wait_upstream 秒）。
-    返回是否成功注入（仅表示消息已发出，不代表官方云一定返回语音）。
+    【官方路径（音频流注入）】官方协议中 detect 只用于唤醒词，长文本会被拒绝/忽略
+    （用户实测"只有它在听没有后续"）。正确做法（官方设备行为）：
+        detect(唤醒词) → 唤醒回复播完 → listen start → 发送 TTS 合成的语音流(opus)
+        → listen stop → 官方云 ASR 识别文本 → LLM 回答 → TTS 声音
+    实测：SAPI TTS 音频被官方 ASR 识别，回答音频连续输出。唤醒后第一次注入可能被
+    官方云忽略（音频缓存延迟识别），故注入后等待 STT 确认，未确认则免唤醒重试一次。
+    30 秒内已唤醒过（会话仍活跃）则跳过唤醒直接走音频流。
     """
-    global _last_wake_ts, _last_tts_stop
+    global _last_wake_ts
     conn = _upstream
     if conn is None and wait_upstream > 0:
         deadline = time.time() + wait_upstream
@@ -180,7 +305,7 @@ async def _inject_say(text: str, wait_upstream: float = 6.0) -> bool:
         # 1. 打断任何进行中的会话
         await conn.send(json.dumps({"type": "abort", "reason": "user_interrupt", "session_id": _session_id}, ensure_ascii=False))
         await asyncio.sleep(0.3)
-        # 2. 若 30s 内已唤醒过则免唤醒；否则发短文本唤醒词并等其回复真实播完（监听 tts stop）
+        # 2. 若 30s 内已唤醒过则免唤醒；否则发短文本唤醒词并等其回复真实播完
         need_wake = (time.time() - _last_wake_ts) > 30
         if need_wake:
             await conn.send(json.dumps({
@@ -190,25 +315,27 @@ async def _inject_say(text: str, wait_upstream: float = 6.0) -> bool:
                 "source": "text",
                 "session_id": _session_id,
             }, ensure_ascii=False))
-            # 等唤醒回复 TTS 完整播完：轮询 _last_tts_stop 更新（最多 6s）
             wake_ts_before = _last_tts_stop
-            wait_until = time.time() + 6.0
+            wait_until = time.time() + 8.0
             while time.time() < wait_until:
                 await asyncio.sleep(0.3)
                 if _last_tts_stop > wake_ts_before:
                     break
-            await asyncio.sleep(0.5)  # 播完后再留半拍，确保服务器就绪
+            await asyncio.sleep(0.5)  # 唤醒回复播完后再留半拍（实测快时序首次注入成功率更高）
             _last_wake_ts = time.time()
-        # 3. 注入真正的问题（长文本）
-        msg = {
-            "type": "listen",
-            "state": "detect",
-            "text": text,
-            "source": "text",
-            "session_id": _session_id,
-        }
-        await conn.send(json.dumps(msg, ensure_ascii=False))
-        logger.info("注入小智语音成功: %s", str(text)[:40])
+        # 3. 音频流注入（先注入一次）
+        frames = await _send_audio_stream(conn, text)
+        if not frames:
+            return False
+        # 4. 等 STT 确认；未确认（官方云缓存/忽略）则免唤醒重试一次
+        if not await _wait_stt_confirmed(8.0):
+            logger.info("首次注入未被识别，免唤醒重试: %s", str(text)[:40])
+            await asyncio.sleep(1.5)
+            frames = await _send_audio_stream(conn, text)
+            if not frames:
+                return False
+            await _wait_stt_confirmed(8.0)
+        logger.info("注入小智语音成功(音频流 %d 帧): %s", len(frames), str(text)[:40])
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("注入小智对话失败: %s", exc)
@@ -501,6 +628,9 @@ async def _pump_upstream(conn) -> None:
                             _capture_vision_from_mcp(j.get("payload"))
                         if j.get("type") == "tts" and j.get("state") == "stop":
                             _last_tts_stop = time.time()
+                        if j.get("type") == "stt":
+                            _last_stt_ts = time.time()
+                            _last_stt_text = str(j.get("text") or "")
                         if j.get("type") in ("llm", "tts", "error", "listen", "abort"):
                             logger.info("上游消息 type=%s", j.get("type"))
                     except Exception:  # noqa: BLE001
