@@ -160,7 +160,8 @@ def _full_screen_jpeg(capture_cls) -> str | None:
         return None
 
 
-_last_wake_ts: float = 0.0  # 上次唤醒时间戳（30s 内会话可能仍活跃，可免唤醒直接注入）
+_last_wake_ts: float = 0.0  # 上次唤醒时间戳（保留兼容；会话级免唤醒见 _session_wake_done）
+_session_wake_done: bool = False  # 本次官方会话是否已唤醒过（长连接只唤醒一次，断线重连重置）
 _last_tts_stop: float = 0.0  # 上游最后一次 TTS 播完时间戳（用于判断唤醒回复是否已完整播完）
 _last_stt_ts: float = 0.0    # 上游最后一次 STT 识别时间戳（用于确认注入的语音是否被官方云识别）
 _last_stt_text: str = ""     # 上游最后一次 STT 识别文本
@@ -437,7 +438,7 @@ async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = 
     官方云忽略（音频缓存延迟识别），故注入后等待 STT 确认，未确认则免唤醒重试一次。
     30 秒内已唤醒过（会话仍活跃）则跳过唤醒直接走音频流。
     """
-    global _last_wake_ts, _inject_stt_suppress_until
+    global _last_wake_ts, _inject_stt_suppress_until, _session_wake_done
     # 官方 ASR 对长音频识别会截断（>150字几乎必然失败，只回唤醒问候）：
     # 内部注入（vision/observe 分析文本）强制压到 70 字以内，保证官方完整识别 + 完整语音播放
     if source != "user" and len(text) > 70:
@@ -457,9 +458,9 @@ async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = 
         # 1. 打断任何进行中的会话
         await conn.send(json.dumps({"type": "abort", "reason": "user_interrupt", "session_id": _session_id}, ensure_ascii=False))
         await asyncio.sleep(0.3)
-        # 2. 若 120s 内已唤醒过则免唤醒（官方云近期活跃时 listen 可直接识别，
-        #    避免每次对话都触发唤醒词问候"你来啦"）；否则发短文本唤醒词并快速进入注入
-        need_wake = (time.time() - _last_wake_ts) > 120
+        # 2. 长连接只唤醒一次：本会话已唤醒过（_session_wake_done）则免唤醒直接走音频流，
+        #    避免每次对话都触发唤醒词问候"你来啦"；仅官方断线重连（新会话）后才重新唤醒
+        need_wake = not _session_wake_done
         if need_wake:
             await conn.send(json.dumps({
                 "type": "listen",
@@ -476,6 +477,7 @@ async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = 
                     break
             await asyncio.sleep(0.3)
             _last_wake_ts = time.time()
+            _session_wake_done = True   # 本会话已唤醒，后续免唤醒直到断线重连
         # 3. 音频流注入（先注入一次）
         frames = await _send_audio_stream(conn, text)
         if not frames:
@@ -919,7 +921,7 @@ async def _pump_upstream(conn) -> None:
 
 async def _ensure_upstream() -> tuple[object | None, str | None]:
     """确保全局单例上游存在并已 hello；返回 (conn, error)。"""
-    global _upstream, _session_id
+    global _upstream, _session_id, _session_wake_done
     if _upstream is not None:
         return _upstream, None
     identity = _device_identity()
@@ -955,6 +957,7 @@ async def _ensure_upstream() -> tuple[object | None, str | None]:
             return None, f"官方云 hello 响应异常: {msg[:120]}"
         _session_id = j.get("session_id")
         _upstream = conn
+        _session_wake_done = False   # 新会话：首次注入需唤醒一次，之后长连接免唤醒
     except Exception as exc:  # noqa: BLE001
         logger.error("上游 hello 失败: %s", exc)
         try:
