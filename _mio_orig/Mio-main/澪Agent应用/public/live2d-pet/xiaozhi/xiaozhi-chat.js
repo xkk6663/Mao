@@ -301,7 +301,16 @@
   });
   imgBtn.addEventListener('click', function () { fileInput.click(); });
   fileInput.addEventListener('change', sendImage);
-  $('closeBtn').addEventListener('click', function () { window.close(); });
+  $('closeBtn').addEventListener('click', function () {
+    // iframe（打开 MIO 覆盖层）内：通知父页面关闭覆盖层；独立窗口：直接关闭
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: 'xz-close' }, '*');
+        return;
+      }
+    } catch (e) {}
+    window.close();
+  });
 
   // 粘贴图片上传（Ctrl+V / 右键粘贴）
   document.addEventListener('paste', function (e) {

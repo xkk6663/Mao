@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f5f7f9" />
+    <title>Mio</title>
+    <script type="module" crossorigin src="./assets/index-BBVquePX.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/createLucideIcon-CoqYpl-V.js">
+    <link rel="stylesheet" crossorigin href="./assets/index-CnRrRFJT.css">
+  </head>
+  <body>
+    <div id="app"></div>
+    <!-- 小智对话覆盖层：打开 MIO 直接看到与桌宠同链路的完整小智聊天（历史+发图+语音） -->
+    <div id="xz-overlay" style="position:fixed;inset:0;z-index:2147483647;background:#fff;display:none;">
+      <div style="position:absolute;top:10px;right:14px;z-index:2;">
+        <button id="xz-close" style="cursor:pointer;border:none;border-radius:8px;background:#4f6ef7;color:#fff;padding:6px 14px;font-size:13px;font-family:system-ui,sans-serif;">返回</button>
+      </div>
+      <iframe id="xz-frame" src="./live2d-pet/xiaozhi/xiaozhi-chat.html" style="position:absolute;inset:0;width:100%;height:100%;border:0;"></iframe>
+    </div>
+    <script>
+      (function () {
+        var overlay = document.getElementById('xz-overlay')
+        var closeBtn = document.getElementById('xz-close')
+        function show() { if (overlay) overlay.style.display = 'block' }
+        function hide() { if (overlay) overlay.style.display = 'none' }
+        if (closeBtn) closeBtn.addEventListener('click', hide)
+        window.addEventListener('message', function (ev) {
+          if (ev.data && ev.data.type === 'xz-close') hide()
+        })
+        // 打开 MIO 即显示小智对话；原版界面通过右上角"返回"查看
+        show()
+      })()
+    </script>
+  </body>
+</html>

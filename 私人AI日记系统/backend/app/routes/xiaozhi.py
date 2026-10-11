@@ -130,8 +130,11 @@ async def _observe_loop() -> None:
                         )
                         # 观察截图写入会话历史（同步到聊天界面）
                         _chat_append("user", "image", text="（屏幕观察）", image_base64=img, tag="observe")
-                        ok = await _inject_say(text)
+                        ok = await _inject_say(text, source="observe")
                         _observe_last_result = ("语音已注入" if ok else "官方云未连接，语音未出") + " · " + str(text)[:50]
+                        if ok:
+                            # 观察评价写入历史 → 聊天界面显示为"她说"（AI 在评价屏幕）
+                            _chat_append("pet", "text", text, tag="observe")
                 except Exception as exc:  # noqa: BLE001
                     _observe_last_result = "观察失败：" + str(exc)[:60]
                     logger.warning("随机观察触发失败: %s", exc)
@@ -160,6 +163,7 @@ _last_wake_ts: float = 0.0  # 上次唤醒时间戳（30s 内会话可能仍活�
 _last_tts_stop: float = 0.0  # 上游最后一次 TTS 播完时间戳（用于判断唤醒回复是否已完整播完）
 _last_stt_ts: float = 0.0    # 上游最后一次 STT 识别时间戳（用于确认注入的语音是否被官方云识别）
 _last_stt_text: str = ""     # 上游最后一次 STT 识别文本
+_inject_stt_suppress_until: float = 0.0  # 内部注入（vision/observe）后 STT 写入"你说"历史的抑制截止时间
 
 # ---- 会话历史（长连接建立以来的所有来往记录，文字/图片；持久化到文件，重启不丢）----
 # 每条: {ts, role(user/pet/system), type(text/image), text, image_base64, tag(chat/observe/screenshot/stt/llm)}
@@ -339,8 +343,12 @@ async def _wait_stt_confirmed(timeout: float = 8.0) -> bool:
     return False
 
 
-async def _inject_say(text: str, wait_upstream: float = 6.0) -> bool:
+async def _inject_say(text: str, wait_upstream: float = 6.0, source: str = "user") -> bool:
     """把文本注入小智会话（模拟用户发言）→ 小智语音/表情/口型联动。
+
+    source: "user"=用户真实输入（STT 识别结果正常写"你说"历史）
+            "vision"/"observe"=内部注入（AI 分析文本，STT 结果不写"你说"历史，
+            避免"把云端发回的信息当成用户发的"角色错乱）。
 
     【官方路径（音频流注入）】官方协议中 detect 只用于唤醒词，长文本会被拒绝/忽略
     （用户实测"只有它在听没有后续"）。正确做法（官方设备行为）：
@@ -350,7 +358,7 @@ async def _inject_say(text: str, wait_upstream: float = 6.0) -> bool:
     官方云忽略（音频缓存延迟识别），故注入后等待 STT 确认，未确认则免唤醒重试一次。
     30 秒内已唤醒过（会话仍活跃）则跳过唤醒直接走音频流。
     """
-    global _last_wake_ts
+    global _last_wake_ts, _inject_stt_suppress_until
     conn = _upstream
     if conn is None and wait_upstream > 0:
         deadline = time.time() + wait_upstream
@@ -398,6 +406,10 @@ async def _inject_say(text: str, wait_upstream: float = 6.0) -> bool:
                 return False
             await _wait_stt_confirmed(8.0)
         logger.info("注入小智语音成功(音频流 %d 帧): %s", len(frames), str(text)[:40])
+        # 内部注入（vision/observe）：接下来官方 STT 识别到的文本是注入内容本身，
+        # 不应写入"你说"历史（否则 AI 分析文本被当成用户发言）。抑制窗口 15s。
+        if source != "user":
+            _inject_stt_suppress_until = time.time() + 15.0
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("注入小智对话失败: %s", exc)
@@ -563,9 +575,11 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
         # 2. 官方视觉分析
         text = await asyncio.to_thread(_vision_explain_sync, image_base64, question)
         # 3. 分析文本注入（音频流 → 官方云语音回答）
-        ok = await _inject_say(text)
+        ok = await _inject_say(text, source="vision")
         if not ok:
             raise HTTPException(status_code=409, detail="图片分析完成但语音注入失败：小智连接不可用")
+        # 4. 分析文本写入历史 → 聊天界面显示为"她说"（AI 在描述图片，不是用户发言）
+        _chat_append("pet", "text", text, tag="vision")
         return {"ok": True, "text": text}
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -746,7 +760,10 @@ async def _pump_upstream(conn) -> None:
                     if j.get("type") == "stt":
                         _last_stt_ts = time.time()
                         _last_stt_text = str(j.get("text") or "")
-                        _chat_append("user", "text", _last_stt_text, tag="stt")
+                        if time.time() < _inject_stt_suppress_until:
+                            logger.info("抑制内部注入的 STT 写入历史: %s", str(_last_stt_text)[:30])
+                        else:
+                            _chat_append("user", "text", _last_stt_text, tag="stt")
                     if j.get("type") == "llm":
                         _llm_text = str(j.get("text") or "")
                         if _llm_text:
@@ -775,8 +792,11 @@ async def _pump_upstream(conn) -> None:
                         if j.get("type") == "stt":
                             _last_stt_ts = time.time()
                             _last_stt_text = str(j.get("text") or "")
-                            # 用户语音/注入内容识别结果 → 写入会话历史
-                            _chat_append("user", "text", _last_stt_text, tag="stt")
+                            # 内部注入（vision/observe）识别结果不写"你说"历史，避免 AI 分析文本被当成用户发言
+                            if time.time() < _inject_stt_suppress_until:
+                                logger.info("抑制内部注入的 STT 写入历史: %s", str(_last_stt_text)[:30])
+                            else:
+                                _chat_append("user", "text", _last_stt_text, tag="stt")
                         if j.get("type") == "llm":
                             _llm_text = str(j.get("text") or "")
                             if _llm_text:
