@@ -706,6 +706,7 @@ async def xiaozhi_status() -> dict:
         "connected": _upstream is not None,
         "session_id": _session_id,
         "subscribers": len(_subscribers),
+        "roles": list(_sub_roles.values()),
     }
 
 

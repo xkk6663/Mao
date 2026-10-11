@@ -81,7 +81,8 @@ if ($backendUp) {
 } else {
     Write-Step '[1/2] 后端未运行，正在启动...'
     # 用 Start-Process 文件重定向（不用 .NET 管道：uvicorn 日志多时管道缓冲满会卡死后端）
-    $p = Start-Process -FilePath $backendPy -ArgumentList '-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8000' -WorkingDirectory $backendDir -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
+    # -u: python 无缓冲，日志实时落盘便于排查音频链路
+    $p = Start-Process -FilePath $backendPy -ArgumentList '-u','-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8000' -WorkingDirectory $backendDir -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
     Write-Step "      已启动 (pid=$($p.Id))，等待就绪..."
     $ready = $false
     for ($i = 0; $i -lt 30; $i++) {
