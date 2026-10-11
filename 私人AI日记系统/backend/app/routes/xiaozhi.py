@@ -163,7 +163,25 @@ _last_wake_ts: float = 0.0  # 上次唤醒时间戳（30s 内会话可能仍活�
 _last_tts_stop: float = 0.0  # 上游最后一次 TTS 播完时间戳（用于判断唤醒回复是否已完整播完）
 _last_stt_ts: float = 0.0    # 上游最后一次 STT 识别时间戳（用于确认注入的语音是否被官方云识别）
 _last_stt_text: str = ""     # 上游最后一次 STT 识别文本
+_llm_text: str = ""          # 上游最后一次 LLM 回答文本（回声过滤用）
 _inject_stt_suppress_until: float = 0.0  # 内部注入（vision/observe）后 STT 写入"你说"历史的抑制截止时间
+
+
+def _is_echo_stt(stt_text: str) -> bool:
+    """回声过滤：官方云会把 AI 自己的回答（TTS 播放声）识别成"用户语音"回传 stt，
+    与最近一次 LLM 回答文本相同/互相包含时判定为回声，不写入"你说"历史。"""
+    global _llm_text
+    if not stt_text or not _llm_text:
+        return False
+    a, b = stt_text.strip(), _llm_text.strip()
+    if not a or not b:
+        return False
+    if len(b) >= 8 and (a == b or a in b or b in a):
+        return True
+    # 较长的 LLM 回答被 STT 截断时，前缀/后缀高度重合也判为回声
+    if len(b) >= 12 and (a.startswith(b[:12]) or b.startswith(a[:12])):
+        return True
+    return False
 
 # ---- 会话历史（长连接建立以来的所有来往记录，文字/图片；持久化到文件，重启不丢）----
 # 每条: {ts, role(user/pet/system), type(text/image), text, image_base64, tag(chat/observe/screenshot/stt/llm)}
@@ -744,7 +762,7 @@ async def _heartbeat_loop(conn) -> None:
 
 async def _pump_upstream(conn) -> None:
     """上游消息持续转发给最近活跃订阅者；断线自动清理并允许重建。"""
-    global _upstream, _last_tts_stop
+    global _upstream, _last_tts_stop, _llm_text, _last_stt_ts, _last_stt_text
     decoder = _OpusDecoder()
     _pump_audio_count = 0
     _pump_audio_bytes = 0
@@ -762,6 +780,8 @@ async def _pump_upstream(conn) -> None:
                         _last_stt_text = str(j.get("text") or "")
                         if time.time() < _inject_stt_suppress_until:
                             logger.info("抑制内部注入的 STT 写入历史: %s", str(_last_stt_text)[:30])
+                        elif _is_echo_stt(_last_stt_text):
+                            logger.info("丢弃回声 STT（与 LLM 回答相同）: %s", str(_last_stt_text)[:30])
                         else:
                             _chat_append("user", "text", _last_stt_text, tag="stt")
                     if j.get("type") == "llm":
@@ -795,6 +815,8 @@ async def _pump_upstream(conn) -> None:
                             # 内部注入（vision/observe）识别结果不写"你说"历史，避免 AI 分析文本被当成用户发言
                             if time.time() < _inject_stt_suppress_until:
                                 logger.info("抑制内部注入的 STT 写入历史: %s", str(_last_stt_text)[:30])
+                            elif _is_echo_stt(_last_stt_text):
+                                logger.info("丢弃回声 STT（与 LLM 回答相同）: %s", str(_last_stt_text)[:30])
                             else:
                                 _chat_append("user", "text", _last_stt_text, tag="stt")
                         if j.get("type") == "llm":
