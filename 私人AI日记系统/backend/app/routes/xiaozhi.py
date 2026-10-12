@@ -847,8 +847,8 @@ async def _sub_writer(ws: WebSocket) -> None:
             return
 
 
-async def _reconnect_loop(initial_delay: float = 2.0) -> None:
-    """上游断开后自动重连（退避 2s→10s），成功后广播 hello 让前端恢复。"""
+async def _reconnect_loop(initial_delay: float = 3.0) -> None:
+    """上游断开后自动重连（退避 3s→15s），成功后广播 hello 让前端恢复。"""
     delay = initial_delay
     while True:
         await asyncio.sleep(delay)
@@ -858,25 +858,17 @@ async def _reconnect_loop(initial_delay: float = 2.0) -> None:
             await _broadcast(json.dumps({"type": "hello", "version": 1, "session_id": _session_id}, ensure_ascii=False))
             await _syslog("🔗 小智已重连（会话 " + str(_session_id) + "）")
             return
-        logger.warning("上游重连失败，%.1fs 后重试: %s", delay, err)
+        logger.warning("上游重连失败，%.0fs 后重试: %s", delay, err)
         await _broadcast(json.dumps({"type": "error", "error": "connecting"}, ensure_ascii=False))
-        delay = min(10.0, delay * 1.5)
+        delay = min(15.0, delay * 1.5)
 
 
-async def _app_keepalive_loop(conn) -> None:
-    """应用层保活：官方云有应用层空闲超时（WebSocket ping/pong 只能保 TCP，无法阻止），
-    定期发 IoT 状态上报模拟真实设备行为，防止官方云 1005 主动断连。
-    IoT states 不触发对话/ASR/TTS，是官方协议里设备端的标准定期上报行为。"""
+async def _heartbeat_loop(conn) -> None:
+    """上游心跳保活：每 30 秒发 ping，防止官方云因空闲超时断连。"""
     while True:
         await asyncio.sleep(30)
         try:
-            if _upstream is not conn:
-                return
-            await conn.send(json.dumps({
-                "type": "iot",
-                "states": {"battery": 100, "charging": True},
-                "session_id": _session_id,
-            }, ensure_ascii=False))
+            await conn.ping()
         except Exception:  # noqa: BLE001
             return
 
@@ -959,7 +951,6 @@ async def _pump_upstream(conn) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("上游下行中断: %s", exc)
     finally:
-        _tts_playing = False
         if _upstream is conn:
             _upstream = None
         try:
@@ -994,8 +985,7 @@ async def _ensure_upstream() -> tuple[object | None, str | None]:
             additional_headers=headers,
             max_size=None,
             open_timeout=10,
-            ping_interval=20,   # WebSocket 协议层心跳（官方协议无应用层心跳，靠库自动 ping/pong）
-            ping_timeout=30,    # pong 超时 30s（默认 20s 太短，网络抖动易误判断连）
+            ping_interval=30,   # 主动保活心跳（官方云空闲断连）
         )
         # 先完成 hello 会话握手，确认官方云接受后才开放全局连接，
         # 避免 hello 被拒(如 1005)时注入接口出现“假成功”
@@ -1022,7 +1012,7 @@ async def _ensure_upstream() -> tuple[object | None, str | None]:
             pass
         return None, f"官方云会话建立失败: {exc}"
     asyncio.create_task(_pump_upstream(conn))
-    asyncio.create_task(_app_keepalive_loop(conn))
+    asyncio.create_task(_heartbeat_loop(conn))
     return conn, None
 
 
