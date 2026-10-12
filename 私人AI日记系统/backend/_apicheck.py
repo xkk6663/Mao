@@ -3,8 +3,8 @@
 import io, os, re, sys, collections, ast
 
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-DIST = r'C:\Users\xiao1\Mio\澪Agent应用\dist'
-APP = r'C:\Users\xiao1\Mio\私人AI日记系统\backend\app'
+DIST = r'C:\Users\xiao1\Mao\澪Agent应用\dist'
+APP = r'C:\Users\xiao1\Mao\私人AI日记系统\backend\app'
 
 # 1) 前端 dist 所有 API 调用
 api_calls = collections.Counter()

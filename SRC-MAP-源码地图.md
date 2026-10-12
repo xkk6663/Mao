@@ -99,9 +99,9 @@
 
 ### 3.3 历史文件
 
-- `C:\Users\xiao1\Mio\xiaozhi_chat_history.json`（会话历史持久化）
-- `C:\Users\xiao1\Mio\xiaozhi_device.json`（小智设备绑定）
-- `C:\Users\xiao1\Mio\status.json`（运行状态）
+- `C:\Users\xiao1\Mao\xiaozhi_chat_history.json`（会话历史持久化）
+- `C:\Users\xiao1\Mao\xiaozhi_device.json`（小智设备绑定）
+- `C:\Users\xiao1\Mao\status.json`（运行状态）
 
 ---
 
@@ -109,11 +109,11 @@
 
 | 项 | 位置 |
 |---|---|
-| 一键启动 | `C:\Users\xiao1\Mio\start_mio.ps1`（后端 + Electron，脱离控制台） |
+| 一键启动 | `C:\Users\xiao1\Mao\start_mio.ps1`（后端 + Electron，脱离控制台） |
 | 开机自启 | 注册表 `HKCU\...\Run` → `Mio桌宠自启动` → 指向 start_mio.ps1 |
 | 后端日志 | `backend_out.log`（stdout）、`backend_err.log`（应用日志） |
 | 启动日志 | `start_mio.log` |
-| 副屏边界 | `C:\Users\xiao1\Mio\phys_bounds.ps1`（枚举真实显示器，勿移） |
+| 副屏边界 | `C:\Users\xiao1\Mao\phys_bounds.ps1`（枚举真实显示器，勿移） |
 | 调试角标 | MIO 管理窗口左下角：🟢 输入区+按钮 OK / 🟡 缺按钮 / 🔴 没找到输入区 |
 
 ---
@@ -163,4 +163,4 @@
 4. **Electron 加载的页面 URL 带版本参数**（`?v=20261012...`）——改了前端文件记得**升版本号**，否则缓存不刷新。
 5. **重启方式**：`taskkill /F /IM electron.exe` 后跑 `start_mio.ps1`（start_mio.ps1 检测到 electron 在跑会跳过启动）。
 6. **MIO 管理窗口红点**：看左下角角标颜色定位注入状态；inject.js 每次 keepAlive 都会更新角标颜色。
-7. **git 仓库**：根目录 `C:\Users\xiao1\Mio`（本地 main 分支），每次改动都提交，防写坏。
+7. **git 仓库**：根目录 `C:\Users\xiao1\Mao`（本地 main 分支），每次改动都提交，防写坏。
