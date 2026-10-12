@@ -934,6 +934,10 @@ async def _pump_upstream(conn) -> None:
                                 _chat_append("pet", "text", _llm_text, tag="llm")
                         if j.get("type") in ("llm", "tts", "error", "listen", "abort"):
                             logger.info("上游消息 type=%s", j.get("type"))
+                        # 官方 STT 回传**不广播**给前端（含注入回声/官方误听）——否则聊天窗口会把
+                        # 官方识别文本渲染成"你说[分析]"（复述发送一次）。前端"你说"只来自浏览器真实输入。
+                        if j.get("type") == "stt":
+                            continue
                     except Exception:  # noqa: BLE001
                         pass
                     await _broadcast(msg)   # 文本广播（所有订阅者收同一份消息）
