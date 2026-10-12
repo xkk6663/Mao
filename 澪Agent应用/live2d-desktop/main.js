@@ -205,8 +205,12 @@ function openPetAdmin() {
     autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: false, preload: path.join(__dirname, 'preload.js') },
   })
-  // 桌宠管理面板：直接进入 main 模式（私人空间对话页），Agent 工作台已阉割
-  petAdminWindow.loadURL(`${API_BASE}/agent-app/?workspace=main&v=20261012d2`)
+  // 强制清缓存 + 清存储：防止旧页面/旧分片残留导致红点（输入区找不到）/按钮不注入
+  const sess = petAdminWindow.webContents.session
+  sess.clearCache().then(() => sess.clearStorageData()).then(() => {
+    // 桌宠管理面板：直接进入 main 模式（私人空间对话页），Agent 工作台已阉割
+    petAdminWindow.loadURL(`${API_BASE}/agent-app/?workspace=main&v=20261012d3`)
+  })
   petAdminWindow.on('closed', () => { petAdminWindow = null })
 }
 
