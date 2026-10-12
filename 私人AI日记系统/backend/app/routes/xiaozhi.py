@@ -242,6 +242,9 @@ async def _save_chat_history() -> None:
 def _chat_append(role: str, type_: str, text: str = "", image_base64: str | None = None, tag: str = "") -> None:
     """写入会话历史（单线程事件循环内 append 原子，无锁；2s 防抖落盘）。"""
     global _history_save_task
+    # 诊断日志：定位"你说"消息来源（排查分析文本被复述成用户发言）
+    if role == "user":
+        logger.info("写历史[user] tag=%s type=%s text=%s", tag, type_, str(text)[:60])
     _chat_history.append({
         "ts": round(time.time(), 3),
         "role": role,
