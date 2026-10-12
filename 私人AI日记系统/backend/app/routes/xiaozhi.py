@@ -135,6 +135,8 @@ async def _observe_loop() -> None:
                         # 观察评价写入历史 → 聊天界面显示为"她说"气泡（AI 在评价屏幕）
                         _chat_append("pet", "text", text, tag="observe")
                         # 屏幕观察只显示文本气泡：不注入官方（不触发唤醒/官方"拜拜"；官方视觉仅返回文本）
+                        # 广播 speech-bubble → 桌宠显示气泡并自动消失（与截图提问一致）
+                        await _broadcast_observe_bubble(text)
                         _observe_last_result = "已生成评价（文本气泡） · " + str(text)[:50]
                 except Exception as exc:  # noqa: BLE001
                     _observe_last_result = "观察失败：" + str(exc)[:60]
@@ -158,6 +160,22 @@ def _full_screen_jpeg(capture_cls) -> str | None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("观察截屏失败: %s", exc)
         return None
+
+
+async def _broadcast_observe_bubble(text: str) -> None:
+    """把视觉分析文本广播为 speech-bubble 事件 → 桌宠显示气泡并自动消失（与截图提问一致）。
+    不注入官方（视觉仅返回文本；注入会触发唤醒/官方主动结束，且官方无独立 TTS 朗读分析文本）。"""
+    try:
+        from .. import pet_event_service  # 延迟导入避免循环依赖
+
+        pet_event_service.publish("speech-bubble", {
+            "text": str(text or ""),
+            "emotion": "gentle",
+            "motion_hint": "observe",
+            "duration_ms": 6000,
+        })
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("广播观察气泡失败: %s", exc)
 
 
 _last_wake_ts: float = 0.0  # 上次唤醒时间戳（保留兼容；会话级免唤醒见 _session_wake_done）
@@ -714,6 +732,39 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception("小智视觉分析失败")
+        raise HTTPException(status_code=502, detail=f"小智视觉分析失败: {exc}") from exc
+
+
+@router.post("/vision-bubble")
+async def xiaozhi_vision_bubble(payload: VisionRequest) -> dict:
+    """截图/图片 → 小智官方视觉分析 → 广播 speech-bubble 给桌宠（气泡自动消失）。
+    与 /vision 的区别：分析文本通过 pet_event_service 广播到桌宠显示气泡，
+    而不是返回给调用方自行显示。供管理面板"立即观察"等场景使用，去掉旧的 /say 复述注入。"""
+    if _vision is None:
+        raise HTTPException(status_code=409, detail="小智视觉能力不可用：请先打开小智对话建立连接")
+    question = str(payload.question or "").strip() or "请详细描述这张图片里的内容。"
+    # 官方视觉只返回文本；强制 60 字以内简洁口语，保证文本气泡可读
+    if "字以内" not in question:
+        question = f"{question}（请用60字以内的简洁口语回答）"
+    image_base64 = str(payload.image_base64 or "").strip()
+    if not image_base64:
+        raise HTTPException(status_code=400, detail="图片不能为空")
+    try:
+        # 1. 图片写入会话历史（同步到聊天界面）
+        _chat_append("user", "image", text=question, image_base64=image_base64, tag="observe")
+        await _syslog("🖼️ 已发送图片给小智分析…")
+        # 2. 官方视觉分析
+        text = await asyncio.to_thread(_vision_explain_sync, image_base64, question)
+        # 3. 分析文本写入历史 → 聊天界面显示为"她说"气泡
+        _chat_append("pet", "text", text, tag="observe")
+        await _syslog("✅ 图片分析完成（小智返回文本）")
+        # 4. 广播气泡给桌宠（自动消失，与截图提问一致）；不注入官方
+        await _broadcast_observe_bubble(text)
+        return {"ok": True, "text": text}
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("小智视觉分析失败（vision-bubble）")
         raise HTTPException(status_code=502, detail=f"小智视觉分析失败: {exc}") from exc
 
 

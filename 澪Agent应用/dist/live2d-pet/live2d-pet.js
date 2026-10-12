@@ -1518,6 +1518,18 @@
         }
       } else if (message.type === 'visual_event') {
         handleVisualEvent(payload)
+      } else if (message.type === 'speech-bubble') {
+        // 视觉分析文本气泡（观察/立即观察）：显示并自动消失，不播语音
+        const bubbleText = String(payload.text || '').trim()
+        if (bubbleText) {
+          applyEmotion(payload.emotion || 'gentle', Math.max(6000, bubbleText.length * 180))
+          const bubbleDuration = Number(payload.duration_ms || 6000)
+          showSpeechBubble(bubbleText, bubbleDuration)
+          const hint = String(payload.motion_hint || 'observe')
+          const group = semanticMotion(hint)
+          if (group) playMotion(group)
+          else startProceduralMotion(hint, 0.7)
+        }
       } else if (message.type === 'foreground_changed') {
         handleForegroundChanged(payload)
       } else if (message.type === 'chat_window_state') {
