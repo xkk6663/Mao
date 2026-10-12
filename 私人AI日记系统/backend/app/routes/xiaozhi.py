@@ -615,10 +615,10 @@ async def _wait_stt_confirmed(timeout: float = 8.0) -> bool:
     return False
 
 
-async def _inject_say(text: str, wait_upstream: float = 6.0, source: str = "user") -> bool:
+async def _inject_say(text: str, wait_upstream: float = 6.0, source: str = "user", confirm_timeout: float = 15.0) -> bool:
     """注入入口：串行化锁（连续快速发消息时官方只响应一次，未加锁会互相 abort 导致吞消息）。"""
     async with _inject_lock:
-        return await _inject_say_impl(text, wait_upstream, source)
+        return await _inject_say_impl(text, wait_upstream, source, confirm_timeout)
 
 
 async def _inject_segments(text: str, source: str = "vision") -> bool:
@@ -657,7 +657,7 @@ async def _inject_segments(text: str, source: str = "vision") -> bool:
     return ok_all
 
 
-async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = "user") -> bool:
+async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = "user", confirm_timeout: float = 15.0) -> bool:
     """把文本注入小智会话（模拟用户发言）→ 小智语音/表情/口型联动。
     source: "user"=用户真实输入（STT 识别结果正常写"你说"历史）
             "vision"/"observe"=内部注入（AI 分析文本，STT 结果不写"你说"历史，
@@ -697,8 +697,8 @@ async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = 
         if not frames:
             return False
         await _syslog(f"🎤 已发送语音「{str(text)[:40]}」等待官方识别…")
-        # 4. 等 STT 确认（15s 超时；不重试，避免相同音频被官方识别两次）
-        confirmed = await _wait_stt_confirmed(15.0)
+        # 4. 等 STT 确认（超时按场景：vision 8s 快速返回，普通注入 15s；不重试，避免相同音频被官方识别两次）
+        confirmed = await _wait_stt_confirmed(confirm_timeout)
         if confirmed:
             await _syslog("🧠 官方已识别语音，小智正在思考回答…")
         else:
@@ -1011,7 +1011,7 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
         # 不念给官方，而是作为视觉 API 的 question 传入（视觉模型按 prompt 生成对应风格的识别文本，
         # 实测 observe_prompt 的调侃风格在识别文本中生效），LLM 基于识别文本组织回答。
         trigger = "请看看这张图片"
-        ok = await _inject_say(trigger, source="vision")
+        ok = await _inject_say(trigger, source="vision", confirm_timeout=8.0)
         if not ok:
             raise HTTPException(status_code=409, detail="注入失败：小智连接不可用")
         return {"ok": True, "trigger": trigger}
@@ -1051,7 +1051,7 @@ async def xiaozhi_vision_bubble(payload: VisionRequest) -> dict:
             trigger = "看看我的屏幕"
         else:
             trigger = "请看看这张图片"
-        ok = await _inject_say(trigger, source="vision")
+        ok = await _inject_say(trigger, source="vision", confirm_timeout=8.0)
         if not ok:
             raise HTTPException(status_code=409, detail="注入失败：小智连接不可用")
         return {"ok": True, "trigger": trigger}
