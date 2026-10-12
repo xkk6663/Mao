@@ -31,12 +31,15 @@
     if (pendingBar && pendingBar.isConnected) return pendingBar
     var composer = findComposer()
     if (!composer) return null
-    var wrap = composer.closest('.composer-wrap') || composer.parentElement
+    // 暂存条和 .composer 同级（插入到 .composer 前面），不能用 .composer-actions 当参考节点
+    // （.composer-actions 是 .composer 的子元素，不是 .composer-wrap 的直接子元素，insertBefore 会抛 NotFoundError）
+    var composerEl = composer.closest('.composer') || composer
+    var wrap = composerEl.parentElement
     if (!wrap) return null
     pendingBar = document.createElement('div')
     pendingBar.className = 'xz-pending-bar'
     pendingBar.style.cssText = 'display:none;flex-wrap:wrap;gap:6px;padding:6px 8px;border-bottom:1px solid rgba(0,0,0,0.06);background:rgba(0,0,0,0.02);'
-    wrap.insertBefore(pendingBar, composer)
+    wrap.insertBefore(pendingBar, composerEl)
     return pendingBar
   }
 
