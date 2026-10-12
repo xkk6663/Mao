@@ -260,8 +260,9 @@ def _is_echo_stt(stt_text: str) -> bool:
     return False
 
 # ---- 会话历史（长连接建立以来的所有来往记录，文字/图片；持久化到文件，重启不丢）----
-# 每条: {ts, role(user/pet/system), type(text/image), text, image_base64, tag(chat/observe/screenshot/stt/llm)}
+# 每条: {id, ts, role(user/pet/system), type(text/image), text, image_base64, tag(chat/observe/screenshot/stt/llm/vision/sys)}
 _CHAT_HISTORY_MAX = 500
+_hist_seq = 0  # 历史条目唯一 id 计数器（前端按 id 去重，避免同文本/同秒误去重丢记录）
 _env_history = os.getenv("MIO_CHAT_HISTORY_FILE", "").strip()
 CHAT_HISTORY_FILE = Path(_env_history) if _env_history else (_PROJECT_ROOT / "xiaozhi_chat_history.json")
 _chat_history: list[dict] = []
@@ -269,14 +270,19 @@ _history_save_task: asyncio.Task | None = None
 
 
 def _load_chat_history() -> None:
-    """启动时从文件加载历史（图片 base64 可能很大，加载时截断大字段以保内存）。"""
-    global _chat_history
+    """启动时从文件加载历史（图片 base64 可能很大，加载时截断大字段以保内存）。
+    旧文件条目可能没有 id（按文本/时间去重时代的记录）→ 按序补发 id。"""
+    global _chat_history, _hist_seq
     try:
         if CHAT_HISTORY_FILE.exists():
             with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, list):
-                _chat_history = [it for it in data if isinstance(it, dict)][-_CHAT_HISTORY_MAX:]
+                items = [it for it in data if isinstance(it, dict)][-_CHAT_HISTORY_MAX:]
+                for it in items:
+                    _hist_seq += 1
+                    it.setdefault("id", _hist_seq)
+                _chat_history = items
     except Exception as exc:  # noqa: BLE001
         logger.warning("加载会话历史失败: %s", exc)
         _chat_history = []
@@ -299,11 +305,13 @@ async def _save_chat_history() -> None:
 
 def _chat_append(role: str, type_: str, text: str = "", image_base64: str | None = None, tag: str = "") -> None:
     """写入会话历史（单线程事件循环内 append 原子，无锁；2s 防抖落盘）。"""
-    global _history_save_task
+    global _history_save_task, _hist_seq
     # 诊断日志：定位"你说"消息来源（排查分析文本被复述成用户发言）
     if role == "user":
         logger.info("写历史[user] tag=%s type=%s text=%s", tag, type_, str(text)[:60])
+    _hist_seq += 1
     _chat_history.append({
+        "id": _hist_seq,
         "ts": round(time.time(), 3),
         "role": role,
         "type": type_,
