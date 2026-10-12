@@ -863,16 +863,6 @@ async def _reconnect_loop(initial_delay: float = 3.0) -> None:
         delay = min(15.0, delay * 1.5)
 
 
-async def _heartbeat_loop(conn) -> None:
-    """上游心跳保活：每 30 秒发 ping，防止官方云因空闲超时断连。"""
-    while True:
-        await asyncio.sleep(30)
-        try:
-            await conn.ping()
-        except Exception:  # noqa: BLE001
-            return
-
-
 async def _pump_upstream(conn) -> None:
     """上游消息持续转发给最近活跃订阅者；断线自动清理并允许重建。"""
     global _upstream, _last_tts_stop, _llm_text, _last_stt_ts, _last_stt_text, _tts_playing
@@ -985,7 +975,7 @@ async def _ensure_upstream() -> tuple[object | None, str | None]:
             additional_headers=headers,
             max_size=None,
             open_timeout=10,
-            ping_interval=30,   # 主动保活心跳（官方云空闲断连）
+            ping_interval=None,   # 禁用协议层ping: 官方协议无心跳, 真实设备不发ping, 避免库ping/pong与官方云LB不兼容导致1005
         )
         # 先完成 hello 会话握手，确认官方云接受后才开放全局连接，
         # 避免 hello 被拒(如 1005)时注入接口出现“假成功”
@@ -1012,7 +1002,6 @@ async def _ensure_upstream() -> tuple[object | None, str | None]:
             pass
         return None, f"官方云会话建立失败: {exc}"
     asyncio.create_task(_pump_upstream(conn))
-    asyncio.create_task(_heartbeat_loop(conn))
     return conn, None
 
 
