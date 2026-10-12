@@ -615,6 +615,28 @@ async def _wait_stt_confirmed(timeout: float = 8.0) -> bool:
     return False
 
 
+# 视觉触发语轮换：官方 LLM 对同一会话内重复的用户指令（相同文本）会去重/不重复响应，
+# 每次发图/观察用不同短语，让官方认为是新指令（短触发语 ASR 识别率高，长文本会识别成乱码）
+_VISION_TRIGGERS = ["请看看这张图片", "请再看看这张图片", "请看看这张新图片", "请仔细观察这张图片", "请再看看这张图吧"]
+_OBSERVE_TRIGGERS = ["看看我的屏幕", "再看看我的屏幕", "帮我看看屏幕", "看看我现在屏幕上的内容", "再看看我现在的屏幕"]
+_vision_trigger_idx = 0
+_observe_trigger_idx = 0
+
+
+def _next_vision_trigger() -> str:
+    global _vision_trigger_idx
+    t = _VISION_TRIGGERS[_vision_trigger_idx % len(_VISION_TRIGGERS)]
+    _vision_trigger_idx += 1
+    return t
+
+
+def _next_observe_trigger() -> str:
+    global _observe_trigger_idx
+    t = _OBSERVE_TRIGGERS[_observe_trigger_idx % len(_OBSERVE_TRIGGERS)]
+    _observe_trigger_idx += 1
+    return t
+
+
 async def _inject_say(text: str, wait_upstream: float = 6.0, source: str = "user", confirm_timeout: float = 15.0) -> bool:
     """注入入口：串行化锁（连续快速发消息时官方只响应一次，未加锁会互相 abort 导致吞消息）。"""
     async with _inject_lock:
@@ -1008,11 +1030,10 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
         #    工具回调里用这张暂存图做官方视觉识别，识别文本作为工具结果回灌 LLM）
         _pending_vision = {"image_base64": image_base64, "question": question}
         _last_vision_image = None  # 作废旧图副本：官方连续工具调用不得串到上一张图
-        # 注入语音用短触发语「请看看这张图片」（9字）：官方 ASR 对本地 SAPI 合成音的长文本
-        # 识别质量差（实测 21 字触发语被识别成乱码 → LLM 不调工具）。用户的 image_prompt
-        # 不念给官方，而是作为视觉 API 的 question 传入（视觉模型按 prompt 生成对应风格的识别文本，
-        # 实测 observe_prompt 的调侃风格在识别文本中生效），LLM 基于识别文本组织回答。
-        trigger = "请看看这张图片"
+        # 注入语音用短触发语（ASR 对 SAPI 合成音的长文本识别差，实测长触发语被识别成乱码 → LLM 不调工具）。
+        # 每次发图轮换不同触发语：官方 LLM 对重复的用户指令（同一会话内相同文本）会去重/不重复响应
+        # （实测第一张图正常调工具，第二张起注入文本相同 → 官方识别了触发语却不调工具 → 回答"没收到图片"）
+        trigger = _next_vision_trigger()
         ok = await _inject_say(trigger, source="vision", confirm_timeout=8.0)
         if not ok:
             raise HTTPException(status_code=409, detail="注入失败：小智连接不可用")
@@ -1049,11 +1070,12 @@ async def xiaozhi_vision_bubble(payload: VisionRequest) -> dict:
         _pending_vision = {"image_base64": image_base64 or None, "question": question}
         _last_vision_image = None  # 作废旧图副本：官方连续工具调用不得串到上一张图
         # 注入语音用短触发语（ASR 对 SAPI 合成音的长文本识别差，实测长触发语被识别成乱码
-        # 导致 LLM 不调工具）；用户 prompt 作视觉 API question（识别文本自带其风格，已实测生效）
+        # 导致 LLM 不调工具）；用户 prompt 作视觉 API question（识别文本自带其风格，已实测生效）。
+        # 每次触发轮换不同短语：官方 LLM 对同一会话内重复的用户指令会去重/不重复响应
         if str(payload.kind or "").strip() == "observe":
-            trigger = "看看我的屏幕"
+            trigger = _next_observe_trigger()
         else:
-            trigger = "请看看这张图片"
+            trigger = _next_vision_trigger()
         ok = await _inject_say(trigger, source="vision", confirm_timeout=8.0)
         if not ok:
             raise HTTPException(status_code=409, detail="注入失败：小智连接不可用")
