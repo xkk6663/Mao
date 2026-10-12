@@ -1617,25 +1617,33 @@
     }
   }
 
+  let lastBubblePos = null
   function updateSpeechBubblePosition() {
     if (!model || speechBubble.hidden) return
     const bounds = model.getBounds()
-    const bubbleBounds = speechBubble.getBoundingClientRect()
-    const margin = 8
-    const preferredLeft = bounds.x + bounds.width * 0.62
-    const fallbackLeft = bounds.x - bubbleBounds.width + bounds.width * 0.38
-    const useLeftSide = preferredLeft + bubbleBounds.width > window.innerWidth - margin
-    const left = Math.max(
-      margin,
-      Math.min(window.innerWidth - bubbleBounds.width - margin, useLeftSide ? fallbackLeft : preferredLeft),
-    )
-    const top = Math.max(
-      margin,
-      Math.min(window.innerHeight - bubbleBounds.height - margin, bounds.y + bounds.height * 0.1 - bubbleBounds.height),
-    )
-    speechBubble.style.left = `${Math.round(left)}px`
-    speechBubble.style.top = `${Math.round(top)}px`
-    speechBubble.classList.toggle('align-left', !useLeftSide)
+    const valid = bounds && bounds.width > 0 && bounds.height > 0
+    if (!valid) {
+      // 模型不可用（切换/加载中 getBounds 退化为 0,0）→ 保持上次位置，避免气泡飞到左上角
+      if (!lastBubblePos) return
+    } else {
+      const bubbleBounds = speechBubble.getBoundingClientRect()
+      const margin = 8
+      const preferredLeft = bounds.x + bounds.width * 0.62
+      const fallbackLeft = bounds.x - bubbleBounds.width + bounds.width * 0.38
+      const useLeftSide = preferredLeft + bubbleBounds.width > window.innerWidth - margin
+      const left = Math.max(
+        margin,
+        Math.min(window.innerWidth - bubbleBounds.width - margin, useLeftSide ? fallbackLeft : preferredLeft),
+      )
+      const top = Math.max(
+        margin,
+        Math.min(window.innerHeight - bubbleBounds.height - margin, bounds.y + bounds.height * 0.1 - bubbleBounds.height),
+      )
+      lastBubblePos = { left: Math.round(left), top: Math.round(top), useLeftSide }
+    }
+    speechBubble.style.left = `${lastBubblePos.left}px`
+    speechBubble.style.top = `${lastBubblePos.top}px`
+    speechBubble.classList.toggle('align-left', !lastBubblePos.useLeftSide)
   }
 
   function showSpeechBubble(text, durationMs = 0, responseId = '') {
