@@ -10,24 +10,16 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (
     agent_task_service,
-    backup_service,
-    autonomy_service,
     companion_service,
-    cost_reconciliation_service,
     creation_service,
-    daily_diary_service,
-    daily_review_service,
     db,
     maintenance_service,
     migration_service,
-    monthly_review_service,
     onboarding_service,
     pet_event_service,
-    proactive_service,
     runtime_diagnostics,
     screen_observation_service,
     subservice_health,
-    weekly_review_service,
 )
 from . import model_runtime
 from .runtime_identity import runtime_identity
@@ -62,20 +54,12 @@ from .routes import (
 logger = logging.getLogger(__name__)
 
 
+# 后台任务：仅保留桌宠/小智链路所需（原版 QQ/日记/备份/周月报/费用对账等任务已随功能阉割移除）
 BACKGROUND_TASK_FACTORIES = {
-    "agent_task_worker": agent_task_service.task_loop,
     "runtime_diagnostics_task": runtime_diagnostics.monitor_loop,
     "voice_startup_task": companion_service.start_voice_on_app_startup,
-    "qq_startup_task": proactive_service.start_qq_on_app_startup,
-    "qq_proactive_task": autonomy_service.autonomy_loop,
-    "daily_diary_task": daily_diary_service.daily_diary_loop,
-    "daily_review_task": daily_review_service.daily_review_loop,
-    "backup_task": backup_service.backup_loop,
-    "weekly_review_task": weekly_review_service.weekly_review_loop,
-    "monthly_review_task": monthly_review_service.monthly_review_loop,
     "screen_observation_task": screen_observation_service.observation_loop,
     "pet_event_task": pet_event_service.event_loop,
-    "cost_reconciliation_task": cost_reconciliation_service.reconciliation_loop,
 }
 
 
