@@ -40,6 +40,39 @@ DEVICE_JSON = Path(
     or r"C:\Users\xiao1\Mio\xiaozhi_device.json"
 )
 
+# ---- 图片识别 / 屏幕观察 前置提示词（可编辑、持久化到 JSON）----
+PROMPTS_FILE = Path(os.getenv("MIO_XIAOZHI_PROMPTS_FILE", r"C:\Users\xiao1\Mio\xiaozhi_prompts.json"))
+
+_prompt_defaults = {
+    "image_prompt": "请详细描述这张图片里的内容。",
+    "observe_prompt": "用调侃吐槽的语气，用60字以内的简洁口语评价我屏幕上正在做的事。",
+    "force_60": True,  # 是否强制追加"（请用60字以内的简洁口语回答）"
+}
+_prompt_cfg: dict = dict(_prompt_defaults)
+
+
+def _load_prompts() -> None:
+    global _prompt_cfg
+    try:
+        if PROMPTS_FILE.exists():
+            data = json.loads(PROMPTS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                merged = dict(_prompt_defaults)
+                merged.update({k: v for k, v in data.items() if k in _prompt_defaults})
+                _prompt_cfg = merged
+    except Exception:  # noqa: BLE001
+        logger.warning("读取提示词配置失败，使用默认值", exc_info=True)
+
+
+def _save_prompts() -> None:
+    try:
+        PROMPTS_FILE.write_text(json.dumps(_prompt_cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        logger.warning("保存提示词配置失败: %s", exc_info=True)
+
+
+_load_prompts()
+
 OPUS_PCM_RATE = 48000
 OPUS_PCM_CHANNELS = 2
 
@@ -66,7 +99,8 @@ _tts_playing: bool = False  # 官方 TTS 是否正在播放（只在播放中才
 
 class VisionRequest(BaseModel):
     image_base64: str
-    question: str = "图片里有什么？描述一下"
+    question: str = ""
+    kind: str = "image"  # "image"=图片识别（用 image_prompt） / "observe"=屏幕观察（用 observe_prompt）
 
 
 class XiaozhiSayRequest(BaseModel):
@@ -128,7 +162,7 @@ async def _observe_loop() -> None:
                         text = await asyncio.to_thread(
                             _vision_explain_sync,
                             img,
-                            str(_observe_cfg.get("prompt") or "用调侃吐槽的语气，用60字以内的简洁口语评价我屏幕上正在做的事。"),
+                            str(_prompt_cfg.get("observe_prompt") or _prompt_defaults["observe_prompt"]),
                         )
                         # 观察截图写入会话历史（同步到聊天界面）
                         _chat_append("user", "image", text="（屏幕观察）", image_base64=img, tag="observe")
@@ -591,6 +625,9 @@ async def xiaozhi_observe_start(payload: ObserveRequest) -> dict:
         _observe_cfg["quiet_end"] = str(payload.quiet_end)[:5]
     if payload.prompt:
         _observe_cfg["prompt"] = str(payload.prompt)[:300]
+        # 同步到持久化提示词配置（管理面板编辑屏幕观察提示词走同一条链路）
+        _prompt_cfg["observe_prompt"] = str(payload.prompt)[:300]
+        _save_prompts()
     _observe_next_at = time.time() + 20  # 首次 20 秒后即可触发（便于测试）
     await _ensure_observe_task()
     return {**_observe_cfg, "next_in_seconds": 20}
@@ -713,10 +750,10 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
     与聊天发图同一条链路：图片写入会话历史，分析文本注入后由官方云语音回答。"""
     if _vision is None:
         raise HTTPException(status_code=409, detail="小智视觉能力不可用：请先打开小智对话建立连接")
-    question = str(payload.question or "").strip() or "请详细描述这张图片里的内容。"
+    question = str(payload.question or "").strip() or str(_prompt_cfg.get("image_prompt") or _prompt_defaults["image_prompt"])
     # 官方 ASR 对长音频识别会截断（>150字几乎必然失败）：
     # 强制要求官方视觉用 60 字以内简洁口语回答，保证注入音频能完整识别并播放
-    if "字以内" not in question:
+    if _prompt_cfg.get("force_60", True) and "字以内" not in question:
         question = f"{question}（请用60字以内的简洁口语回答）"
     image_base64 = str(payload.image_base64 or "").strip()
     if not image_base64:
@@ -747,9 +784,14 @@ async def xiaozhi_vision_bubble(payload: VisionRequest) -> dict:
     而不是返回给调用方自行显示。供管理面板"立即观察"等场景使用，去掉旧的 /say 复述注入。"""
     if _vision is None:
         raise HTTPException(status_code=409, detail="小智视觉能力不可用：请先打开小智对话建立连接")
-    question = str(payload.question or "").strip() or "请详细描述这张图片里的内容。"
+    _prompt_default = (
+        str(_prompt_cfg.get("observe_prompt") or _prompt_defaults["observe_prompt"])
+        if str(payload.kind or "").strip() == "observe"
+        else str(_prompt_cfg.get("image_prompt") or _prompt_defaults["image_prompt"])
+    )
+    question = str(payload.question or "").strip() or _prompt_default
     # 官方视觉只返回文本；强制 60 字以内简洁口语，保证文本气泡可读
-    if "字以内" not in question:
+    if _prompt_cfg.get("force_60", True) and "字以内" not in question:
         question = f"{question}（请用60字以内的简洁口语回答）"
     image_base64 = str(payload.image_base64 or "").strip()
     if not image_base64:
@@ -771,6 +813,31 @@ async def xiaozhi_vision_bubble(payload: VisionRequest) -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.exception("小智视觉分析失败（vision-bubble）")
         raise HTTPException(status_code=502, detail=f"小智视觉分析失败: {exc}") from exc
+
+
+class PromptsRequest(BaseModel):
+    image_prompt: str | None = None
+    observe_prompt: str | None = None
+    force_60: bool | None = None
+
+
+@router.get("/prompts")
+async def xiaozhi_prompts_get() -> dict:
+    """返回图片识别/屏幕观察 前置提示词配置（可编辑、持久化）。"""
+    return {"ok": True, **_prompt_cfg}
+
+
+@router.put("/prompts")
+async def xiaozhi_prompts_put(payload: PromptsRequest) -> dict:
+    """保存图片识别/屏幕观察 前置提示词配置（写 JSON 持久化）。"""
+    if payload.image_prompt is not None:
+        _prompt_cfg["image_prompt"] = str(payload.image_prompt).strip()[:300] or _prompt_defaults["image_prompt"]
+    if payload.observe_prompt is not None:
+        _prompt_cfg["observe_prompt"] = str(payload.observe_prompt).strip()[:300] or _prompt_defaults["observe_prompt"]
+    if payload.force_60 is not None:
+        _prompt_cfg["force_60"] = bool(payload.force_60)
+    _save_prompts()
+    return {"ok": True, **_prompt_cfg}
 
 
 def _device_identity() -> dict | None:

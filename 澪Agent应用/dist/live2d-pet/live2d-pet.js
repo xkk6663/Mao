@@ -1864,7 +1864,7 @@
           method: 'POST',
           body: JSON.stringify({
             image_base64: shot.image_base64,
-            question: '用调侃吐槽的语气，简短评价我屏幕上正在做的事。',
+            question: '',  // 留空 → 后端使用可配置的"图片识别前置提示词"
           }),
         })
         if (!vision.ok) throw new Error(vision.detail || '小智视觉失败')

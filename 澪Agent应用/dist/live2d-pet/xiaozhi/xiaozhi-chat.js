@@ -118,7 +118,7 @@
     renderPending();
     var base64 = String(img.dataUrl).split(',')[1] || '';
     if (!base64) { setStatusLine('⚠ 读取图片失败'); return true; }
-    var question = inputEl.value.trim() || '请详细描述这张图片里的内容。';
+    var question = inputEl.value.trim() || '';  // 留空 → 后端使用可配置的"图片识别前置提示词"
     inputEl.value = '';
     setBusy(true);
     setStatusLine('正在分析图片…', 'thinking', true);

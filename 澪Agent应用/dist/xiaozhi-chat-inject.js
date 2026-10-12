@@ -1,15 +1,17 @@
 /* xiaozhi-chat-inject.js — Mio 原版私人空间对话页注入"小智图片提问"（图片暂存模式）
- * 1. composer 栏注入 📷 上传图片按钮（点击选图）
+ * 1. composer 栏注入 📷 上传图片按钮（点击选图）+ ⚙ 提示词设置按钮
  * 2. 支持 Ctrl+V 粘贴图片
  * 3. 图片**暂存**在输入框上方（缩略图可预览、可删除），点发送按钮（或 Enter）才发送
  * 4. 发送 → 后端 /api/xiaozhi/vision（小智官方云视觉，免费）
  *    → 分析文本经小智 WS 自动显示在消息流 + 写入会话历史（刷新/重开后图片与分析可见）
+ * 5. ⚙ 提示词设置：编辑"图片识别前置提示词"与"屏幕观察提示词"，持久化到后端 JSON
  */
 (function () {
   if (window.__mioXzChatInjectLoaded) return
   window.__mioXzChatInjectLoaded = true
 
   var svgIcon = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>'
+  var gearIcon = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>'
   var pendingImages = [] // [{dataUrl, name}]
 
   function qs(sel, root) { return (root || document).querySelector(sel) }
@@ -87,7 +89,7 @@
     if (!pendingImages.length) return false
     var img = pendingImages.shift()
     var draft = findDraft()
-    var question = (draft && draft.value && draft.value.trim()) || '请详细描述这张图片里的内容。'
+    var question = (draft && draft.value && draft.value.trim()) || ''  // 留空 → 后端使用可配置的"图片识别前置提示词"
     if (draft) draft.value = ''
     renderPending()
     var imgB64 = img.dataUrl.indexOf('data:') === 0 ? img.dataUrl.split(',')[1] : img.dataUrl
@@ -127,19 +129,159 @@
     sendPending()
   }, true)
 
-  // ---- 📷 上传按钮 ----
+  // ---- 📷 上传按钮 + ⚙ 提示词设置按钮 ----
   function ensureBtn() {
     var composer = findComposer()
     if (!composer) return
-    if (composer.querySelector('.xz-img-btn')) return
-    var btn = document.createElement('button')
-    btn.type = 'button'
-    btn.className = 'icon-button xz-img-btn'
-    btn.title = '上传图片让小智分析（点发送才发送）'
-    btn.innerHTML = svgIcon
-    btn.style.cssText = 'order:-1;flex:none;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;cursor:pointer;'
-    btn.addEventListener('click', pickImage)
-    composer.insertBefore(btn, composer.firstChild)
+    if (!composer.querySelector('.xz-img-btn')) {
+      var btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'icon-button xz-img-btn'
+      btn.title = '上传图片让小智分析（点发送才发送）'
+      btn.innerHTML = svgIcon
+      btn.style.cssText = 'order:-1;flex:none;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;cursor:pointer;'
+      btn.addEventListener('click', pickImage)
+      composer.insertBefore(btn, composer.firstChild)
+    }
+    if (!composer.querySelector('.xz-prompt-btn')) {
+      var pbtn = document.createElement('button')
+      pbtn.type = 'button'
+      pbtn.className = 'icon-button xz-prompt-btn'
+      pbtn.title = '编辑小智提示词（图片识别 / 屏幕观察）'
+      pbtn.innerHTML = gearIcon
+      pbtn.style.cssText = 'order:-1;flex:none;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;cursor:pointer;'
+      pbtn.addEventListener('click', openPromptsPanel)
+      composer.insertBefore(pbtn, composer.firstChild)
+    }
+  }
+
+  // ---- ⚙ 提示词设置面板 ----
+  var promptsPanel = null
+  var promptsBusy = false
+  var promptsDraft = { image_prompt: '', observe_prompt: '', force_60: true }
+
+  function openPromptsPanel() {
+    if (promptsPanel && promptsPanel.isConnected) { closePromptsPanel(); return }
+    loadPrompts().then(function (cfg) {
+      if (cfg) promptsDraft = cfg
+      renderPromptsPanel()
+    }).catch(function () { renderPromptsPanel() })
+  }
+  function closePromptsPanel() {
+    if (promptsPanel && promptsPanel.isConnected) promptsPanel.remove()
+    promptsPanel = null
+  }
+
+  function loadPrompts() {
+    return fetch('/api/xiaozhi/prompts', { method: 'GET' })
+      .then(function (r) { return r.json() })
+      .then(function (j) { return j && j.ok ? { image_prompt: j.image_prompt || '', observe_prompt: j.observe_prompt || '', force_60: j.force_60 !== false } : null })
+  }
+
+  function renderPromptsPanel() {
+    closePromptsPanel()
+    promptsPanel = document.createElement('div')
+    promptsPanel.className = 'xz-prompts-panel'
+    promptsPanel.style.cssText = 'position:fixed;right:18px;top:70px;z-index:99998;width:380px;max-width:calc(100vw - 36px);background:#fff;border:1px solid rgba(0,0,0,0.12);border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,0.18);padding:16px 18px;font-size:13px;color:#1f2329;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;'
+    var head = document.createElement('div')
+    head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;'
+    head.innerHTML = '<strong style="font-size:14px;">小智提示词设置</strong>'
+    var xbtn = document.createElement('button')
+    xbtn.type = 'button'
+    xbtn.textContent = '✕'
+    xbtn.style.cssText = 'border:none;background:transparent;font-size:15px;cursor:pointer;color:#8a9099;padding:2px 6px;'
+    xbtn.addEventListener('click', closePromptsPanel)
+    head.appendChild(xbtn)
+    promptsPanel.appendChild(head)
+
+    // 图片识别提示词
+    promptsPanel.appendChild(makeField('图片识别前置提示词', '上传图片/截图提问/立即观察 未填问题时使用（发送给小智云端）', 'image_prompt'))
+    // 屏幕观察提示词
+    promptsPanel.appendChild(makeField('屏幕观察提示词', '随机屏幕观察（冷不丁评价）使用的提问', 'observe_prompt'))
+    // 60字限制
+    var forceRow = document.createElement('label')
+    forceRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin:10px 0 4px;cursor:pointer;'
+    var forceChk = document.createElement('input')
+    forceChk.type = 'checkbox'
+    forceChk.checked = promptsDraft.force_60 !== false
+    forceChk.style.cssText = 'width:15px;height:15px;cursor:pointer;'
+    forceRow.appendChild(forceChk)
+    forceRow.appendChild(document.createTextNode('自动追加「请用60字以内的简洁口语回答」（保证语音/气泡可读）'))
+    promptsPanel.appendChild(forceRow)
+
+    // 底部按钮
+    var foot = document.createElement('div')
+    foot.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:12px;'
+    var cancelBtn = document.createElement('button')
+    cancelBtn.type = 'button'
+    cancelBtn.textContent = '取消'
+    cancelBtn.style.cssText = btnStyle('#f2f3f5', '#1f2329')
+    cancelBtn.addEventListener('click', closePromptsPanel)
+    foot.appendChild(cancelBtn)
+    var saveBtn = document.createElement('button')
+    saveBtn.type = 'button'
+    saveBtn.textContent = '保存'
+    saveBtn.style.cssText = btnStyle('#3370ff', '#fff')
+    saveBtn.addEventListener('click', function () { savePrompts(saveBtn) })
+    foot.appendChild(saveBtn)
+    promptsPanel.appendChild(foot)
+
+    document.body.appendChild(promptsPanel)
+
+    function makeField(label, tip, key) {
+      var wrap = document.createElement('div')
+      wrap.style.cssText = 'margin-bottom:10px;'
+      var lab = document.createElement('div')
+      lab.style.cssText = 'font-weight:600;margin-bottom:4px;'
+      lab.textContent = label
+      wrap.appendChild(lab)
+      var tipEl = document.createElement('div')
+      tipEl.style.cssText = 'color:#8a9099;font-size:12px;margin-bottom:6px;'
+      tipEl.textContent = tip
+      wrap.appendChild(tipEl)
+      var ta = document.createElement('textarea')
+      ta.rows = 3
+      ta.value = promptsDraft[key] || ''
+      ta.dataset.key = key
+      ta.style.cssText = 'width:100%;box-sizing:border-box;border:1px solid #d0d3d9;border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit;resize:vertical;outline:none;'
+      ta.addEventListener('focus', function () { ta.style.borderColor = '#3370ff' })
+      ta.addEventListener('blur', function () { ta.style.borderColor = '#d0d3d9' })
+      wrap.appendChild(ta)
+      return wrap
+    }
+    function btnStyle(bg, fg) {
+      return 'border:none;border-radius:8px;padding:7px 16px;font-size:13px;cursor:pointer;background:' + bg + ';color:' + fg + ';'
+    }
+    return promptsPanel
+  }
+
+  function savePrompts(saveBtn) {
+    if (promptsBusy) return
+    var taList = promptsPanel ? promptsPanel.querySelectorAll('textarea') : []
+    var next = { image_prompt: '', observe_prompt: '', force_60: true }
+    taList.forEach(function (ta) { next[ta.dataset.key] = ta.value || '' })
+    var chk = promptsPanel ? promptsPanel.querySelector('input[type=checkbox]') : null
+    next.force_60 = chk ? chk.checked : true
+    promptsBusy = true
+    var oldText = saveBtn.textContent
+    saveBtn.textContent = '保存中…'
+    saveBtn.disabled = true
+    fetch('/api/xiaozhi/prompts', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(next),
+    })
+      .then(function (r) { return r.json() })
+      .then(function (j) {
+        if (j && j.ok) { promptsDraft = j; closePromptsPanel() }
+        else { alert('保存失败：' + ((j && j.detail) || '未知错误')) }
+      })
+      .catch(function (err) { alert('保存失败：' + err.message) })
+      .finally(function () {
+        promptsBusy = false
+        saveBtn.textContent = oldText
+        saveBtn.disabled = false
+      })
   }
 
   var fileInput = null
@@ -199,8 +341,7 @@
     try { interceptSend() } catch (e) { /* ignore */ }
     try { ensurePendingBar() } catch (e) { /* ignore */ }
     try { ensureBadge() } catch (e) { /* ignore */ }
-  }
-  var observer = new MutationObserver(keepAlive)
+  }  var observer = new MutationObserver(keepAlive)
   observer.observe(document.body, { childList: true, subtree: true })
   keepAlive()
   setInterval(keepAlive, 2000)

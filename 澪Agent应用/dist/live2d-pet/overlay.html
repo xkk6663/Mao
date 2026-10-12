@@ -129,7 +129,7 @@
       if (!shot2.ok || !shot2.image_base64) throw new Error('区域截图失败')
       const vision = await apiGet('/api/xiaozhi/vision-bubble', 'POST', {
         image_base64: shot2.image_base64,
-        question: '详细描述这张截图区域里的内容，包括窗口、文字和界面元素。',
+        question: '',  // 留空 → 后端使用可配置的"图片识别前置提示词"
       }, 60000)
       if (!vision.ok) throw new Error(vision.detail || '小智视觉失败')
       window.close()
