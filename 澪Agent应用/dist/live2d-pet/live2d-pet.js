@@ -1840,7 +1840,8 @@
     if (action === 'chat') await bridge.open_chat()
     if (action === 'size') sizePanel.hidden = false
     if (action === 'screenshot-ask') {
-      // 截图提问：截全屏 → 小智视觉分析 → 注入对话（文字+语音+口型联动）
+      // 截图提问：截全屏 → 小智视觉分析 → 直接显示气泡（后端已写 pet 历史+syslog）
+      // 禁止复述注入：vision 返回文本不再调 /say 当成用户消息重发
       showSpeechBubble('让我看看你的屏幕…', 3000)
       try {
         const shot = await request('/api/companion/screen-shot', { method: 'POST', body: '{}' })
@@ -1853,11 +1854,7 @@
           }),
         })
         if (!vision.ok) throw new Error(vision.detail || '小智视觉失败')
-        const say = await request('/api/xiaozhi/say', {
-          method: 'POST',
-          body: JSON.stringify({ text: '你看看我的屏幕：' + (vision.text || '') }),
-        })
-        if (!say.ok) throw new Error('注入失败')
+        showSpeechBubble(vision.text || '（分析完成）', 8000)
       } catch (err) {
         showSpeechBubble(`截图提问失败：${err.message}`, 5000)
       }
