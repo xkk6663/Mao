@@ -265,6 +265,15 @@ def _sapi_tts_wav(text: str) -> bytes:
     import comtypes.client
     import comtypes.gen.SpeechLib as SL
     sp = comtypes.client.CreateObject("SAPI.SpVoice")
+    # 优先选中文女声（Huihui/Yaoyao 等），音色更接近官方；系统无中文语音包则保持默认
+    try:
+        for v in sp.GetVoices():
+            desc = str(v.GetDescription())
+            if any(k in desc for k in ("Huihui", "Yaoyao", "YaoYao", "中文", "Chinese")):
+                sp.Voice = v
+                break
+    except Exception:  # noqa: BLE001
+        pass
     fs = comtypes.client.CreateObject("SAPI.SpFileStream")
     fs.Format.Type = SL.SpeechAudioFormatType.SAFT16kHz16BitMono
     fs.Open(r"C:\Users\xiao1\Mio\tts_tmp.wav", 3, False)

@@ -149,19 +149,17 @@
     fileInput.click()
   }
 
-  // ---- 粘贴图片（composer 区域）→ 暂存 ----
+  // ---- 粘贴图片 → 暂存（全局拦截：焦点不必在输入框内，防止粘贴图片无反应）----
   document.addEventListener('paste', function (e) {
     var composer = findComposer()
     if (!composer) return
-    if (!composer.contains(e.target)) return
     var items = (e.clipboardData || window.clipboardData)
     if (!items || !items.items) return
     for (var i = 0; i < items.items.length; i++) {
       var it = items.items[i]
       if (it.type && it.type.indexOf('image/') === 0) {
         var f = it.getAsFile && it.getAsFile()
-        if (f) { stageImage(f); e.preventDefault() }
-        return
+        if (f) { stageImage(f); e.preventDefault(); return }
       }
     }
   })
