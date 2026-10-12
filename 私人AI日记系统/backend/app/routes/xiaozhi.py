@@ -805,9 +805,18 @@ def _vision_explain_sync(image_base64: str, question: str) -> str:
     if not vision or not vision.get("url"):
         raise RuntimeError("小智视觉能力不可用（尚未建立小智连接或未下发 vision 能力）")
     try:
-        jpeg = base64.b64decode(image_base64)
+        import io as _io
+        from PIL import Image as _PILImage
+        raw = base64.b64decode(image_base64)
+        # 任意图片格式（PNG/WebP/BMP/JPEG）统一转 JPEG：官方视觉接口要求 image/jpeg，
+        # 前端聊天发图可能是 PNG，直接按 JPEG 上传会解码失败导致工具报"连不上"
+        img = _PILImage.open(_io.BytesIO(raw)).convert("RGB")
+        img.thumbnail((1280, 720))
+        buf = _io.BytesIO()
+        img.save(buf, "JPEG", quality=80)
+        jpeg = buf.getvalue()
     except Exception as exc:  # noqa: BLE001
-        raise ValueError("图片 base64 解码失败") from exc
+        raise ValueError(f"图片解析/转换失败（需为有效图片）: {exc}") from exc
     boundary = "----XZ" + uuid.uuid4().hex
     parts = [
         f'--{boundary}\r\nContent-Disposition: form-data; name="question"\r\n\r\n{question}\r\n'.encode("utf-8"),
