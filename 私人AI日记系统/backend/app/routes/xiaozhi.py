@@ -940,6 +940,7 @@ async def _handle_mcp_message(payload) -> dict | None:
                     })
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("MCP 工具 self.camera.explain 执行失败: %s", exc)
+                    await _syslog(f"⚠️ 视觉工具执行失败：{str(exc)[:80]}")  # 诊断：区分"没调工具"与"调了但失败"
                     return _mcp_result(req_id, {
                         "content": [{"type": "text", "text": f"截图/图片识别失败：{exc}"}],
                         "isError": True,
@@ -1005,10 +1006,11 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
         # 2. 暂存截图 → 注入触发语（官方 LLM 收到后会调 self.camera.explain 工具，
         #    工具回调里用这张暂存图做官方视觉识别，识别文本作为工具结果回灌 LLM）
         _pending_vision = {"image_base64": image_base64, "question": question}
-        # 触发语 = 看图引导 + 用户外置可编辑的提示词（image_prompt）：
-        # 引导词"请看看这张图片"让官方 LLM 稳定调用 self.camera.explain 工具（LLM 上下文里
-        # 没有图片实体，仅凭用户 prompt 不一定能判断要调工具），后接用户 prompt 控制语气/内容
-        trigger = f"请看看这张图片，{question}"
+        # 注入语音用短触发语「请看看这张图片」（9字）：官方 ASR 对本地 SAPI 合成音的长文本
+        # 识别质量差（实测 21 字触发语被识别成乱码 → LLM 不调工具）。用户的 image_prompt
+        # 不念给官方，而是作为视觉 API 的 question 传入（视觉模型按 prompt 生成对应风格的识别文本，
+        # 实测 observe_prompt 的调侃风格在识别文本中生效），LLM 基于识别文本组织回答。
+        trigger = "请看看这张图片"
         ok = await _inject_say(trigger, source="vision")
         if not ok:
             raise HTTPException(status_code=409, detail="注入失败：小智连接不可用")
@@ -1043,13 +1045,12 @@ async def xiaozhi_vision_bubble(payload: VisionRequest) -> dict:
         await _syslog("🖼️ 已发送屏幕/图片给小智分析…")
         # 2. 暂存截图（缺省现截全屏）→ 注入触发语 → 官方 LLM 调工具 → 官方回答 + 官方 TTS 音频
         _pending_vision = {"image_base64": image_base64 or None, "question": question}
-        # 触发语 = 看图/看屏幕引导 + 用户外置可编辑的提示词（observe_prompt/image_prompt）：
-        # 引导词确保官方 LLM 稳定调用 self.camera.explain 工具（仅凭用户 prompt 不一定触发），
-        # 后接用户 prompt 控制语气/内容（管理面板提示词框生效）
+        # 注入语音用短触发语（ASR 对 SAPI 合成音的长文本识别差，实测长触发语被识别成乱码
+        # 导致 LLM 不调工具）；用户 prompt 作视觉 API question（识别文本自带其风格，已实测生效）
         if str(payload.kind or "").strip() == "observe":
-            trigger = f"看看我的屏幕，{question}"
+            trigger = "看看我的屏幕"
         else:
-            trigger = f"请看看这张图片，{question}"
+            trigger = "请看看这张图片"
         ok = await _inject_say(trigger, source="vision")
         if not ok:
             raise HTTPException(status_code=409, detail="注入失败：小智连接不可用")
@@ -1352,6 +1353,10 @@ async def _pump_upstream(conn) -> None:
                             if j.get("type") == "stt":
                                 _last_stt_ts = time.time()
                                 _last_stt_text = str(j.get("text") or "")
+                                # 诊断（可移除）：显示官方 ASR 实际识别到的文本，
+                                # 验证注入语音是否被正确识别（区分 ASR 错 vs LLM 不调工具）
+                                if _last_stt_text:
+                                    await _syslog(f"🎙️ 识别到：{_last_stt_text[:60]}")
                                 # 机制级角色解耦：官方 STT 回传一律不写"你说"历史（含注入回声/官方误听），
                                 # "你说"只由浏览器真实输入（_relay_browser_message）写入
                             if j.get("type") == "llm":
