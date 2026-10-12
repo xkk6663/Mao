@@ -637,6 +637,24 @@ def _next_observe_trigger() -> str:
     return t
 
 
+async def _reset_upstream_connection() -> None:
+    """强制断开当前官方连接触发自动重连（新会话 = 干净 LLM 上下文）。
+    官方视觉工具只在"新会话"里稳定被调用：同一会话内第一次 tools/call 后，
+    后续"看图片"指令官方 LLM 认为图片已在上下文 → 不再调工具 → 回答"没收到图片"。
+    实测每次重启后端后第一张图正常、之后全部不调工具，即为此机制。"""
+    global _upstream
+    conn = _upstream
+    if conn is None:
+        return
+    _upstream = None
+    try:
+        await conn.close()
+    except Exception:  # noqa: BLE001
+        pass
+    # _pump_upstream 的 finally 会启动 _reconnect_loop（首延 1.5s）自动重连；
+    # _inject_say 的 wait_upstream(6s) 会等待重连完成后再注入
+
+
 async def _inject_say(text: str, wait_upstream: float = 6.0, source: str = "user", confirm_timeout: float = 15.0) -> bool:
     """注入入口：串行化锁（连续快速发消息时官方只响应一次，未加锁会互相 abort 导致吞消息）。"""
     async with _inject_lock:
@@ -1030,6 +1048,9 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
         #    工具回调里用这张暂存图做官方视觉识别，识别文本作为工具结果回灌 LLM）
         _pending_vision = {"image_base64": image_base64, "question": question}
         _last_vision_image = None  # 作废旧图副本：官方连续工具调用不得串到上一张图
+        # 每次发图强制重置官方会话（新上下文）：官方视觉工具只在干净会话里稳定被调用，
+        # 同一会话内第一次工具调用后，后续"看图片"指令官方不再调工具（实测"第一张通、后续全失败"）
+        await _reset_upstream_connection()
         # 注入语音用短触发语（ASR 对 SAPI 合成音的长文本识别差，实测长触发语被识别成乱码 → LLM 不调工具）。
         # 每次发图轮换不同触发语：官方 LLM 对重复的用户指令（同一会话内相同文本）会去重/不重复响应
         # （实测第一张图正常调工具，第二张起注入文本相同 → 官方识别了触发语却不调工具 → 回答"没收到图片"）
@@ -1069,6 +1090,7 @@ async def xiaozhi_vision_bubble(payload: VisionRequest) -> dict:
         # 2. 暂存截图（缺省现截全屏）→ 注入触发语 → 官方 LLM 调工具 → 官方回答 + 官方 TTS 音频
         _pending_vision = {"image_base64": image_base64 or None, "question": question}
         _last_vision_image = None  # 作废旧图副本：官方连续工具调用不得串到上一张图
+        await _reset_upstream_connection()  # 每次观察/提问强制重置会话，确保官方视觉工具可调用
         # 注入语音用短触发语（ASR 对 SAPI 合成音的长文本识别差，实测长触发语被识别成乱码
         # 导致 LLM 不调工具）；用户 prompt 作视觉 API question（识别文本自带其风格，已实测生效）。
         # 每次触发轮换不同短语：官方 LLM 对同一会话内重复的用户指令会去重/不重复响应
