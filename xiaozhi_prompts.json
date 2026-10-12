@@ -1,5 +1,5 @@
 {
   "image_prompt": "请详细描述这张图片里的内容。",
-  "observe_prompt": "用调侃的语气评价一下我现在在干的事情",
-  "force_60": true
+  "observe_prompt": "调侃的语气用一句话锐评现在画面的内容",
+  "force_60": false
 }

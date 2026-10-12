@@ -198,7 +198,7 @@ function openPetAdmin() {
   const sess = petAdminWindow.webContents.session
   sess.clearCache().then(() => sess.clearStorageData()).then(() => {
     // 桌宠管理窗口：对话入口 = 原版 ChatPage 改造版（小智历史+WS+音频+跟随对话按钮+会话抽屉，无缝衔接原版框架）
-    petAdminWindow.loadURL(`${API_BASE}/agent-app/?workspace=main&v=20261012i`)
+    petAdminWindow.loadURL(`${API_BASE}/agent-app/?workspace=main&v=20261012j`)
   })
   petAdminWindow.on('closed', () => { petAdminWindow = null })
 }

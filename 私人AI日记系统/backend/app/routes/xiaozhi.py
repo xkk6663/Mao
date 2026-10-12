@@ -1146,6 +1146,9 @@ async def _pump_upstream(conn) -> None:
                             _txt = str(j.get("text") or "")
                             if _txt:
                                 _tts_sentences.append(_txt)
+                                # 实时文本流：分句广播给前端聊天列表（边听边冒字），
+                                # tts stop 时后端拼接完整回复写历史，前端轮询自动替换临时项
+                                await _broadcast(json.dumps({"type": "pet_text", "text": _txt}, ensure_ascii=False))
                         if j.get("type") == "stt":
                             _last_stt_ts = time.time()
                             _last_stt_text = str(j.get("text") or "")
