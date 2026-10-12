@@ -1136,7 +1136,8 @@ async def _ensure_upstream() -> tuple[object | None, str | None]:
         _upstream = conn
         _session_wake_done = False   # 保留变量（不再用于唤醒，静默连接直接音频流注入）
         _tts_playing = False
-        await _syslog(f"🔗 小智已连接（会话 {_session_id}）")
+        # quiet: 连接成功/重连状态不写历史不广播（用户要求主聊天界面不显示重连/断开，避免刷屏占空间）
+        await _syslog(f"🔗 小智已连接（会话 {_session_id}）", quiet=True)
     except Exception as exc:  # noqa: BLE001
         logger.error("上游 hello 失败: %s", exc)
         try:
