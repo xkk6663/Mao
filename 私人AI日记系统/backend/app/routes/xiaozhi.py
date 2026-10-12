@@ -569,15 +569,17 @@ async def _send_audio_stream(conn, text: str) -> list[bytes] | None:
         logger.warning("TTS/编码失败: %s", exc)
         return None
     try:
-        await conn.send(json.dumps({"type": "listen", "state": "start", "mode": "auto", "session_id": _session_id}, ensure_ascii=False))
+        # conn.send 加 5s 超时：官方连接半死（TCP 活着但应用层无响应，无心跳感知）时 send 会
+        # 永久挂起 → 占用 _inject_lock → 后续所有对话/观察/提问排队阻塞（"卡住后其他功能也用不了"）
+        await asyncio.wait_for(conn.send(json.dumps({"type": "listen", "state": "start", "mode": "auto", "session_id": _session_id}, ensure_ascii=False)), timeout=5.0)
         await asyncio.sleep(0.3)
         for f in opus_frames:
-            await conn.send(f)
+            await asyncio.wait_for(conn.send(f), timeout=5.0)
         await asyncio.sleep(0.3)
-        await conn.send(json.dumps({"type": "listen", "state": "stop", "session_id": _session_id}, ensure_ascii=False))
+        await asyncio.wait_for(conn.send(json.dumps({"type": "listen", "state": "stop", "session_id": _session_id}, ensure_ascii=False)), timeout=5.0)
         return opus_frames
     except Exception as exc:  # noqa: BLE001
-        logger.warning("音频流发送失败: %s", exc)
+        logger.warning("音频流发送失败/超时: %s", exc)
         return None
 
 
@@ -656,9 +658,14 @@ async def _reset_upstream_connection() -> None:
 
 
 async def _inject_say(text: str, wait_upstream: float = 6.0, source: str = "user", confirm_timeout: float = 15.0) -> bool:
-    """注入入口：串行化锁（连续快速发消息时官方只响应一次，未加锁会互相 abort 导致吞消息）。"""
+    """注入入口：串行化锁（连续快速发消息时官方只响应一次，未加锁会互相 abort 导致吞消息）。
+    整体 30s 超时保护：底层卡住（半死连接/STT 无响应）时释放锁，后续注入不被永久阻塞。"""
     async with _inject_lock:
-        return await _inject_say_impl(text, wait_upstream, source, confirm_timeout)
+        try:
+            return await asyncio.wait_for(_inject_say_impl(text, wait_upstream, source, confirm_timeout), timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.warning("注入超时(30s)释放锁，跳过本次: %s", str(text)[:30])
+            return False
 
 
 async def _inject_segments(text: str, source: str = "vision") -> bool:
@@ -736,6 +743,8 @@ async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = 
         # 3. 音频流注入（不重试，避免相同音频被官方识别两次）
         frames = await _send_audio_stream(conn, text)
         if not frames:
+            # 发送失败/超时 → 官方连接可能半死（无心跳感知），主动断开触发自动重连
+            asyncio.create_task(_reset_upstream_connection())
             return False
         await _syslog(f"🎤 已发送语音「{str(text)[:40]}」等待官方识别…")
         # 4. 等 STT 确认（超时按场景：vision 8s 快速返回，普通注入 15s；不重试，避免相同音频被官方识别两次）
