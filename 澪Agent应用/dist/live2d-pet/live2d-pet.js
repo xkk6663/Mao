@@ -1856,7 +1856,7 @@
           }),
         })
         if (!vision.ok) throw new Error(vision.detail || '小智视觉失败')
-        showSpeechBubble(vision.text || '（分析完成）', 8000)
+        showSpeechBubble(vision.text || '（分析完成）', 6000)
       } catch (err) {
         showSpeechBubble(`截图提问失败：${err.message}`, 5000)
       }
