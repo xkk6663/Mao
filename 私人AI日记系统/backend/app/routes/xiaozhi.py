@@ -863,6 +863,24 @@ async def _reconnect_loop(initial_delay: float = 1.5) -> None:
         delay = min(8.0, delay * 1.5)
 
 
+async def _app_keepalive_loop(conn) -> None:
+    """应用层保活：官方云有应用层空闲超时（WebSocket ping/pong 只能保 TCP，无法阻止），
+    定期发 IoT 状态上报模拟真实设备行为，防止官方云 1005 主动断连。
+    IoT states 不触发对话/ASR/TTS，是官方协议里设备端的标准定期上报行为。"""
+    while True:
+        await asyncio.sleep(25)
+        try:
+            if _upstream is not conn:
+                return
+            await conn.send(json.dumps({
+                "type": "iot",
+                "states": {"battery": 100, "charging": True},
+                "session_id": _session_id,
+            }, ensure_ascii=False))
+        except Exception:  # noqa: BLE001
+            return
+
+
 async def _pump_upstream(conn) -> None:
     """上游消息持续转发给最近活跃订阅者；断线自动清理并允许重建。"""
     global _upstream, _last_tts_stop, _llm_text, _last_stt_ts, _last_stt_text, _tts_playing
@@ -1003,6 +1021,7 @@ async def _ensure_upstream() -> tuple[object | None, str | None]:
             pass
         return None, f"官方云会话建立失败: {exc}"
     asyncio.create_task(_pump_upstream(conn))
+    asyncio.create_task(_app_keepalive_loop(conn))
     return conn, None
 
 
