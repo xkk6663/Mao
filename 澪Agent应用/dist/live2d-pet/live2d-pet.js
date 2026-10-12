@@ -1644,6 +1644,8 @@
       updateSpeechBubblePosition()
       if (speechBubbleVisibleCount < characters.length) {
         speechBubbleTimer = window.setTimeout(revealNext, intervalMs)
+      } else if (Number(durationMs) > 0) {
+        speechBubbleHideTimer = window.setTimeout(hideSpeechBubble, Number(durationMs))
       }
     }
     revealNext()

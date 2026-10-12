@@ -769,7 +769,7 @@ function createWindow() {
   setMouseInteractive(false)
   try { mainWindow.webContents.session.clearCache() } catch (_e) {}
   try { mainWindow.webContents.session.setCacheSizeLimit(0) } catch (_e) {}
-  mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron&v=20261012-vision-v1`)
+  mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron&v=20261012-vision-v2`)
   log('window.load', `${API_BASE}/agent-app/live2d-pet/index.html`)
   // 启动后多次尝试修正跨屏虚拟边界（等渲染完成）
   ;[1200, 3200, 8000, 15000].forEach((ms) => setTimeout(applyMainWindowVirtualBounds, ms))
