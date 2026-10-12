@@ -131,12 +131,10 @@ async def _observe_loop() -> None:
                         )
                         # 观察截图写入会话历史（同步到聊天界面）
                         _chat_append("user", "image", text="（屏幕观察）", image_base64=img, tag="observe")
-                        # 观察评价写入历史 → 聊天界面显示为"她说"（AI 在评价屏幕）
+                        # 观察评价写入历史 → 聊天界面显示为"她说"气泡（AI 在评价屏幕）
                         _chat_append("pet", "text", text, tag="observe")
-                        # 官方音色链路：分析文本分段注入官方（官方 ASR 长音频截断→每段≤60字），
-                        # 官方 LLM 回答 + 官方 TTS 播放（官方音色，禁用本地 TTS）
-                        ok = await _inject_segments(text, "observe")
-                        _observe_last_result = ("官方音色已播放" if ok else "官方注入失败") + " · " + str(text)[:50]
+                        # 屏幕观察只显示文本气泡：不注入官方（不触发唤醒/官方"拜拜"；官方视觉仅返回文本）
+                        _observe_last_result = "已生成评价（文本气泡） · " + str(text)[:50]
                 except Exception as exc:  # noqa: BLE001
                     _observe_last_result = "观察失败：" + str(exc)[:60]
                     logger.warning("随机观察触发失败: %s", exc)
@@ -710,11 +708,10 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
         _chat_append("user", "image", text=question, image_base64=image_base64, tag="chat")
         # 2. 官方视觉分析
         text = await asyncio.to_thread(_vision_explain_sync, image_base64, question)
-        # 3. 分析文本写入历史 → 聊天界面显示为"她说"（AI 在描述图片，不是用户发言）
+        # 3. 分析文本写入历史 → 聊天界面显示为"她说"气泡（AI 在描述图片，不是用户发言）
         _chat_append("pet", "text", text, tag="vision")
-        # 4. 官方音色链路：分析文本分段注入官方（官方 ASR 长音频截断→每段≤60字），
-        #    官方 LLM 回答 + 官方 TTS 播放（官方音色，禁用本地 TTS）
-        await _inject_segments(text, "vision")
+        # 4. 图片识别只显示文本气泡：不注入官方（官方视觉仅返回文本；注入会触发唤醒/官方主动"拜拜"结束，
+        #    且官方无独立 TTS 无法朗读分析文本）——用户确认接受"返回文本显示气泡"
         return {"ok": True, "text": text}
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

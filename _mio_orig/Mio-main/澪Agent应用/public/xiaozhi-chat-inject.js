@@ -164,11 +164,28 @@
     }
   })
 
+  // ---- 调试角标：左下角小圆点，一眼看出注入状态（绿=输入区+按钮都OK，黄=输入区在但按钮未注入，红=没找到输入区）----
+  var badgeShown = false
+  function ensureBadge() {
+    if (document.getElementById('xz-inject-badge')) return
+    var composer = findComposer()
+    var btn = composer && composer.querySelector('.xz-img-btn')
+    var b = document.createElement('div')
+    b.id = 'xz-inject-badge'
+    b.title = '小智图片注入诊断 ' + 'v20261012d' + '（点此关闭）'
+    b.style.cssText = 'position:fixed;left:6px;bottom:6px;width:10px;height:10px;border-radius:50%;z-index:99999;cursor:pointer;box-shadow:0 0 0 1px rgba(0,0,0,0.2);'
+    b.style.background = (composer && btn) ? '#22c55e' : (composer ? '#eab308' : '#ef4444')
+    b.addEventListener('click', function () { b.remove() })
+    document.body.appendChild(b)
+    badgeShown = true
+  }
+
   // ---- 保活：Vue 重渲染后按钮/暂存条/拦截不丢失 ----
   function keepAlive() {
     ensureBtn()
     interceptSend()
     ensurePendingBar()
+    ensureBadge()
   }
   var observer = new MutationObserver(keepAlive)
   observer.observe(document.body, { childList: true, subtree: true })
