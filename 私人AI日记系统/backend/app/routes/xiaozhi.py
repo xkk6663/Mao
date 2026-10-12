@@ -113,7 +113,8 @@ _MCP_TOOLS = [
         "description": (
             "拍一张屏幕截图/查看一张图片并用视觉模型识别其中的内容。"
             "当用户让你\"看看屏幕\"、\"看看我的屏幕\"、\"看看这张图片/这张图\"、"
-            "\"描述屏幕上正在显示的内容\"、\"识别图片内容\"，或询问屏幕上正在做什么时调用。"
+            "\"描述屏幕上正在显示的内容\"、\"识别图片内容\"、\"评价/锐评屏幕或画面上的内容\"、"
+            "\"看看我正在做什么\"，或询问屏幕上正在做什么、当前画面是什么时调用。"
             "参数 question: 想针对截图/图片问的问题（可选，缺省自动描述内容）。"
         ),
         "inputSchema": {
@@ -131,6 +132,11 @@ _MCP_TOOLS = [
 # 用户手动触发（截图提问/立即观察/聊天发图）后待工具回调使用的截图：
 # {"image_base64": str|None(缺省则工具回调时现截全屏), "question": str(用户配置的识别提示词)}
 _pending_vision: dict | None = None
+
+
+class _UpstreamGoodbye(Exception):
+    """官方云主动结束会话（如 LLM 说"拜拜"后官方发 goodbye）。
+    捕获后立即断开并重连，保持长连接待命，缩短用户感知的断连空窗。"""
 
 
 class VisionRequest(BaseModel):
@@ -974,7 +980,9 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
         # 2. 暂存截图 → 注入触发语（官方 LLM 收到后会调 self.camera.explain 工具，
         #    工具回调里用这张暂存图做官方视觉识别，识别文本作为工具结果回灌 LLM）
         _pending_vision = {"image_base64": image_base64, "question": question}
-        trigger = "请看看这张图片并描述内容。"
+        # 触发语 = 用户外置可编辑的提示词（image_prompt，管理面板可改），
+        # 不再是写死文案——AI 的语气/内容完全由提示词框决定
+        trigger = question
         ok = await _inject_say(trigger, source="vision")
         if not ok:
             raise HTTPException(status_code=409, detail="注入失败：小智连接不可用")
@@ -1009,10 +1017,9 @@ async def xiaozhi_vision_bubble(payload: VisionRequest) -> dict:
         await _syslog("🖼️ 已发送屏幕/图片给小智分析…")
         # 2. 暂存截图（缺省现截全屏）→ 注入触发语 → 官方 LLM 调工具 → 官方回答 + 官方 TTS 音频
         _pending_vision = {"image_base64": image_base64 or None, "question": question}
-        if str(payload.kind or "").strip() == "observe":
-            trigger = "看看我的屏幕，评价一下我屏幕上正在做的事。"
-        else:
-            trigger = "请看看这张图片并描述内容。"
+        # 触发语 = 用户外置可编辑的提示词（observe_prompt/image_prompt，管理面板可改），
+        # 不再是写死文案——AI 的语气/内容完全由提示词框决定
+        trigger = question
         ok = await _inject_say(trigger, source="vision")
         if not ok:
             raise HTTPException(status_code=409, detail="注入失败：小智连接不可用")
@@ -1190,8 +1197,8 @@ async def _sub_writer(ws: WebSocket) -> None:
             return
 
 
-async def _reconnect_loop(initial_delay: float = 3.0) -> None:
-    """上游断开后自动重连（退避 3s→15s），成功后广播 hello 让前端恢复。"""
+async def _reconnect_loop(initial_delay: float = 1.5) -> None:
+    """上游断开后自动重连（退避 1.5s→15s），成功后广播 hello 让前端恢复。"""
     delay = initial_delay
     while True:
         await asyncio.sleep(delay)
@@ -1219,6 +1226,13 @@ async def _pump_upstream(conn) -> None:
                 # 无订阅者时只解析 MCP/历史，不转发
                 try:
                     j = json.loads(msg)
+                except Exception:  # noqa: BLE001
+                    continue
+                # 官方主动结束会话（goodbye）：穿透到外层触发断开+快速重连，保持长连接
+                if j.get("type") == "goodbye":
+                    logger.info("收到官方 goodbye，主动断开快速重连（保持长连接）")
+                    raise _UpstreamGoodbye()
+                try:
                     if j.get("type") == "mcp":
                         _capture_vision_from_mcp(j.get("payload"))
                         resp = await _handle_mcp_message(j.get("payload"))
@@ -1267,46 +1281,54 @@ async def _pump_upstream(conn) -> None:
                 else:
                     try:
                         j = json.loads(msg)
-                        if j.get("type") == "mcp":
-                            _capture_vision_from_mcp(j.get("payload"))
-                            resp = await _handle_mcp_message(j.get("payload"))
-                            if resp:
-                                await _send_mcp_response(conn, resp)
-                        if j.get("type") == "tts" and j.get("state") == "stop":
-                            _last_tts_stop = time.time()
-                            _tts_playing = False
-                            await _syslog("🔊 小智说话结束")
-                            _full = "".join(_tts_sentences).strip()
-                            if not _full:
-                                _full = (_pending_llm_text or "").strip()
-                            if _full:
-                                _maybe_write_llm_reply(_full)
-                            _tts_sentences = []
-                            _pending_llm_text = ""
-                        if j.get("type") == "tts" and j.get("state") == "start":
-                            _tts_playing = True
-                            await _syslog("🗣️ 小智开始说话…")
-                        if j.get("type") == "tts" and j.get("state") == "sentence_start":
-                            _txt = str(j.get("text") or "")
-                            if _txt:
-                                _tts_sentences.append(_txt)
-                                # 实时文本流：分句广播给前端聊天列表（边听边冒字），
-                                # tts stop 时后端拼接完整回复写历史，前端轮询自动替换临时项
-                                await _broadcast(json.dumps({"type": "pet_text", "text": _txt}, ensure_ascii=False))
-                        if j.get("type") == "stt":
-                            _last_stt_ts = time.time()
-                            _last_stt_text = str(j.get("text") or "")
-                            # 机制级角色解耦：官方 STT 回传一律不写"你说"历史（含注入回声/官方误听），
-                            # "你说"只由浏览器真实输入（_relay_browser_message）写入
-                        if j.get("type") == "llm":
-                            _pending_llm_text = str(j.get("text") or "")
-                            _llm_text = _pending_llm_text
-                        if j.get("type") in ("llm", "tts", "error", "listen", "abort"):
-                            logger.info("上游消息 type=%s", j.get("type"))
-                        # 官方 STT 回传**不广播**给前端（含注入回声/官方误听）——否则聊天窗口会把
-                        # 官方识别文本渲染成"你说[分析]"（复述发送一次）。前端"你说"只来自浏览器真实输入。
-                        if j.get("type") == "stt":
-                            continue
+                    except Exception:  # noqa: BLE001
+                        j = None
+                    # 官方主动结束会话（goodbye）：穿透到外层触发断开+快速重连，保持长连接
+                    if isinstance(j, dict) and j.get("type") == "goodbye":
+                        logger.info("收到官方 goodbye，主动断开快速重连（保持长连接）")
+                        raise _UpstreamGoodbye()
+                    try:
+                        if isinstance(j, dict):
+                            if j.get("type") == "mcp":
+                                _capture_vision_from_mcp(j.get("payload"))
+                                resp = await _handle_mcp_message(j.get("payload"))
+                                if resp:
+                                    await _send_mcp_response(conn, resp)
+                            if j.get("type") == "tts" and j.get("state") == "stop":
+                                _last_tts_stop = time.time()
+                                _tts_playing = False
+                                await _syslog("🔊 小智说话结束")
+                                _full = "".join(_tts_sentences).strip()
+                                if not _full:
+                                    _full = (_pending_llm_text or "").strip()
+                                if _full:
+                                    _maybe_write_llm_reply(_full)
+                                _tts_sentences = []
+                                _pending_llm_text = ""
+                            if j.get("type") == "tts" and j.get("state") == "start":
+                                _tts_playing = True
+                                await _syslog("🗣️ 小智开始说话…")
+                            if j.get("type") == "tts" and j.get("state") == "sentence_start":
+                                _txt = str(j.get("text") or "")
+                                if _txt:
+                                    _tts_sentences.append(_txt)
+                                    # 实时文本流：分句广播给前端聊天列表（边听边冒字），
+                                    # tts stop 时后端拼接完整回复写历史，前端轮询自动替换临时项
+                                    await _broadcast(json.dumps({"type": "pet_text", "text": _txt}, ensure_ascii=False))
+                            if j.get("type") == "stt":
+                                _last_stt_ts = time.time()
+                                _last_stt_text = str(j.get("text") or "")
+                                # 机制级角色解耦：官方 STT 回传一律不写"你说"历史（含注入回声/官方误听），
+                                # "你说"只由浏览器真实输入（_relay_browser_message）写入
+                            if j.get("type") == "llm":
+                                _pending_llm_text = str(j.get("text") or "")
+                                _llm_text = _pending_llm_text
+                            if j.get("type") in ("llm", "tts", "error", "listen", "abort"):
+                                logger.info("上游消息 type=%s", j.get("type"))
+                            # 官方 STT 回传**不广播**给前端（含注入回声/官方误听）——否则聊天窗口会把
+                            # 官方识别文本渲染成"你说[分析]"（复述发送一次）。前端"你说"只来自浏览器真实输入。
+                            if j.get("type") == "stt":
+                                continue
                     except Exception:  # noqa: BLE001
                         pass
                     await _broadcast(msg)   # 文本广播（所有订阅者收同一份消息）
