@@ -134,6 +134,10 @@
 | 模型下载缓存 `l2d_downloads\` `l2d_official_models\` | ✅ 已删除 | 前端/后端无引用 |
 | opus 录音包 `opus-recorder-pkg\` `opus-recorder.tgz` | ✅ 已删除 | 无引用 |
 | 小智调研源码 `xzclient_src\` | ✅ 已删除 | 调研完成 |
+| 根目录历史探测输出 `_o5~_o12/_o20.txt` | ✅ 已删除 | 临时排查输出（.gitignore 已覆盖 `_*.txt`） |
+| 根目录探测脚本 `_probe_del5.py` | ✅ 已删除 | git rm 移除 + `.gitignore` 新增 `_probe*.py` 防再入库 |
+| 启动诊断 `boot_diag.txt` | ✅ 已删除 | 一次性诊断输出（.gitignore 新增 `boot_diag.txt`） |
+| 临时音频 `tts_tmp.wav` | ✅ 已删除 | 本地 TTS 已禁用，无引用 |
 
 **保留（别删）**：
 - `_mio_orig\`（上游原版发布备份，120MB，只读参照）

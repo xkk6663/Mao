@@ -1,98 +1,272 @@
-﻿# Mio
+﻿# Mio 桌宠 × 小智 · 免费开源 Live2D 看板娘
 
-[English](README_EN.md) · [下载 Windows 版](https://github.com/ochiru520/Mio/releases/latest) · [反馈问题](https://github.com/ochiru520/Mio/issues)
+> 把开源桌宠 Mio 与**小智 AI 官方免费云**融合：一个完全本地运行、不花一分 API 钱的 Live2D 桌宠。
+> 能说话（官方音色）、能看屏、能聊天、会换装，全部免费。
 
-Mio 是 Windows 上的个人 AI 伙伴与 Agent。它把对话、长期记忆、日记、语音、QQ 和桌宠放在同一套本地数据里，也提供处理文件、生成图片与视频的任务工作台。
+---
 
-**公开版本：0.3.1 · 预览版 · Windows x64。** 普通用户下载安装程序即可，不需要自行安装 Python 或 Node.js。云端模型需要你自己的 API；本地模型和其他扩展能力按需配置。
+## 一、这是什么
 
-## 从哪里开始
+本项目 fork 自 [ochiru520/Mio](https://github.com/ochiru520/Mio)（Windows 个人 AI 桌宠），在其基础上：
 
-1. 从 [Releases](https://github.com/ochiru520/Mio/releases/latest) 下载 `Mio-0.3.1-Windows-x64-Setup.exe`，校验旁边的 SHA-256 文件后运行。
-2. 在首次向导中确认环境、名字与称呼，添加模型供应商。可以先跳过模型配置，稍后到“设置 > 模型与 API”完成。
-3. 发起一次对话，再按需要开启记忆、日记、QQ、语音或桌宠。启用云端能力前确认供应商价格。
-4. 在“设置 > 数据与隐私”建立完整备份。
+- **保留原版 Live2D 桌宠能力**：PixiJS + Cubism 4 渲染、拖拽、右键菜单、模型加载/切换、说话口型与表情联动、多屏移动。
+- **去掉原版臃肿功能**：Agent 工作台、QQ 对话、原版付费模型供应商等与桌宠无关的界面与链路已阉割。
+- **接入小智官方免费云**：通过小智的免费 test-token 通道（`wss://api.tenclass.net/xiaozhi/v1/`）实现：
+  - 文字对话（长连接、免唤醒）
+  - **官方音色语音**（云端 ASR→LLM→TTS，桌宠本体播放并同步口型）
+  - **图片识别 / 屏幕观察**（官方视觉分析，纯文本气泡呈现，提示词可自定义）
+  - 对话历史持久化与通信链路全可视化（MIO 管理窗口主聊天界面）
+- **免费**：不填任何模型 API Key。视觉、语音、对话全部由小智官方免费云提供。
 
-安装要求：Windows 11 x64 是主要验证环境；桌面主窗口需要 [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。模型权重、QQ/NapCat、自定义角色资产和参考音频不随主安装包提供。
+---
 
-## 可以做什么
+## 二、功能总览
 
-| 入口 | 当前能力 |
+| 能力 | 说明 | 入口 |
+|---|---|---|
+| 文字对话 | 长连接免唤醒，发送即答，官方音色语音播报 + 口型同步 | 桌宠右键「打开/关闭对话窗口」或双击桌宠 |
+| 语音播放 | 云端 TTS 音频流，桌宠本体播放（防止多个窗口声音叠加） | 对话自动播放 |
+| 图片识别 | 上传/粘贴图片 → 小智官方视觉分析 → 文本气泡（不唤醒、不复述） | 主聊天输入框 📷 / 横条对话框 📷 |
+| 截图提问 | 截取屏幕任意区域 → 小智识别画面内容并吐槽 | 右键「截图提问」/ 全局快捷键 `Ctrl+Shift+S` |
+| 屏幕观察 | 随机时间种子自动截屏，让桌宠点评你在做什么 | 桌宠管理 → 屏幕观察 |
+| 模型管理 | 导入 Cubism 模型、切换形象、调整大小（80%~240%） | 桌宠右键「调整大小」/ 桌宠管理 |
+| 对话历史 | 主聊天界面保存全部来往记录，重开不丢 | 打开 MIO → 主聊天界面 |
+| 提示词配置 | 图片识别/屏幕观察的前置提示词可在线编辑 | 小智状态栏 →「提示词设置」 |
+| 设备绑定 | 机器码（MAC 后 6 位）与连接状态实时显示 | 小智状态栏 →「机器码」 |
+
+---
+
+## 三、项目架构
+
+```
+┌───────────────────────────── 本地（你的电脑）─────────────────────────────┐
+│                                                                          │
+│  ┌─ 前端：Electron（澪Agent应用/live2d-desktop/main.js）──────────────┐  │
+│  │  · 桌宠本体    live2d-pet（PixiJS + Cubism4 渲染 Live2D）          │  │
+│  │  · 对话浮窗    xiaozhi-chat.html（横条快速输入 460×178）           │  │
+│  │  · MIO 管理窗  /agent-app（私人空间主聊天 + 模型管理 + 屏幕观察）  │  │
+│  │  · 截图选区    overlay.html（沉浸式区域选择）                      │  │
+│  └────────────────────────────────────────────────────────────────────┘  │
+│                              ▲ HTTP / WebSocket                          │
+│  ┌─ 后端：FastAPI（私人AI日记系统/backend，端口 8000）────────────────┐  │
+│  │  routes/xiaozhi.py：WS 长连接代理 / say / vision / observe /        │  │
+│  │                     prompts / status（机器码）/ chat-history        │  │
+│  │  routes/companion.py：截图 / 窗口拓扑 / 音频体检 / 桌宠状态          │  │
+│  └────────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────┘
+                              │ wss://api.tenclass.net/xiaozhi/v1/
+                              ▼
+┌───────────────────────────── 小智官方免费云 ─────────────────────────────┐
+│  · ASR 语音识别  →  LLM 对话  →  TTS 官方音色（音频流下发）              │
+│  · 视觉分析（vision/explain HTTP 端点，返回文本）                        │
+│  · test-token 通道，无需付费 API Key                                     │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+**关键设计（踩坑后定型的架构决策）：**
+
+1. **音频只在桌宠本体播放**：对话窗（role=chat）只收文本，音频由桌宠（role=main）播放，从根上避免"多窗口声音叠加"。
+2. **图片识别纯文本气泡**：官方视觉端点只返回文本（协议如此，官方 API 签名即 `char* out_buf`）。分析结果直接显示气泡，**不注入对话、不本地 TTS、不复述**——避免唤醒词/拜拜/音色不对等副作用。
+3. **长连接免唤醒**：后端保持一条到官方云的长连接（`ping_interval=None`，官方协议无心跳，禁用库 ping 以兼容官方 LB），重连自动且静默（不进主聊天刷屏）。
+4. **角色机制级解耦**：官方 STT 回传文本一律不写"你说"历史，"你说"只来自浏览器真实输入，"她说"只来自 AI 输出，杜绝信息错乱。
+5. **前端直接改 dist 产物**：原版是 Vite 构建的压缩 SPA，本项目采用"dist 即源码"方式直接修改压缩产物（`node --check` 校验），不再走构建流程。
+
+---
+
+## 四、目录结构
+
+```
+C:\Users\xiao1\Mio
+├── 澪Agent应用\                    # 前端
+│   ├── live2d-desktop\             # Electron 主进程（窗口/菜单/快捷键/截图）
+│   │   ├── main.js                 # 4 个窗口 + 托盘菜单 + 全局快捷键 + 副屏边界
+│   │   └── preload*.js             # 各窗口安全桥
+│   ├── dist\                       # 构建产物（本项目直接修改的"源码"）
+│   │   ├── index.html              # MIO 管理窗口入口（/agent-app）
+│   │   ├── assets\                 # SPA 分片（index-*.js 主入口、ChatPage 对话页等）
+│   │   ├── xiaozhi-chat-inject.js  # 主聊天图片暂存注入（📷 + 粘贴）
+│   │   └── live2d-pet\             # 桌宠本体
+│   │       ├── live2d-pet.js       # 渲染/右键菜单/模型/气泡/小智事件
+│   │       ├── pet-xz-audio.js     # 小智音频流解码播放 + 口型同步
+│   │       ├── overlay.html        # 截图选区覆盖层
+│   │       ├── xiaozhi\xiaozhi-chat.html/.js  # 横条对话浮窗
+│   │       ├── models\             # Live2D 模型（导入模型放这里）
+│   │       └── libs\               # pixi / cubism4 渲染库
+│   └── src\ public\ desktop\ scripts\   # ⚠ 原版上游源码与发布工具链（运行时不用，可后续精简）
+│
+├── 私人AI日记系统\backend\         # 后端（FastAPI）
+│   ├── app\main.py                 # 应用入口（挂载全部路由）
+│   ├── app\routes\xiaozhi.py       # ★ 小智核心：WS 代理/say/vision/observe/prompts/status
+│   ├── app\routes\companion.py     # 桌宠状态/截图/窗口/音频体检
+│   └── requirements.txt             # 后端依赖
+│
+├── start_mio.ps1                   # ★ 一键启动（后端 + Electron，脱离控制台）
+├── xiaozhi_device.json             # 小智设备身份（mac_address + client_id）
+├── xiaozhi_prompts.json            # 图片/观察提示词配置
+├── xiaozhi_chat_history.json       # 对话历史持久化（运行数据）
+├── status.json                     # 运行状态（运行数据）
+├── SRC-MAP-源码地图.md              # 界面导航手册（改代码先看它）
+└── _mio_orig\                      # 上游原版发布备份（只读参照）
+```
+
+---
+
+## 五、从零开始上手
+
+### 0. 环境要求
+
+| 项 | 要求 |
 |---|---|
-| 对话 | 多会话，多个模型供应商，Responses / Chat Completions，附件，思考档位，Token 与费用记录 |
-| 记忆 | 查看来源、人工编辑与确认、处理冲突、停用和恢复历史版本 |
-| 日记 | 每日日记与回顾、周记、月记、成长统计、Markdown 导出；月记显示完整月份和来源日记 |
-| Agent 工作台 | 任务执行与状态追踪，授权范围内的文件工具，ComfyUI 工作流和已配置生成服务，失败恢复与回执核对 |
-| 环境与模型 | 检查、安装、验证和卸载受管可选模型；卸载前显示范围，外部复用资源在原位置管理 |
-| 桌宠与语音 | 独立 Live2D 窗口，动作和表情，Genie 本地音色，faster-whisper 转写及语音互动 |
-| QQ 与观察 | NapCat / OneBot 私聊和群聊；按需启用屏幕、窗口及系统声音观察 |
-| 数据与更新 | 本地 SQLite、完整备份恢复、迁移检查、签名更新清单、下载进度和确认安装 |
+| 系统 | Windows 10/11 x64 |
+| PowerShell | **PowerShell 7（pwsh）**，脚本统一用 `pwsh.exe` 执行 |
+| Python | 3.10+（后端运行于 `私人AI日记系统\backend\.venv`） |
+| Node.js | 18+（Electron 运行于 `澪Agent应用\live2d-desktop\node_modules`） |
+| 网络 | 能访问小智官方云（`api.tenclass.net`） |
 
-QQ、主动联系、自动记录、联网和观察等能力需要分别配置。已安装文件、已配置地址、已连接服务和通过真实调用是不同状态；请以界面实际检测结果为准。
-
-## 0.3.1 的变化
-
-- 新增可选模型卸载，保护共用环境、个人资料和自定义资源。
-- 修复中文 Windows 上的 Genie / Whisper 验证编码及 Genie 资源路径问题。
-- 修复任务重试关联、人工记忆保护、沉睡记忆继续进入提示、验证缓存和诊断脱敏问题。
-- 整理 Agent 首页、模型选择、更新页面、周记摘要及记录空态。
-- 修复月记受首页最近日记窗口影响而漏显示月份、篇数不准的问题。
-
-0.3.0 曾下架；请使用本次修复版。0.2.1 及更早版本需先手动安装 0.3.1，随后可使用应用内更新。详情见[使用与升级指南](私人AI日记系统/文档/使用与升级指南.md)和[版本说明](私人AI日记系统/文档/版本说明.md)。
-
-## 数据、隐私与费用
-
-数据保存在本机选择的数据目录，升级时沿用原目录。模型密钥通过 Windows DPAPI 加密，只对当前 Windows 用户有效；备份不等于跨机器自动恢复密钥。
-
-使用云端模型、搜索或云端视觉时，完成请求所需的内容会发送给你选择的服务。本地优先不代表全部离线。更新检查只读取发布服务；屏幕、系统声音、QQ 和主动行为可单独关闭，也可使用隐私总控暂停。
-
-公开仓库不包含作者的聊天、日记、私人角色设定、API Key、QQ 登录态、训练音频或私人模型。费用展示依赖供应商可提供的信息，不能替代供应商账单。
-
-## 从源码运行
-
-开发环境：Windows x64、Python 3.10（发布构建使用 3.10.11）、Node.js 22.12+。源码 ZIP 不需要 Git；构建安装器另需 Inno Setup 6。
-
-先构建界面：
+### 1. 安装依赖
 
 ```powershell
-cd .\澪Agent应用
-npm ci
-npm run build
+# 后端
+cd 私人AI日记系统\backend
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+
+# 前端 Electron
+cd ..\..\澪Agent应用\live2d-desktop
+npm install
 ```
 
-再启动后端：
+### 2. 配置小智（关键步骤）
+
+小智免费接入走 **test-token 通道**，不需要任何付费 API Key。需要三步：
+
+**① 创建设备身份**：在小智控制台（https://xiaozhi.me/console）注册/登录，按官方文档创建设备，取得设备的 `mac_address` 与 `client_id`，写入项目根目录 `xiaozhi_device.json`：
+
+```json
+{
+  "mac_address": "3C:DC:75:C3:11:13",
+  "client_id": "cf7e8ad1-950f-4efb-8125-f473baa5d249"
+}
+```
+
+**② 确认设备绑定**：启动后端后访问 `GET /api/xiaozhi/status`，应返回：
+
+```json
+{
+  "ok": true, "bound": true,
+  "mac": "3c:dc:75:c3:11:13",
+  "client_id": "cf7e8ad1-...",
+  "machine_code": "C31113",
+  "connected": true, ...
+}
+```
+
+- `bound: true` 表示设备已绑定（`xiaozhi_device.json` 中无 `activation` 字段即为已绑定）；
+- `machine_code` 是 **六位机器码**（取 MAC 十六进制后 6 位），用于在小智控制台核对设备；
+- `connected: true` 表示与官方云的长连接已建立。
+
+**③ 绑定状态可视化**：打开 MIO 管理窗口 → 右侧「小智状态栏」，可实时查看连接状态、会话 ID、机器码与完整 MAC。
+
+### 3. 启动桌宠
 
 ```powershell
-cd ..\私人AI日记系统\backend
-py -3.10 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-Copy-Item .env.example .env
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+pwsh -NoProfile -ExecutionPolicy Bypass -File start_mio.ps1
 ```
 
-打开 `http://127.0.0.1:8000/agent-app/`。开发时可在桌面目录运行 `npm run dev`；完整 Windows 构建使用 `构建Windows应用.ps1`。后端只应监听本机，不要直接暴露到公网。
+脚本自动完成：启动/检测后端（uvicorn :8000）→ 拉起 Electron 桌宠窗口。所有子进程以 `CreateNoWindow` 方式启动，**关闭启动终端不影响桌宠运行**（启动窗口会自动关闭）。
 
-```text
-Mio/
-├─ 私人AI日记系统/   FastAPI、SQLite、记忆、记录与服务
-├─ 澪Agent应用/      Vue、Windows 启动器、更新器与 Live2D
-├─ README.md
-└─ README_EN.md
-```
+**开机自启**：运行 `私人AI日记系统\工具\安装开机自启动.ps1`（写入注册表 `HKCU\...\Run` → `Mio桌宠自启动`）。
 
-中文子目录名称保留用于兼容构建和旧路径。公开版本号与私人开发版本号属于不同通道，不按数字大小互相升级。
+### 4. 日常使用
 
-## 验证与限制
+**桌宠右键菜单：**
 
-后端、桌面启动器／更新器、前端与 Live2D 都有自动化测试，CI 在 Windows 执行。测试命令和贡献要求见 [CONTRIBUTING](CONTRIBUTING.md)。本机安装、旧数据保留和隔离场景验收不能覆盖所有显卡、声卡、供应商或长期使用情况。
+| 菜单项 | 作用 |
+|---|---|
+| 打开/关闭对话窗口 | 横条快速输入浮窗（460×178），回复由桌宠气泡+语音呈现；点「历史记录」打开主聊天 |
+| 调整大小 | 滑条调整桌宠尺寸（80%~240%） |
+| 截图提问 | 截取屏幕 → 小智识别 → 气泡显示分析（全局快捷键 `Ctrl+Shift+S` 可框选区域） |
+| 隐藏说话气泡 | 切换气泡显示 |
+| 打开 Mio | 打开 MIO 管理窗口（主聊天界面） |
+| 关闭桌宠 | 退出桌宠 |
 
-当前仍是预览版。另一台干净 Windows 首装、真人 QQ／麦克风、第三方服务的长任务和跨机器使用需要持续反馈。安装包未做 Windows 代码签名；请从官方 Release 下载并核对校验文件。
+**MIO 管理窗口（主聊天界面）：**
+- 与小智的所有来往记录（你说/她说/系统状态）实时同步，历史持久化；
+- 输入框支持文字、图片（📷 选择 / 直接粘贴，图片先暂存再发送）；
+- 右侧「小智状态栏」：连接状态、机器码、提示词设置；
+- 「模型管理 / 屏幕观察 / 体检」在桌宠管理页。
 
-## 文档与许可
+**导入新模型**：把 Cubism 3/4 模型目录放进 `澪Agent应用\dist\live2d-pet\models\`，然后在桌宠管理页切换形象。
 
-- [使用与升级指南](私人AI日记系统/文档/使用与升级指南.md)
-- [版本说明](私人AI日记系统/文档/版本说明.md)
-- [隐私说明](私人AI日记系统/文档/隐私说明.md) · [安全说明](SECURITY.md)
-- [资产与第三方许可](私人AI日记系统/文档/资产与第三方许可.md)
+### 5. 常用后端接口
 
-原创代码和文档采用 [MIT](LICENSE)。Live2D、模型权重、音色、角色图片及用户导入资产遵循各自许可。提交 Issue 时请只附脱敏诊断和复现步骤，不要上传数据库、密钥或私人对话。
+| 接口 | 作用 |
+|---|---|
+| `WS /api/xiaozhi/ws?role=main\|chat` | 小智官方云长连接（main=桌宠播音频，chat=对话窗收文本） |
+| `POST /api/xiaozhi/say` | 文字对话（写历史 + 注入官方音频流） |
+| `POST /api/xiaozhi/vision` | 图片识别（纯文本返回） |
+| `POST /api/xiaozhi/vision-bubble` | 截图提问/屏幕观察（分析文本广播到桌宠气泡） |
+| `GET /api/xiaozhi/chat-history` | 会话历史 |
+| `GET /api/xiaozhi/status` | 连接状态 + 机器码 |
+| `GET/PUT /api/xiaozhi/prompts` | 提示词配置读写 |
+| `GET/POST /api/xiaozhi/observe/status\|start\|stop` | 屏幕观察任务 |
+| `GET /api/companion/status` | 桌宠状态 |
+| `POST /api/companion/screen-shot` | 截屏 |
+
+---
+
+## 六、常见问题
+
+| 问题 | 说明 / 处理 |
+|---|---|
+| 对话/图片识别没声音 | 官方视觉端点**协议上只返回文本**（不附带音频）；音频只能来自对话链路 TTS。当前设计为图片识别走文本气泡，对话语音正常。 |
+| 经常断连重连 | 官方免费云会对空闲连接主动断开（1005）。本项目已禁用协议层 ping（官方无心跳协议），重连自动静默进行，不影响使用。 |
+| MIO 管理窗口显示旧界面（红点角标） | Electron 缓存了旧页面。管理窗口每次打开前自动清缓存；若仍异常，确认 URL 版本参数已更新（`?v=...`）。 |
+| 桌宠跑到副屏找不回来 | 桌宠支持跨屏任意位置（含副屏顶格），拖拽即可拉回；多屏边界由 `live2d-desktop/main.js` 按真实显示器拓扑处理。 |
+| 模型加载失败 | 确认模型目录在 `dist\live2d-pet\models\` 下且为 Cubism 3/4 格式（`.model3.json`）。 |
+| 启动脚本报错 | 统一用 `pwsh` 执行；确认 `.venv` 与 `node_modules` 已安装（见第五节）。 |
+
+---
+
+## 七、参考项目与小智资源
+
+### 参考/上游仓库
+
+| 仓库 | 用途 |
+|---|---|
+| [ochiru520/Mio](https://github.com/ochiru520/Mio) | 本项目上游：Mio 桌宠（Electron + Vue + FastAPI） |
+| [pixijs/pixijs](https://github.com/pixijs/pixijs) | Live2D 渲染底层（WebGL 渲染器） |
+| [guansss/pixi-live2d-display](https://github.com/guansss/pixi-live2d-display) | Live2D 模型加载/渲染/交互库 |
+| [78/xiaozhi-esp32](https://github.com/78/xiaozhi-esp32) | 小智官方固件（协议/握手/音频帧参照） |
+| [78/xiaozhi-esp32-server](https://github.com/78/xiaozhi-esp32-server) | 小智服务端实现（视觉/LLM/TTS 管线参照） |
+| [huang-jun-sen/py-xiaozhi](https://gitee.com/huang-jun-sen/py-xiaozhi) | 官方 PC 客户端参考实现 |
+
+### 小智官方资源
+
+| 资源 | 地址 |
+|---|---|
+| 小智控制台（设备绑定/Agent 管理） | https://xiaozhi.me/console/agents |
+| 小智官方文档 | https://xiaozhi.me/docs |
+| 小智开发文档（协议/MCP/AI Features） | https://xiaozhi.dev |
+| 官方云上游（默认，可用环境变量 `MIO_XIAOZHI_UPSTREAM` 覆盖） | `wss://api.tenclass.net/xiaozhi/v1/` |
+
+### 开源 Live2D 模型资源
+
+- Live2D 官方示例模型：https://www.live2d.com/download/sample-data/
+- GitHub 开源模型仓库（Cubism 3/4）：搜索 `live2d model`、`live2d 开源模型` 等关键词（导入方法见第五节第 4 条）。
+
+---
+
+## 八、开发守则（改代码必读）
+
+1. **改界面** → 先查 `SRC-MAP-源码地图.md` 确定文件；dist 内压缩分片用 Python 精确字符串替换 + `node --check` 校验。
+2. **改后端** → 改 `routes\` 对应文件，`python -m py_compile` 校验；小智逻辑全在 `xiaozhi.py`。
+3. **改完必做**：语法校验 + **git commit**（本地仓库防写坏，每个功能点一次提交）。
+4. **改了前端文件记得升 URL 版本参数**（`?v=...`），否则 Electron 缓存不刷新。
+5. 运行数据（`xiaozhi_chat_history.json` / `status.json` / 日志）不参与功能逻辑的删除操作。
+
+---
+
+## 九、更新记录
+
+详细的逐次改动记录见 `CHANGELOG.md`（含每次提交的根因与方案）。本项目所有改动均以本地 git 提交管理。

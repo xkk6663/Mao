@@ -44,6 +44,8 @@ enum_*.ps1
 enum_*.py
 diag*.ps1
 diag*.txt
+_probe*.py
+boot_diag.txt
 *.tgz
 opus-recorder-pkg/
 audio_devices.py
@@ -76,5 +78,9 @@ winmove_test.ps1
 _mio_orig/Mio-main/婢*/
 orig_*.png
 orig_*.txt
+
+# 运行数据（保留在磁盘，不参与 git 跟踪）
+xiaozhi_chat_history.json
+status.json
 
 \.Bin/
