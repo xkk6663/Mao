@@ -685,10 +685,9 @@ async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = 
         logger.warning("注入小智语音失败：官方云未连接（hello 未建立）")
         return False
     try:
-        # 1. 中断官方当前流程：vision/observe 注入是用户明确的新指令，总是 abort
-        #    （官方一次只处理一个语音流，不中断会吞掉新注入 → 工具复用旧图）；
-        #    普通文字注入只在官方 TTS 播放中才 abort（避免无意义中断触发官方"播放被中断"问候）
-        if source == "vision" or _tts_playing:
+        # 1. 只在官方 TTS 正在播放时才发 abort（避免无意义中断触发官方"播放被中断，要不要再放一次"问候；
+        #    实测 vision 场景无条件 abort 会让官方 LLM 识别触发语却不调视觉工具 → 回答"没收到图片"）
+        if _tts_playing:
             await conn.send(json.dumps({"type": "abort", "reason": "user_interrupt", "session_id": _session_id}, ensure_ascii=False))
             await asyncio.sleep(0.3)
             _tts_playing = False
