@@ -258,6 +258,17 @@ def _chat_append(role: str, type_: str, text: str = "", image_base64: str | None
         _history_save_task = asyncio.create_task(_save_chat_history())
 
 
+async def _syslog(text: str, tag: str = "sys") -> None:
+    """系统时间线消息：写入会话历史（role=system，前端灰色小字显示）+ 广播给所有订阅者。
+    让整个小智通信链路（连接/断开/重连/唤醒/识别/说话/视觉）在聊天窗口完全可视化，不再黑箱。"""
+    _chat_append("system", "text", text, tag=tag)
+    await _broadcast(json.dumps({
+        "type": "sysmsg",
+        "text": str(text)[:300],
+        "ts": round(time.time(), 3),
+    }, ensure_ascii=False))
+
+
 # 模块导入时加载历史文件（同步文件读取，无需事件循环）
 _load_chat_history()
 
@@ -509,6 +520,7 @@ async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = 
         #    避免每次对话都触发唤醒词问候"你来啦"；仅官方断线重连（新会话）后才重新唤醒
         need_wake = not _session_wake_done
         if need_wake:
+            await _syslog("🔔 正在唤醒小智（本次会话仅唤醒一次，之后长连接免唤醒）")
             await conn.send(json.dumps({
                 "type": "listen",
                 "state": "detect",
@@ -529,14 +541,18 @@ async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = 
         frames = await _send_audio_stream(conn, text)
         if not frames:
             return False
+        await _syslog(f"🎤 已发送语音「{str(text)[:40]}」等待官方识别…")
         # 4. 等 STT 确认；未确认（官方云缓存/忽略）则免唤醒重试一次
-        if not await _wait_stt_confirmed(8.0):
+        confirmed = await _wait_stt_confirmed(8.0)
+        if not confirmed:
             logger.info("首次注入未被识别，免唤醒重试: %s", str(text)[:40])
             await asyncio.sleep(1.5)
             frames = await _send_audio_stream(conn, text)
             if not frames:
                 return False
-            await _wait_stt_confirmed(8.0)
+            confirmed = await _wait_stt_confirmed(8.0)
+        if confirmed:
+            await _syslog("🧠 官方已识别语音，小智正在思考回答…")
         logger.info("注入小智语音成功(音频流 %d 帧): %s", len(frames), str(text)[:40])
         # 内部注入（vision/observe）：接下来官方 STT 识别到的文本是注入内容本身，
         # 不应写入"你说"历史（否则 AI 分析文本被当成用户发言）。记录注入文本 + 抑制窗口 60s 兜底。
@@ -709,10 +725,12 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
     try:
         # 1. 图片写入会话历史（同步到聊天界面）
         _chat_append("user", "image", text=question, image_base64=image_base64, tag="chat")
+        await _syslog("🖼️ 已发送图片给小智分析…")
         # 2. 官方视觉分析
         text = await asyncio.to_thread(_vision_explain_sync, image_base64, question)
         # 3. 分析文本写入历史 → 聊天界面显示为"她说"气泡（AI 在描述图片，不是用户发言）
         _chat_append("pet", "text", text, tag="vision")
+        await _syslog("✅ 图片分析完成（小智返回文本）")
         # 4. 图片识别只显示文本气泡：不注入官方（官方视觉仅返回文本；注入会触发唤醒/官方主动"拜拜"结束，
         #    且官方无独立 TTS 无法朗读分析文本）——用户确认接受"返回文本显示气泡"
         return {"ok": True, "text": text}
@@ -862,6 +880,7 @@ async def _reconnect_loop(initial_delay: float = 3.0) -> None:
             conn, err = await _ensure_upstream()
         if conn is not None:
             await _broadcast(json.dumps({"type": "hello", "version": 1, "session_id": _session_id}, ensure_ascii=False))
+            await _syslog("🔗 小智已重连（会话 " + str(_session_id) + "）")
             return
         logger.warning("上游重连失败，%.0fs 后重试: %s", delay, err)
         await _broadcast(json.dumps({"type": "error", "error": "connecting"}, ensure_ascii=False))
@@ -904,6 +923,9 @@ async def _pump_upstream(conn) -> None:
                             _chat_append("pet", "text", _llm_text, tag="llm")
                     if j.get("type") == "tts" and j.get("state") == "stop":
                         _last_tts_stop = time.time()
+                        await _syslog("🔊 小智说话结束")
+                    if j.get("type") == "tts" and j.get("state") == "start":
+                        await _syslog("🗣️ 小智开始说话…")
                 except Exception:  # noqa: BLE001
                     pass
                 continue
@@ -923,6 +945,9 @@ async def _pump_upstream(conn) -> None:
                             _capture_vision_from_mcp(j.get("payload"))
                         if j.get("type") == "tts" and j.get("state") == "stop":
                             _last_tts_stop = time.time()
+                            await _syslog("🔊 小智说话结束")
+                        if j.get("type") == "tts" and j.get("state") == "start":
+                            await _syslog("🗣️ 小智开始说话…")
                         if j.get("type") == "stt":
                             _last_stt_ts = time.time()
                             _last_stt_text = str(j.get("text") or "")
@@ -953,6 +978,7 @@ async def _pump_upstream(conn) -> None:
         except Exception:  # noqa: BLE001
             pass
         # 通知前端"连接中断，正在重连"，并启动自动重连
+        await _syslog("⚠️ 小智连接中断，正在自动重连…")
         await _broadcast(json.dumps({"type": "error", "error": "connecting"}, ensure_ascii=False))
         asyncio.create_task(_reconnect_loop())
 
@@ -996,6 +1022,23 @@ async def _ensure_upstream() -> tuple[object | None, str | None]:
         _session_id = j.get("session_id")
         _upstream = conn
         _session_wake_done = False   # 新会话：首次注入需唤醒一次，之后长连接免唤醒
+        await _syslog(f"🔗 小智已连接（会话 {_session_id}）")
+        # 后台预唤醒：新会话建立后自动完成一次唤醒，后续对话永远免唤醒（不再"你来啦"）
+        async def _prewake():
+            global _session_wake_done
+            await asyncio.sleep(1.5)
+            if _upstream is None or _session_wake_done:
+                return
+            try:
+                await _upstream.send(json.dumps({
+                    "type": "listen", "state": "detect", "text": "你好",
+                    "source": "text", "session_id": _session_id,
+                }, ensure_ascii=False))
+                _session_wake_done = True
+                await _syslog("⚡ 后台预唤醒完成，本次会话后续对话免唤醒")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("后台预唤醒失败: %s", exc)
+        asyncio.create_task(_prewake())
     except Exception as exc:  # noqa: BLE001
         logger.error("上游 hello 失败: %s", exc)
         try:
