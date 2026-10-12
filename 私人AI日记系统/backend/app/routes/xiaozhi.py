@@ -133,9 +133,10 @@ async def _observe_loop() -> None:
                         _chat_append("user", "image", text="（屏幕观察）", image_base64=img, tag="observe")
                         # 观察评价写入历史 → 聊天界面显示为"她说"（AI 在评价屏幕）
                         _chat_append("pet", "text", text, tag="observe")
-                        # 本地 TTS 播放（稳定链路，不依赖官方云 ASR 识别注入文本）
-                        ok = await _speak_local(text, "observe")
-                        _observe_last_result = ("语音已播放" if ok else "本地语音播放失败") + " · " + str(text)[:50]
+                        # 官方音色链路：分析文本分段注入官方（官方 ASR 长音频截断→每段≤60字），
+                        # 官方 LLM 回答 + 官方 TTS 播放（官方音色，禁用本地 TTS）
+                        ok = await _inject_segments(text, "observe")
+                        _observe_last_result = ("官方音色已播放" if ok else "官方注入失败") + " · " + str(text)[:50]
                 except Exception as exc:  # noqa: BLE001
                     _observe_last_result = "观察失败：" + str(exc)[:60]
                     logger.warning("随机观察触发失败: %s", exc)
@@ -433,6 +434,42 @@ async def _inject_say(text: str, wait_upstream: float = 6.0, source: str = "user
         return await _inject_say_impl(text, wait_upstream, source)
 
 
+async def _inject_segments(text: str, source: str = "vision") -> bool:
+    """把长分析文本分段注入官方（官方 ASR 长音频截断→每段≤60字），
+    每段经官方识别→LLM 回答→官方 TTS 播放（官方音色，禁用本地 TTS）。
+    官方无独立 TTS 接口，官方音色只能通过"注入→回答"间接获得。"""
+    if not text or not text.strip():
+        return False
+    text = text.strip()
+    if len(text) <= 60:
+        return await _inject_say(text, source=source)
+    # 优先按标点断句，其次按 60 字硬切
+    import re as _re
+    sentences = _re.split(r"(?<=[。！？!?；;])", text)
+    segs: list[str] = []
+    cur = ""
+    for s in sentences:
+        if len(cur) + len(s) <= 60:
+            cur += s
+        else:
+            if cur:
+                segs.append(cur)
+            while len(s) > 60:
+                segs.append(s[:58] + "…")
+                s = s[58:]
+            cur = s
+    if cur:
+        segs.append(cur)
+    ok_all = True
+    for i, seg in enumerate(segs):
+        ok = await _inject_say(seg, source=source)
+        if not ok:
+            ok_all = False
+            logger.warning("分段注入第 %d 段失败: %s", i + 1, str(seg)[:30])
+        await asyncio.sleep(0.8)  # 段间间隔，避免官方状态机冲突
+    return ok_all
+
+
 async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = "user") -> bool:
     """把文本注入小智会话（模拟用户发言）→ 小智语音/表情/口型联动。
     source: "user"=用户真实输入（STT 识别结果正常写"你说"历史）
@@ -675,8 +712,9 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
         text = await asyncio.to_thread(_vision_explain_sync, image_base64, question)
         # 3. 分析文本写入历史 → 聊天界面显示为"她说"（AI 在描述图片，不是用户发言）
         _chat_append("pet", "text", text, tag="vision")
-        # 4. 本地 TTS 播放（稳定链路：不依赖官方 ASR 识别注入文本 → 杜绝"你说[分析]"错乱与无声音）
-        await _speak_local(text, "vision")
+        # 4. 官方音色链路：分析文本分段注入官方（官方 ASR 长音频截断→每段≤60字），
+        #    官方 LLM 回答 + 官方 TTS 播放（官方音色，禁用本地 TTS）
+        await _inject_segments(text, "vision")
         return {"ok": True, "text": text}
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -858,14 +896,8 @@ async def _pump_upstream(conn) -> None:
                     if j.get("type") == "stt":
                         _last_stt_ts = time.time()
                         _last_stt_text = str(j.get("text") or "")
-                        if time.time() < _inject_stt_suppress_until:
-                            logger.info("抑制内部注入的 STT 写入历史: %s", str(_last_stt_text)[:30])
-                        elif _is_injected_stt(_last_stt_text):
-                            logger.info("丢弃注入回声 STT（与注入文本相同）: %s", str(_last_stt_text)[:30])
-                        elif _is_echo_stt(_last_stt_text):
-                            logger.info("丢弃回声 STT（与 LLM 回答相同）: %s", str(_last_stt_text)[:30])
-                        else:
-                            _chat_append("user", "text", _last_stt_text, tag="stt")
+                        # 机制级角色解耦：官方 STT 回传一律不写"你说"历史（含注入回声/官方误听），
+                        # "你说"只由浏览器真实输入（_relay_browser_message）写入
                     if j.get("type") == "llm":
                         _llm_text = str(j.get("text") or "")
                         if _llm_text:
@@ -894,15 +926,8 @@ async def _pump_upstream(conn) -> None:
                         if j.get("type") == "stt":
                             _last_stt_ts = time.time()
                             _last_stt_text = str(j.get("text") or "")
-                            # 内部注入（vision/observe）识别结果不写"你说"历史，避免 AI 分析文本被当成用户发言
-                            if time.time() < _inject_stt_suppress_until:
-                                logger.info("抑制内部注入的 STT 写入历史: %s", str(_last_stt_text)[:30])
-                            elif _is_injected_stt(_last_stt_text):
-                                logger.info("丢弃注入回声 STT（与注入文本相同）: %s", str(_last_stt_text)[:30])
-                            elif _is_echo_stt(_last_stt_text):
-                                logger.info("丢弃回声 STT（与 LLM 回答相同）: %s", str(_last_stt_text)[:30])
-                            else:
-                                _chat_append("user", "text", _last_stt_text, tag="stt")
+                            # 机制级角色解耦：官方 STT 回传一律不写"你说"历史（含注入回声/官方误听），
+                            # "你说"只由浏览器真实输入（_relay_browser_message）写入
                         if j.get("type") == "llm":
                             _llm_text = str(j.get("text") or "")
                             if _llm_text:
