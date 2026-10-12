@@ -180,17 +180,6 @@ function reportWindowAction(windowId, window, action) {
   return payload
 }
 
-async function openAgentWindow() {
-  try {
-    const result = await postBackend('/api/companion/agent/show')
-    log('agent.show', String(result.method || 'unknown'))
-    return result
-  } catch (error) {
-    log('agent.show_failed', error.message || String(error))
-    return { ok: false, error: error.message || String(error) }
-  }
-}
-
 let petAdminWindow = null
 function openPetAdmin() {
   if (petAdminWindow && !petAdminWindow.isDestroyed()) {
