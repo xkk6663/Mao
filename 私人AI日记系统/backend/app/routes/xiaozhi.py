@@ -100,9 +100,41 @@ _active_ws: WebSocket | None = None
 _vision: dict | None = None  # 小智官方云下发的视觉能力 {"url": str, "token": str}
 _tts_playing: bool = False  # 官方 TTS 是否正在播放（只在播放中才发 abort，避免无意义中断触发官方"播放被中断"问候）
 
+# ---- MCP 设备工具（官方协议：JSON-RPC 2.0 封装在 type=mcp 消息里）----
+# 小智官方云是 MCP client（调用设备工具），本端（桌宠后端）是 MCP server（注册/执行工具）。
+# 官方云在 hello 后发 MCP initialize（含 capabilities.vision{url,token}），随后可发 tools/list / tools/call。
+# 视觉识别正确姿势（对齐官方 esp_xiaozhi 组件）：识别文本作为 tools/result 回灌官方 LLM，
+# 由官方 LLM 组织回答 → 官方 TTS 合成音频 → 官方音色语音。
+_MCP_SERVER_INFO = {"name": "mao-desktop-pet", "version": "2.1.0"}
+_MCP_PROTOCOL_VERSION = "2025-03-26"
+_MCP_TOOLS = [
+    {
+        "name": "self.camera.explain",
+        "description": (
+            "拍一张屏幕截图/查看一张图片并用视觉模型识别其中的内容。"
+            "当用户让你\"看看屏幕\"、\"看看我的屏幕\"、\"看看这张图片/这张图\"、"
+            "\"描述屏幕上正在显示的内容\"、\"识别图片内容\"，或询问屏幕上正在做什么时调用。"
+            "参数 question: 想针对截图/图片问的问题（可选，缺省自动描述内容）。"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "针对截图/图片的具体问题，缺省自动描述图片内容",
+                }
+            },
+            "required": [],
+        },
+    }
+]
+# 用户手动触发（截图提问/立即观察/聊天发图）后待工具回调使用的截图：
+# {"image_base64": str|None(缺省则工具回调时现截全屏), "question": str(用户配置的识别提示词)}
+_pending_vision: dict | None = None
+
 
 class VisionRequest(BaseModel):
-    image_base64: str
+    image_base64: str = ""
     question: str = ""
     kind: str = "image"  # "image"=图片识别（用 image_prompt） / "observe"=屏幕观察（用 observe_prompt）
 
@@ -364,8 +396,15 @@ def _chat_append(role: str, type_: str, text: str = "", image_base64: str | None
 
 def _maybe_write_llm_reply(full: str) -> None:
     """写入小智完整回复文本（tag=llm）。与 vision/observe 主动写入去重：
-    最近 3 秒内已写过同文本的 pet 记录（tag=vision/observe）→ 跳过，避免同一回复双写。"""
+    最近 3 秒内已写过同文本的 pet 记录（tag=vision/observe）→ 跳过，避免同一回复双写。
+
+    同时剥离官方 LLM 内联工具调用标记（%工具名%）：官方云在 LLM 输出里保留
+    "% self.camera.explain...%" 工具调用回显，不剥离会被 TTS 念出来并污染聊天历史。"""
     full = (full or "").strip()
+    if not full:
+        return
+    # 剥离成对 %...% 工具调用标记（只删短标记，保护正文中可能的百分号文本）
+    full = re.sub(r"%[^%\n]{1,120}%", "", full).strip()
     if not full:
         return
     now = time.time()
@@ -799,6 +838,104 @@ def _vision_explain_sync(image_base64: str, question: str) -> str:
     return str(text)
 
 
+async def _exec_screen_explain(question: str) -> str:
+    """执行 self.camera.explain：优先使用用户手动触发时暂存的截图，
+    无暂存则现截全屏，再调官方视觉分析，返回识别文本（tools/result 回灌官方 LLM 用）。"""
+    global _pending_vision
+    image_base64 = None
+    q = question.strip() or "请详细描述这张图片里的内容。"
+    if _pending_vision:
+        image_base64 = _pending_vision.get("image_base64")
+        pending_q = str(_pending_vision.get("question") or "").strip()
+        if pending_q:
+            q = pending_q  # 用户配置的识别提示词优先（管理面板可编辑）
+        _pending_vision = None
+    if not image_base64:
+        from ..screen_capture import MssCapture
+        image_base64 = await asyncio.to_thread(_full_screen_jpeg, MssCapture)
+    if not image_base64:
+        raise RuntimeError("截图失败：无法获取屏幕画面")
+    logger.info("MCP 工具执行 self.camera.explain question=%s", str(q)[:60])
+    text = await asyncio.to_thread(_vision_explain_sync, image_base64, q)
+    # 识别文本写历史（"她说" 标记 vision），供聊天界面可视化工具调用过程
+    _chat_append("pet", "text", text, tag="vision")
+    await _syslog("👁️ 屏幕/图片识别完成（工具结果已回灌小智，等待官方回答…）")
+    return text
+
+
+def _mcp_error(req_id, code: int, message: str) -> dict:
+    return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
+
+
+def _mcp_result(req_id, result: dict) -> dict:
+    return {"jsonrpc": "2.0", "id": req_id, "result": result}
+
+
+async def _handle_mcp_message(payload) -> dict | None:
+    """处理官方云下发的 MCP（JSON-RPC 2.0）请求，返回要发回的响应 payload（None=无需响应）。
+
+    严格遵循小智官方 MCP 协议格式：
+      initialize  → result{protocolVersion, capabilities{tools}, serverInfo}
+      tools/list  → result{tools:[...], nextCursor}
+      tools/call  → result{content:[{type:text,text}], isError} / error{code,message}
+    """
+    try:
+        raw = payload if isinstance(payload, dict) else (json.loads(payload) if payload else {})
+        method = str(raw.get("method") or "")
+        req_id = raw.get("id")
+        params = raw.get("params") or {}
+        if not isinstance(params, dict):
+            params = {}
+        if method == "initialize":
+            return _mcp_result(req_id, {
+                "protocolVersion": _MCP_PROTOCOL_VERSION,
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": _MCP_SERVER_INFO,
+            })
+        if method == "tools/list":
+            return _mcp_result(req_id, {"tools": _MCP_TOOLS, "nextCursor": ""})
+        if method == "tools/call":
+            name = str(params.get("name") or "")
+            arguments = params.get("arguments") or {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            if name == "self.camera.explain":
+                try:
+                    question = str(arguments.get("question") or "")
+                    text = await _exec_screen_explain(question)
+                    return _mcp_result(req_id, {
+                        "content": [{"type": "text", "text": text}],
+                        "isError": False,
+                    })
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("MCP 工具 self.camera.explain 执行失败: %s", exc)
+                    return _mcp_result(req_id, {
+                        "content": [{"type": "text", "text": f"截图/图片识别失败：{exc}"}],
+                        "isError": True,
+                    })
+            return _mcp_error(req_id, -32601, f"Unknown tool: {name}")
+        # 其他方法（notifications 等）：不回响应
+        logger.info("MCP 消息 method=%s（无需响应）", method)
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("解析 MCP 请求失败: %s", exc)
+        return None
+
+
+async def _send_mcp_response(conn, payload: dict | None) -> None:
+    """按官方协议发送 type=mcp 响应（payload 为 JSON-RPC 2.0）。"""
+    if payload is None or conn is None:
+        return
+    try:
+        await conn.send(json.dumps({
+            "type": "mcp",
+            "payload": payload,
+            "session_id": _session_id,
+        }, ensure_ascii=False))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("发送 MCP 响应失败: %s", exc)
+
+
 @router.get("/chat-history")
 async def xiaozhi_chat_history(limit: int = 100) -> dict:
     """返回长连接以来的会话历史（最近 N 条，图片含 base64 data URL）。"""
@@ -818,13 +955,13 @@ async def xiaozhi_vision_info() -> dict:
 
 @router.post("/vision")
 async def xiaozhi_vision(payload: VisionRequest) -> dict:
-    """上传/截图图片 → 小智官方视觉分析 → 注入对话（语音回答）。
-    与聊天发图同一条链路：图片写入会话历史，分析文本注入后由官方云语音回答。"""
+    """上传图片 → 官方 MCP 工具链路：暂存截图 → 注入触发语 → 官方 LLM 调 self.camera.explain
+    → 官方视觉识别 → 工具结果回灌官方 LLM → 官方 TTS（官方音色）语音回答，桌宠播放+气泡+历史。
+    不再旁路显示文本（识别文本作为工具结果给官方 LLM，最终回答由官方生成）。"""
+    global _pending_vision
     if _vision is None:
         raise HTTPException(status_code=409, detail="小智视觉能力不可用：请先打开小智对话建立连接")
     question = str(payload.question or "").strip() or str(_prompt_cfg.get("image_prompt") or _prompt_defaults["image_prompt"])
-    # 官方 ASR 对长音频识别会截断（>150字几乎必然失败）：
-    # 强制要求官方视觉用 60 字以内简洁口语回答，保证注入音频能完整识别并播放
     if _prompt_cfg.get("force_60", True) and "字以内" not in question:
         question = f"{question}（请用60字以内的简洁口语回答）"
     image_base64 = str(payload.image_base64 or "").strip()
@@ -834,16 +971,14 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
         # 1. 图片写入会话历史（同步到聊天界面）
         _chat_append("user", "image", text=question, image_base64=image_base64, tag="chat")
         await _syslog("🖼️ 已发送图片给小智分析…")
-        # 2. 官方视觉分析
-        text = await asyncio.to_thread(_vision_explain_sync, image_base64, question)
-        # 3. 分析文本写入历史 → 聊天界面显示为"她说"气泡（AI 在描述图片，不是用户发言）
-        _chat_append("pet", "text", text, tag="vision")
-        await _syslog("✅ 图片分析完成（小智返回文本）")
-        # 4. 广播气泡给桌宠（自动消失，与截图提问/立即观察一致）：分析结果直接显示在桌宠旁气泡
-        await _broadcast_observe_bubble(text)
-        # 5. 图片识别只显示文本气泡：不注入官方（官方视觉仅返回文本；注入会触发唤醒/官方主动"拜拜"结束，
-        #    且官方无独立 TTS 无法朗读分析文本）——用户确认接受"返回文本显示气泡"
-        return {"ok": True, "text": text}
+        # 2. 暂存截图 → 注入触发语（官方 LLM 收到后会调 self.camera.explain 工具，
+        #    工具回调里用这张暂存图做官方视觉识别，识别文本作为工具结果回灌 LLM）
+        _pending_vision = {"image_base64": image_base64, "question": question}
+        trigger = "请看看这张图片并描述内容。"
+        ok = await _inject_say(trigger, source="vision")
+        if not ok:
+            raise HTTPException(status_code=409, detail="注入失败：小智连接不可用")
+        return {"ok": True, "trigger": trigger}
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
@@ -853,9 +988,10 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
 
 @router.post("/vision-bubble")
 async def xiaozhi_vision_bubble(payload: VisionRequest) -> dict:
-    """截图/图片 → 小智官方视觉分析 → 广播 speech-bubble 给桌宠（气泡自动消失）。
-    与 /vision 的区别：分析文本通过 pet_event_service 广播到桌宠显示气泡，
-    而不是返回给调用方自行显示。供管理面板"立即观察"等场景使用，去掉旧的 /say 复述注入。"""
+    """截图/图片 → 官方 MCP 工具链路（与 /vision 同一条链路）：暂存截图（缺省现截全屏）
+    → 注入触发语 → 官方 LLM 调工具 → 官方视觉识别 → 工具结果回灌 → 官方 TTS 语音回答。
+    供"立即观察"、右键"截图提问"等场景使用；分析/回答经 pet_text 与 tts 链路显示气泡。"""
+    global _pending_vision
     if _vision is None:
         raise HTTPException(status_code=409, detail="小智视觉能力不可用：请先打开小智对话建立连接")
     _prompt_default = (
@@ -864,24 +1000,23 @@ async def xiaozhi_vision_bubble(payload: VisionRequest) -> dict:
         else str(_prompt_cfg.get("image_prompt") or _prompt_defaults["image_prompt"])
     )
     question = str(payload.question or "").strip() or _prompt_default
-    # 官方视觉只返回文本；强制 60 字以内简洁口语，保证文本气泡可读
     if _prompt_cfg.get("force_60", True) and "字以内" not in question:
         question = f"{question}（请用60字以内的简洁口语回答）"
     image_base64 = str(payload.image_base64 or "").strip()
-    if not image_base64:
-        raise HTTPException(status_code=400, detail="图片不能为空")
     try:
-        # 1. 图片写入会话历史（同步到聊天界面）
-        _chat_append("user", "image", text=question, image_base64=image_base64, tag="observe")
-        await _syslog("🖼️ 已发送图片给小智分析…")
-        # 2. 官方视觉分析
-        text = await asyncio.to_thread(_vision_explain_sync, image_base64, question)
-        # 3. 分析文本写入历史 → 聊天界面显示为"她说"气泡
-        _chat_append("pet", "text", text, tag="observe")
-        await _syslog("✅ 图片分析完成（小智返回文本）")
-        # 4. 广播气泡给桌宠（自动消失，与截图提问一致）；不注入官方
-        await _broadcast_observe_bubble(text)
-        return {"ok": True, "text": text}
+        # 1. 截图/图片写入会话历史（同步到聊天界面）
+        _chat_append("user", "image", text=question, image_base64=image_base64 or None, tag="observe")
+        await _syslog("🖼️ 已发送屏幕/图片给小智分析…")
+        # 2. 暂存截图（缺省现截全屏）→ 注入触发语 → 官方 LLM 调工具 → 官方回答 + 官方 TTS 音频
+        _pending_vision = {"image_base64": image_base64 or None, "question": question}
+        if str(payload.kind or "").strip() == "observe":
+            trigger = "看看我的屏幕，评价一下我屏幕上正在做的事。"
+        else:
+            trigger = "请看看这张图片并描述内容。"
+        ok = await _inject_say(trigger, source="vision")
+        if not ok:
+            raise HTTPException(status_code=409, detail="注入失败：小智连接不可用")
+        return {"ok": True, "trigger": trigger}
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
@@ -1086,6 +1221,9 @@ async def _pump_upstream(conn) -> None:
                     j = json.loads(msg)
                     if j.get("type") == "mcp":
                         _capture_vision_from_mcp(j.get("payload"))
+                        resp = await _handle_mcp_message(j.get("payload"))
+                        if resp:
+                            await _send_mcp_response(conn, resp)
                     if j.get("type") == "stt":
                         _last_stt_ts = time.time()
                         _last_stt_text = str(j.get("text") or "")
@@ -1131,6 +1269,9 @@ async def _pump_upstream(conn) -> None:
                         j = json.loads(msg)
                         if j.get("type") == "mcp":
                             _capture_vision_from_mcp(j.get("payload"))
+                            resp = await _handle_mcp_message(j.get("payload"))
+                            if resp:
+                                await _send_mcp_response(conn, resp)
                         if j.get("type") == "tts" and j.get("state") == "stop":
                             _last_tts_stop = time.time()
                             _tts_playing = False
