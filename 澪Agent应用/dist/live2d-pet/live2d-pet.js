@@ -62,6 +62,16 @@
   let emotionUntil = 0
   let speakingUntil = 0
   let nextIdleMotionAt = Date.now() + 9000
+  // 空闲降帧：长时间无交互/无说话时降低渲染帧率，节省 GPU/CPU（长挂机友好）
+  let lastPetActivityAt = performance.now()
+  let petFpsDowngraded = false
+  function markPetActivity() {
+    lastPetActivityAt = performance.now()
+    if (petFpsDowngraded && app && app.ticker) {
+      app.ticker.maxFPS = 0  // 恢复默认（不限帧）
+      petFpsDowngraded = false
+    }
+  }
   let lastSizePercent = 0
   let pointerDown = null
   let dragged = false
@@ -249,10 +259,18 @@
       backgroundAlpha: 0,
       antialias: true,
       autoDensity: true,
-      resolution: Math.min(window.devicePixelRatio || 1, 2),
+      resolution: Math.min(window.devicePixelRatio || 1, 1.5),  // 限制渲染采样≤1.5x，GPU 纹理内存较 2x 降约 44%（视觉几乎无差）
     })
     app.stage.sortableChildren = true
     app.ticker.add(updateModelPerformance, undefined, -50)
+    // 空闲降帧巡检：连续 30 秒无交互/无说话 → 降到 12fps；有活动立即恢复
+    app.ticker.add(() => {
+      if (currentActivity !== 'idle') { markPetActivity(); return }
+      if (!petFpsDowngraded && performance.now() - lastPetActivityAt > 30000) {
+        app.ticker.maxFPS = 12
+        petFpsDowngraded = true
+      }
+    }, undefined, -40)
   }
 
   function modelDefinition(modelId) {
@@ -1729,6 +1747,7 @@
   }
 
   window.addEventListener('mousemove', (event) => {
+    markPetActivity()
     if (model && settings.live2d_follow_cursor && !cursorFocusFrame) {
       const { clientX, clientY } = event
       cursorFocusFrame = window.requestAnimationFrame(() => {
@@ -1740,6 +1759,7 @@
   })
 
   canvas.addEventListener('pointerdown', async (event) => {
+    markPetActivity()
     if (clickThroughLocked() || event.button !== 0 || !pointHitsModel(event.clientX, event.clientY)) return
     pointerDown = {
       x: event.clientX,
@@ -1930,6 +1950,7 @@
   window.addEventListener('mio-xz-speaking', (e) => {
     const detail = (e && e.detail) || {}
     if (detail.active) {
+      markPetActivity()
       speakingUntil = Date.now() + Math.max(3000, Number(detail.durationMs) || 5000)
       currentActivity = 'speaking'
     } else if (currentActivity === 'speaking') {

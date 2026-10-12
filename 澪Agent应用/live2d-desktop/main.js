@@ -678,6 +678,18 @@ function setClickThroughLocked(enabled, notifyRenderer = false) {
   const changed = clickThroughLocked !== nextValue
   clickThroughLocked = nextValue
   if (changed) saveRuntimeState({ clickThroughLocked })
+  if (nextValue) {
+    // 进入锁定穿透模式：按需创建解锁浮窗
+    if (!lockControlWindow || lockControlWindow.isDestroyed()) {
+      createLockControlWindow()
+    } else if (!lockControlWindow.isVisible()) {
+      lockControlWindow.showInactive()
+    }
+  } else if (lockControlWindow && !lockControlWindow.isDestroyed()) {
+    // 退出锁定模式：销毁解锁浮窗，回收渲染进程与合成内存
+    lockControlWindow.destroy()
+    lockControlWindow = null
+  }
   if (mainWindow && !mainWindow.isDestroyed()) {
     applyMainWindowMousePolicy()
     if (notifyRenderer) {
@@ -794,7 +806,7 @@ function createWindow() {
     reportWindowAction('pet-root', mainWindow, 'closed')
     mainWindow = null
   })
-  if (!lockControlWindow || lockControlWindow.isDestroyed()) createLockControlWindow()
+  if (clickThroughLocked) createLockControlWindow()  // 仅在锁定穿透模式才创建解锁浮窗，省一个常驻渲染进程
   clearInterval(topmostWatchdog)
   topmostWatchdog = setInterval(() => {
     if (!quitting && desiredAlwaysOnTop) restoreWindowVisibility()
