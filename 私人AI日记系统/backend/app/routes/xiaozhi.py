@@ -124,6 +124,37 @@ _observe_next_at: float = 0.0
 _observe_task: asyncio.Task | None = None
 _observe_lock = asyncio.Lock()
 _observe_last_result: str = "尚未触发"
+_OBSERVE_CFG_FILE = _PROJECT_ROOT / "xiaozhi_observe.json"
+
+
+def _load_observe_cfg() -> None:
+    """启动时从文件恢复自动观察配置（间隔/免打扰/开关），重启不丢。"""
+    global _observe_next_at
+    try:
+        if _OBSERVE_CFG_FILE.exists():
+            with open(_OBSERVE_CFG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                for k in ("enabled", "min_seconds", "max_seconds", "quiet_start", "quiet_end", "prompt"):
+                    if k in data:
+                        _observe_cfg[k] = data[k]
+        # 重启前观察开启中 → 恢复排程（20 秒后触发首次，避免立即轰炸）
+        if _observe_cfg.get("enabled"):
+            _observe_next_at = time.time() + 20
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("加载自动观察配置失败: %s", exc)
+
+
+def _save_observe_cfg() -> None:
+    """持久化自动观察配置（enabled/间隔/免打扰），重启不丢。"""
+    try:
+        with open(_OBSERVE_CFG_FILE, "w", encoding="utf-8") as f:
+            json.dump(_observe_cfg, f, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("保存自动观察配置失败: %s", exc)
+
+
+_load_observe_cfg()
 
 
 class ObserveRequest(BaseModel):
@@ -642,6 +673,7 @@ async def xiaozhi_observe_start(payload: ObserveRequest) -> dict:
         # 同步到持久化提示词配置（管理面板编辑屏幕观察提示词走同一条链路）
         _prompt_cfg["observe_prompt"] = str(payload.prompt)[:300]
         _save_prompts()
+    _save_observe_cfg()
     _observe_next_at = time.time() + 20  # 首次 20 秒后即可触发（便于测试）
     await _ensure_observe_task()
     return {**_observe_cfg, "next_in_seconds": 20}
@@ -650,6 +682,7 @@ async def xiaozhi_observe_start(payload: ObserveRequest) -> dict:
 @router.post("/observe/stop")
 async def xiaozhi_observe_stop() -> dict:
     _observe_cfg["enabled"] = False
+    _save_observe_cfg()
     return {**_observe_cfg, "next_in_seconds": 0}
 
 
