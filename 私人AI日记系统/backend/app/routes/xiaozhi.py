@@ -853,6 +853,15 @@ def _device_identity() -> dict | None:
         return None
 
 
+def _machine_code(mac: str) -> str:
+    """派生六位数机器码：取 MAC 十六进制后 6 位（去冒号，大写）。"""
+    import re as _re
+    digits = _re.sub(r"[^0-9A-Fa-f]", "", str(mac or "").upper())
+    if len(digits) >= 6:
+        return digits[-6:]
+    return digits.zfill(6)
+
+
 @router.get("/status")
 async def xiaozhi_status() -> dict:
     identity = _device_identity()
@@ -869,6 +878,8 @@ async def xiaozhi_status() -> dict:
         "ok": True,
         "bound": bound,
         "mac": identity["mac"],
+        "client_id": identity.get("client_id", ""),
+        "machine_code": _machine_code(identity["mac"]),
         "upstream": XIAOZHI_UPSTREAM,
         "connected": _upstream is not None,
         "session_id": _session_id,
