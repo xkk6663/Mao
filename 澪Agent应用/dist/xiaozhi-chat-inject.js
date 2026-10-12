@@ -100,7 +100,8 @@
     })
       .then(function (r) { return r.json().catch(function () { return {} }).then(function (j) { return { ok: r.ok, j: j } }) })
       .then(function (res) {
-        if (!(res.ok && res.j && res.j.text)) console.warn('[xz-img] vision failed', res.j)
+        // /vision 返回 {ok, trigger}（MCP 工具链路），不再返回 text
+        if (!(res.ok && res.j && res.j.ok)) console.warn('[xz-img] vision failed', res.j)
       })
       .catch(function (err) { console.warn('[xz-img] vision error', err) })
     return true

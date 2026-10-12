@@ -132,6 +132,8 @@ _MCP_TOOLS = [
 # 用户手动触发（截图提问/立即观察/聊天发图）后待工具回调使用的截图：
 # {"image_base64": str|None(缺省则工具回调时现截全屏), "question": str(用户配置的识别提示词)}
 _pending_vision: dict | None = None
+# 最近一次用户手动发图副本（工具被官方 LLM 连续调用多次时复用同一张图，60s 窗口）：
+_last_vision_image: dict | None = None
 
 
 class _UpstreamGoodbye(Exception):
@@ -855,8 +857,10 @@ def _vision_explain_sync(image_base64: str, question: str) -> str:
 
 async def _exec_screen_explain(question: str) -> str:
     """执行 self.camera.explain：优先使用用户手动触发时暂存的截图，
-    无暂存则现截全屏，再调官方视觉分析，返回识别文本（tools/result 回灌官方 LLM 用）。"""
-    global _pending_vision
+    无暂存则复用最近 60 秒内用户手动发送的图片（官方 LLM 可能连续调用工具多次，
+    避免第二次调用时现截全屏、把屏幕内容当成用户发的图），最后才现截全屏，
+    再调官方视觉分析，返回识别文本（tools/result 回灌官方 LLM 用）。"""
+    global _pending_vision, _last_vision_image
     image_base64 = None
     q = question.strip() or "请详细描述这张图片里的内容。"
     if _pending_vision:
@@ -864,7 +868,19 @@ async def _exec_screen_explain(question: str) -> str:
         pending_q = str(_pending_vision.get("question") or "").strip()
         if pending_q:
             q = pending_q  # 用户配置的识别提示词优先（管理面板可编辑）
+        # 保留一份最近图片副本：官方 LLM 可能连续调用工具多次，
+        # 第一次消费 pending 后，后续调用复用同一张图（60s 窗口）
+        _last_vision_image = {"image_base64": image_base64, "question": pending_q, "ts": time.time()}
         _pending_vision = None
+    elif (
+        _last_vision_image
+        and _last_vision_image.get("image_base64")
+        and time.time() - float(_last_vision_image.get("ts") or 0) < 60.0
+    ):
+        image_base64 = _last_vision_image.get("image_base64")
+        pending_q = str(_last_vision_image.get("question") or "").strip()
+        if pending_q:
+            q = pending_q
     if not image_base64:
         from ..screen_capture import MssCapture
         image_base64 = await asyncio.to_thread(_full_screen_jpeg, MssCapture)
@@ -989,9 +1005,10 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
         # 2. 暂存截图 → 注入触发语（官方 LLM 收到后会调 self.camera.explain 工具，
         #    工具回调里用这张暂存图做官方视觉识别，识别文本作为工具结果回灌 LLM）
         _pending_vision = {"image_base64": image_base64, "question": question}
-        # 触发语 = 用户外置可编辑的提示词（image_prompt，管理面板可改），
-        # 不再是写死文案——AI 的语气/内容完全由提示词框决定
-        trigger = question
+        # 触发语 = 看图引导 + 用户外置可编辑的提示词（image_prompt）：
+        # 引导词"请看看这张图片"让官方 LLM 稳定调用 self.camera.explain 工具（LLM 上下文里
+        # 没有图片实体，仅凭用户 prompt 不一定能判断要调工具），后接用户 prompt 控制语气/内容
+        trigger = f"请看看这张图片，{question}"
         ok = await _inject_say(trigger, source="vision")
         if not ok:
             raise HTTPException(status_code=409, detail="注入失败：小智连接不可用")
@@ -1026,9 +1043,13 @@ async def xiaozhi_vision_bubble(payload: VisionRequest) -> dict:
         await _syslog("🖼️ 已发送屏幕/图片给小智分析…")
         # 2. 暂存截图（缺省现截全屏）→ 注入触发语 → 官方 LLM 调工具 → 官方回答 + 官方 TTS 音频
         _pending_vision = {"image_base64": image_base64 or None, "question": question}
-        # 触发语 = 用户外置可编辑的提示词（observe_prompt/image_prompt，管理面板可改），
-        # 不再是写死文案——AI 的语气/内容完全由提示词框决定
-        trigger = question
+        # 触发语 = 看图/看屏幕引导 + 用户外置可编辑的提示词（observe_prompt/image_prompt）：
+        # 引导词确保官方 LLM 稳定调用 self.camera.explain 工具（仅凭用户 prompt 不一定触发），
+        # 后接用户 prompt 控制语气/内容（管理面板提示词框生效）
+        if str(payload.kind or "").strip() == "observe":
+            trigger = f"看看我的屏幕，{question}"
+        else:
+            trigger = f"请看看这张图片，{question}"
         ok = await _inject_say(trigger, source="vision")
         if not ok:
             raise HTTPException(status_code=409, detail="注入失败：小智连接不可用")
@@ -1255,6 +1276,10 @@ async def _pump_upstream(conn) -> None:
                     if j.get("type") == "llm":
                         _pending_llm_text = str(j.get("text") or "")
                         _llm_text = _pending_llm_text
+                        # LLM 事件即写回答历史（官方 llm 事件为完整文本；tts stop 时同文本去重跳过），
+                        # 修复"有声音但文字不显示"：官方部分会话 TTS 无 sentence_start，仅靠 tts stop 会丢文本
+                        if _pending_llm_text:
+                            _maybe_write_llm_reply(_pending_llm_text)
                     if j.get("type") == "tts" and j.get("state") == "start":
                         _tts_sentences = []
                     if j.get("type") == "tts" and j.get("state") == "sentence_start":
@@ -1332,6 +1357,10 @@ async def _pump_upstream(conn) -> None:
                             if j.get("type") == "llm":
                                 _pending_llm_text = str(j.get("text") or "")
                                 _llm_text = _pending_llm_text
+                                # LLM 事件即写回答历史（tts stop 时同文本去重跳过）：
+                                # 官方部分会话 TTS 无 sentence_start，仅靠 tts stop 会丢文字
+                                if _pending_llm_text:
+                                    _maybe_write_llm_reply(_pending_llm_text)
                             if j.get("type") in ("llm", "tts", "error", "listen", "abort"):
                                 logger.info("上游消息 type=%s", j.get("type"))
                             # 官方 STT 回传**不广播**给前端（含注入回声/官方误听）——否则聊天窗口会把
