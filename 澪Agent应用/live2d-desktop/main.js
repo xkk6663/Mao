@@ -510,7 +510,7 @@ function hideChatWindow() {
 function createChatWindow(anchor) {
   chatWindow = new BrowserWindow({
     width: 460,
-    height: 640,
+    height: 178,
     show: false,
     frame: false,
     transparent: true,
@@ -532,7 +532,7 @@ function createChatWindow(anchor) {
   })
   reportWindowAction('pet-chat-input', chatWindow, 'created')
   chatWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-  chatWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/xiaozhi/xiaozhi-chat.html?v=9`)
+  chatWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/xiaozhi/xiaozhi-chat.html?v=10`)
   chatWindow.once('ready-to-show', () => {
     positionChatWindow(anchor)
     chatWindow.show()
@@ -850,6 +850,7 @@ function registerIpc() {
   ipcMain.handle('mio-desktop:toggle-chat-window', (_event, anchor) => toggleChatWindow(anchor))
   ipcMain.handle('mio-desktop:show-chat-window', (_event, anchor) => showChatWindow(anchor))
   ipcMain.on('mio-pet-chat:hide', () => hideChatWindow())
+  ipcMain.on('mio-pet-chat:open-admin', () => openPetAdmin())
   ipcMain.on('mio-desktop:restore-visibility', () => restoreWindowVisibility())
   ipcMain.handle('mio-desktop:import-model', importModel)
   ipcMain.handle('mio-desktop:select-model', (_event, modelId) => {

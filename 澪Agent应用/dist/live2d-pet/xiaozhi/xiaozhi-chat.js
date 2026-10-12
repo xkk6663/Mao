@@ -1,196 +1,52 @@
-/* 小智官方云对话客户端（经本地后端 /api/xiaozhi/ws 代理）
- * 会话界面 = 长连接以来的所有来往记录（历史驱动渲染，3s 轮询同步截图提问/观察结果）
- * 支持：文字对话（后端音频流注入）/ 图片对话（官方视觉→语音回答）/ 历史可视化 */
+/* 小智快速对话横条（经本地后端 /api/xiaozhi/ws 代理）
+ * 形态：轻量横条输入窗（标题条 + 状态行 + 图片暂存条 + 输入条），桌宠旁快速发消息。
+ * 回复显示：文字对话 → 桌宠 speak 事件（气泡 + 官方语音 + 口型）；
+ *           图片分析 → 桌宠 speech-bubble 事件（气泡 6s 自动消失）。
+ * 历史查看：点标题栏「历史记录」→ 打开主聊天界面（管理窗口私人空间对话页）。
+ * 本窗口不渲染历史列表、不播放音频（音频归桌宠，避免声音叠加）。 */
 (function () {
   'use strict';
 
   var $ = function (id) { return document.getElementById(id); };
-  var msgsEl = $('msgs'), inputEl = $('input'), sendBtn = $('sendBtn'),
-      imgBtn = $('imgBtn'), fileInput = $('fileInput'), statusDot = $('statusDot');
+  var inputEl = $('input'), sendBtn = $('sendBtn'),
+      imgBtn = $('imgBtn'), fileInput = $('fileInput'), statusDot = $('statusDot'),
+      statusLine = $('statusLine'), pendingBar = $('pendingBar'),
+      histBtn = $('histBtn'), closeBtn = $('closeBtn');
 
   var ws = null;
   var connected = false;
   var sessionId = '';
-  var histShown = 0;      // 已渲染的历史条数
-  var thinkingEl = null;
-  var speakingEl = null;
+  var busy = false;   // 有请求在途（思考中），防止并发发送
 
-  // ---------- 音频播放 ----------
-  var AudioCtx = window.AudioContext || window.webkitAudioContext;
-  var audioCtx = null;
-  var playQueue = [];   // AudioBuffer 队列
-  var playing = false;
-  var currentSource = null;
-
-  function ensureAudioCtx() {
-    if (!audioCtx) {
-      try { audioCtx = new AudioCtx(); } catch (e) { audioCtx = null; }
+  // ---------- 状态行（思考中 / 错误提示 / 连接提示） ----------
+  var statusTimer = null;
+  function setStatusLine(text, cls, persist) {
+    if (statusTimer) { clearTimeout(statusTimer); statusTimer = null; }
+    if (!text) { statusLine.textContent = ''; statusLine.className = 'statusline'; return; }
+    statusLine.innerHTML = '';
+    if (cls === 'thinking') {
+      var spin = document.createElement('span');
+      spin.className = 'spin';
+      statusLine.appendChild(spin);
+      statusLine.appendChild(document.createTextNode(text));
+    } else {
+      statusLine.textContent = text;
     }
-    if (audioCtx && audioCtx.state === 'suspended') { audioCtx.resume(); }
-    return audioCtx;
-  }
-
-  function schedulePlay(buffer) {
-    playQueue.push(buffer);
-    pumpQueue();
-  }
-
-  function pumpQueue() {
-    if (!audioCtx || playing) return;
-    if (playQueue.length === 0) { return; }
-    playing = true;
-    var buf = playQueue.shift();
-    var src = audioCtx.createBufferSource();
-    src.buffer = buf;
-    src.connect(audioCtx.destination);
-    src.onended = function () {
-      playing = false;
-      pumpQueue();
-    };
-    src.start();
-    currentSource = src;
-  }
-
-  function stopPlayback() {
-    if (currentSource) {
-      try { currentSource.onended = null; currentSource.stop(); } catch (e) { /* noop */ }
-      currentSource = null;
-    }
-    playQueue = [];
-    playing = false;
-  }
-
-  // 二进制：4B 样本数 + 4B 声道数 + planar float32（各声道连续）
-  function handlePcm(data) {
-    var ctx = ensureAudioCtx();
-    if (!ctx) return;
-    var view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-    if (data.byteLength < 8) return;
-    var samples = view.getUint32(0, true);
-    var channels = view.getUint32(4, true);
-    if (samples < 1 || channels < 1 || channels > 8) return;
-    var frameBytes = samples * 4;
-    if (8 + frameBytes * channels > data.byteLength) return;
-    var buffer = ctx.createBuffer(channels, samples, 48000);
-    for (var c = 0; c < channels; c++) {
-      var off = 8 + c * frameBytes;
-      var arr = new Float32Array(data.buffer, data.byteOffset + off, samples);
-      buffer.copyToChannel(arr, c);
-    }
-    schedulePlay(buffer);
-  }
-
-  // ---------- UI ----------
-  function addMsg(kind, text, meta) {
-    var div = document.createElement('div');
-    div.className = 'msg ' + kind;
-    if (meta) {
-      var m = document.createElement('span');
-      m.className = 'meta';
-      m.textContent = meta;
-      div.appendChild(m);
-    }
-    var t = document.createElement('span');
-    t.textContent = text;
-    div.appendChild(t);
-    msgsEl.appendChild(div);
-    msgsEl.scrollTop = msgsEl.scrollHeight;
-    return div;
-  }
-
-  function addMsgImage(kind, imageBase64, caption) {
-    var div = document.createElement('div');
-    div.className = 'msg img ' + kind;
-    if (caption) {
-      var m = document.createElement('span');
-      m.className = 'cap';
-      m.textContent = caption;
-      div.appendChild(m);
-    }
-    var img = document.createElement('img');
-    var src = imageBase64.indexOf('data:') === 0 ? imageBase64 : 'data:image/jpeg;base64,' + imageBase64;
-    img.src = src;
-    div.appendChild(img);
-    msgsEl.appendChild(div);
-    msgsEl.scrollTop = msgsEl.scrollHeight;
-    return div;
-  }
-
-  function showThinking() {
-    if (thinkingEl) return;
-    thinkingEl = document.createElement('div');
-    thinkingEl.className = 'thinking';
-    thinkingEl.innerHTML = '<span class="spin"></span><span>思考中…</span>';
-    msgsEl.appendChild(thinkingEl);
-    msgsEl.scrollTop = msgsEl.scrollHeight;
-  }
-
-  function hideThinking() {
-    if (thinkingEl) {
-      thinkingEl.remove();
-      thinkingEl = null;
-    }
-  }
-
-  function showSpeaking() {
-    if (speakingEl) return;
-    speakingEl = document.createElement('div');
-    speakingEl.className = 'speaking';
-    speakingEl.innerHTML = '<span class="bar"></span><span class="bar"></span><span class="bar"></span><span>正在说话…</span>';
-    msgsEl.appendChild(speakingEl);
-    msgsEl.scrollTop = msgsEl.scrollHeight;
-  }
-
-  function hideSpeaking() {
-    if (speakingEl) {
-      speakingEl.remove();
-      speakingEl = null;
+    statusLine.className = 'statusline' + (cls ? ' ' + cls : '');
+    if (!persist) {
+      statusTimer = setTimeout(function () { setStatusLine(''); }, 6000);
     }
   }
 
   function setStatus(state) {
     statusDot.className = 'dot ' + state;
-  }
-
-  // ---------- 会话历史（唯一消息来源，3s 轮询） ----------
-  function fetchHistory() {
-    return fetch('/api/xiaozhi/chat-history?limit=200')
-      .then(function (r) { return r.json(); })
-      .catch(function () { return { ok: false, history: [] }; });
-  }
-
-  function renderHistory(history) {
-    for (var i = histShown; i < history.length; i++) {
-      var it = history[i];
-      if (it.type === 'image') {
-        var cap = it.role === 'user' ? (it.text || (it.tag === 'observe' ? '（屏幕观察）' : '（图片）')) : '';
-        addMsgImage(it.role === 'user' ? 'user' : 'ai', it.image_base64, cap);
-      } else if (it.role === 'user') {
-        addMsg('user', it.text, it.tag === 'observe' ? '屏幕观察' : (it.tag === 'stt' ? '你说' : '你说'));
-      } else if (it.role === 'pet') {
-        addMsg('ai', it.text, '她说');
-      } else {
-        addMsg('sys', it.text);
-      }
-    }
-    histShown = history.length;
-  }
-
-  var polling = false;
-  function pollHistory() {
-    if (polling) return;   // 防并发竞态：同一批历史只渲染一次（避免"回复两遍"）
-    polling = true;
-    fetchHistory().then(function (j) {
-      polling = false;
-      if (j.ok && j.history && j.history.length > histShown) {
-        renderHistory(j.history);
-      }
-    }).catch(function () { polling = false; });
+    if (state === 'connected') setStatusLine('已连接，随时可以发消息');
+    else if (state === 'connecting') setStatusLine('正在连接小智…', '', true);
+    else setStatusLine('连接中断，重连中…', '', true);
   }
 
   // ---------- 图片暂存（选图/粘贴 → 暂存条 → 点发送才发） ----------
   var pendingImages = [];
-  var pendingBar = $('pendingBar');
 
   function renderPending() {
     pendingBar.innerHTML = '';
@@ -217,8 +73,8 @@
 
   function stageImage(file) {
     if (!file) return;
-    if (!/^image\//.test(file.type)) { addMsg('sys', '⚠ 仅支持图片文件'); return; }
-    if (file.size > 4 * 1024 * 1024) { addMsg('sys', '⚠ 图片过大（>4MB），请压缩后重试'); return; }
+    if (!/^image\//.test(file.type)) { setStatusLine('⚠ 仅支持图片文件'); return; }
+    if (file.size > 4 * 1024 * 1024) { setStatusLine('⚠ 图片过大（>4MB），请压缩后重试'); return; }
     var reader = new FileReader();
     reader.onload = function () {
       pendingImages.push({ dataUrl: String(reader.result) });
@@ -227,52 +83,58 @@
     reader.readAsDataURL(file);
   }
 
-  function sendPending() {
-    if (!pendingImages.length) return false;
-    var img = pendingImages.shift();
-    renderPending();
-    var base64 = String(img.dataUrl).split(',')[1] || '';
-    if (!base64) { addMsg('sys', '⚠ 读取图片失败'); return true; }
-    var question = inputEl.value.trim() || '请详细描述这张图片里的内容。';
-    inputEl.value = '';
-    addMsgImage('user', base64, '（图片已发送，识别中…）');
-    showThinking();
-    fetch('/api/xiaozhi/vision', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image_base64: base64, question: question })
-    }).then(function (r) { return r.json(); }).then(function (j) {
-      if (!j.ok) {
-        hideThinking();
-        addMsg('sys', '⚠ 图片分析失败：' + (j.detail || '未知错误'));
-      }
-    }).catch(function () {
-      hideThinking();
-      addMsg('sys', '⚠ 网络错误，图片分析失败');
-    });
-    setTimeout(pollHistory, 600);
-    return true;
+  // ---------- 发送 ----------
+  function setBusy(on) {
+    busy = on;
+    sendBtn.disabled = on;
   }
 
-  // ---------- 发送 ----------
   function sendText() {
     if (sendPending()) return;   // 有暂存图 → 发图（可附带输入框文字）
     var text = inputEl.value.trim();
-    if (!text || !connected) return;
+    if (!text || !connected) {
+      if (text) setStatusLine('⚠ 未连接，稍后再试');
+      return;
+    }
     inputEl.value = '';
-    showThinking();
+    setBusy(true);
+    setStatusLine('正在发送…', 'thinking', true);
     // 走后端音频流注入（官方语音通道）：后端负责 abort→唤醒→listen start→TTS音频流→stop，
-    // 官方云 ASR 识别后 LLM 回答并播报。文本/回答由会话历史统一渲染。
+    // 官方云 ASR 识别后 LLM 回答 → 桌宠 speak 事件显示气泡 + 播放官方语音 + 口型联动。
     fetch('/api/xiaozhi/say', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: text })
     }).then(function (r) { return r.json(); }).then(function (j) {
-      if (!j.ok) { hideThinking(); addMsg('sys', '⚠ 注入失败：' + (j.detail || '未知错误')); }
+      if (!j.ok) { setBusy(false); setStatusLine('⚠ 发送失败：' + (j.detail || '未知错误')); }
     }).catch(function () {
-      hideThinking(); addMsg('sys', '⚠ 网络错误，注入失败');
+      setBusy(false); setStatusLine('⚠ 网络错误，发送失败');
     });
-    setTimeout(pollHistory, 400);
+  }
+
+  function sendPending() {
+    if (!pendingImages.length) return false;
+    var img = pendingImages.shift();
+    renderPending();
+    var base64 = String(img.dataUrl).split(',')[1] || '';
+    if (!base64) { setStatusLine('⚠ 读取图片失败'); return true; }
+    var question = inputEl.value.trim() || '请详细描述这张图片里的内容。';
+    inputEl.value = '';
+    setBusy(true);
+    setStatusLine('正在分析图片…', 'thinking', true);
+    fetch('/api/xiaozhi/vision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_base64: base64, question: question })
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      setBusy(false);
+      if (!j.ok) setStatusLine('⚠ 图片分析失败：' + (j.detail || '未知错误'));
+      else setStatusLine('已发送图片，桌宠气泡会显示分析结果');
+    }).catch(function () {
+      setBusy(false);
+      setStatusLine('⚠ 网络错误，图片分析失败');
+    });
+    return true;
   }
 
   function sendImage() {
@@ -296,11 +158,11 @@
     }
   });
 
-  // ---------- WebSocket（连接状态 / 音频 / 说话状态；文本显示由历史驱动） ----------
+  // ---------- WebSocket（只收文本状态事件：连接/思考/说话；不渲染消息、不播放音频） ----------
   function connect() {
     setStatus('connecting');
     var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-    // role=chat：对话窗口只收文本（音频由桌宠本体 role=main 播放，避免声音叠加）
+    // role=chat：对话窗口只收文本状态（音频由桌宠本体播放，避免声音叠加）
     var url = proto + location.host + '/api/xiaozhi/ws?role=chat';
     try { ws = new WebSocket(url); } catch (e) { setStatus('offline'); return; }
 
@@ -315,8 +177,8 @@
     };
     ws.onerror = function () { /* onclose 处理 */ };
     ws.onmessage = function (ev) {
-      if (typeof ev.data === 'string') { handleText(ev.data); }
-      else { handlePcm(ev.data); }
+      if (typeof ev.data === 'string') handleText(ev.data);
+      // 二进制（音频）忽略：音频归桌宠播放
     };
   }
 
@@ -332,18 +194,19 @@
         connected = true;
         setStatus('connected');
         sessionId = j.session_id || '';
-        if (histShown === 0) pollHistory();  // 首次连接拉历史
         break;
       case 'tts':
-        if (j.state === 'start') { hideThinking(); showSpeaking(); }
-        else if (j.state === 'stop') { hideSpeaking(); hideThinking(); pollHistory(); }
+        if (j.state === 'start') { setStatusLine('小智正在说话…', 'thinking', true); }
+        else if (j.state === 'stop') { setBusy(false); setStatusLine('回答完成，气泡会显示在桌宠旁'); }
         break;
       case 'llm':
-        showThinking();
+        setStatusLine('小智正在思考…', 'thinking', true);
         break;
       case 'error':
+        connected = false;
         setStatus('offline');
-        addMsg('sys', '⚠ ' + (j.error || '未知错误'));
+        setBusy(false);
+        setStatusLine('⚠ ' + (j.error || '未知错误'));
         break;
       default:
         break;
@@ -357,7 +220,7 @@
   });
   imgBtn.addEventListener('click', function () { fileInput.click(); });
   fileInput.addEventListener('change', sendImage);
-  $('closeBtn').addEventListener('click', function () {
+  closeBtn.addEventListener('click', function () {
     // iframe（打开 MIO 覆盖层）内：通知父页面关闭覆盖层；独立窗口：直接关闭
     try {
       if (window.parent && window.parent !== window) {
@@ -367,12 +230,22 @@
     } catch (e) {}
     window.close();
   });
-
-  // 首次点击页面时恢复音频上下文（浏览器自动播放策略）
-  document.addEventListener('pointerdown', function () { ensureAudioCtx(); }, { once: true });
-
-  // 历史轮询：3s 拉取一次，同步截图提问/观察/回答
-  setInterval(pollHistory, 3000);
+  histBtn.addEventListener('click', function () {
+    // 打开主聊天界面（管理窗口私人空间对话页），查看完整历史
+    try {
+      if (window.mioPetChat && typeof window.mioPetChat.openAdmin === 'function') {
+        window.mioPetChat.openAdmin();
+        return;
+      }
+    } catch (e) {}
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: 'xz-open-admin' }, '*');
+        return;
+      }
+    } catch (e) {}
+    window.open('/agent-app/?workspace=main&v=' + Date.now(), '_blank');
+  });
 
   connect();
 })();
