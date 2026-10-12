@@ -277,9 +277,14 @@ def _chat_append(role: str, type_: str, text: str = "", image_base64: str | None
         _history_save_task = asyncio.create_task(_save_chat_history())
 
 
-async def _syslog(text: str, tag: str = "sys") -> None:
+async def _syslog(text: str, tag: str = "sys", quiet: bool = False) -> None:
     """系统时间线消息：写入会话历史（role=system，前端灰色小字显示）+ 广播给所有订阅者。
-    让整个小智通信链路（连接/断开/重连/唤醒/识别/说话/视觉）在聊天窗口完全可视化，不再黑箱。"""
+    让整个小智通信链路（连接/断开/重连/唤醒/识别/说话/视觉）在聊天窗口完全可视化，不再黑箱。
+    quiet=True 时只写运行日志、不写历史不广播：用于频繁的连接状态消息（重连/断连），
+    避免高频刷屏占用聊天界面空间（用户要求主聊天界面不显示重连/断开）。"""
+    if quiet:
+        logger.info("sys[quiet]: %s", text)
+        return
     _chat_append("system", "text", text, tag=tag)
     await _broadcast(json.dumps({
         "type": "sysmsg",
@@ -907,7 +912,7 @@ async def _reconnect_loop(initial_delay: float = 3.0) -> None:
             conn, err = await _ensure_upstream()
         if conn is not None:
             await _broadcast(json.dumps({"type": "hello", "version": 1, "session_id": _session_id}, ensure_ascii=False))
-            await _syslog("🔗 小智已重连（会话 " + str(_session_id) + "）")
+            await _syslog("🔗 小智已重连（会话 " + str(_session_id) + "）", quiet=True)
             return
         logger.warning("上游重连失败，%.0fs 后重试: %s", delay, err)
         await _broadcast(json.dumps({"type": "error", "error": "connecting"}, ensure_ascii=False))
@@ -999,7 +1004,8 @@ async def _pump_upstream(conn) -> None:
         except Exception:  # noqa: BLE001
             pass
         # 通知前端"连接中断，正在重连"，并启动自动重连
-        await _syslog("⚠️ 小智连接中断，正在自动重连…")
+        # quiet：频繁重连/断连不写聊天历史不广播，避免刷屏占用界面空间
+        await _syslog("⚠️ 小智连接中断，正在自动重连…", quiet=True)
         await _broadcast(json.dumps({"type": "error", "error": "connecting"}, ensure_ascii=False))
         asyncio.create_task(_reconnect_loop())
 
