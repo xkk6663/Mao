@@ -209,7 +209,7 @@ function openPetAdmin() {
   const sess = petAdminWindow.webContents.session
   sess.clearCache().then(() => sess.clearStorageData()).then(() => {
     // 桌宠管理面板：直接进入 main 模式（私人空间对话页），Agent 工作台已阉割
-    petAdminWindow.loadURL(`${API_BASE}/agent-app/?workspace=main&v=20261012d4`)
+    petAdminWindow.loadURL(`${API_BASE}/agent-app/?workspace=main&v=20261012d5`)
   })
   petAdminWindow.on('closed', () => { petAdminWindow = null })
 }

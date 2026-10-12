@@ -14,7 +14,14 @@
 
   function qs(sel, root) { return (root || document).querySelector(sel) }
 
-  function findComposer() { return qs('.composer-actions') || qs('.composer') }
+  function findComposer() {
+    var c = qs('.composer-actions') || qs('.composer')
+    if (c) return c
+    // fallback：找 composer-input textarea 的父容器（Vue 类名可能变化）
+    var ta = qs('.composer-input') || qs('textarea[placeholder*="输入"]') || qs('textarea')
+    if (ta) return ta.closest('.composer') || ta.parentElement
+    return null
+  }
   function findDraft() { return qs('.composer-input') }
   function findSendBtn() { return qs('.send-button') }
 
@@ -165,16 +172,18 @@
   })
 
   // ---- 调试角标：左下角小圆点（绿=输入区+按钮都OK，黄=输入区在但按钮未注入，红=没找到输入区）----
+  var badgeClosed = false
   function ensureBadge() {
+    if (badgeClosed) return
     var composer = findComposer()
     var btn = composer && composer.querySelector('.xz-img-btn')
     var b = document.getElementById('xz-inject-badge')
     if (!b) {
       b = document.createElement('div')
       b.id = 'xz-inject-badge'
-      b.title = '小智图片注入诊断 v20261012d（点此关闭）'
+      b.title = '小智图片注入诊断 v20261012e（点此关闭）'
       b.style.cssText = 'position:fixed;left:6px;bottom:6px;width:10px;height:10px;border-radius:50%;z-index:99999;cursor:pointer;box-shadow:0 0 0 1px rgba(0,0,0,0.2);'
-      b.addEventListener('click', function () { b.remove() })
+      b.addEventListener('click', function () { badgeClosed = true; b.remove() })
       document.body.appendChild(b)
     }
     // 每次都更新颜色（修复：Vue 异步渲染后角标不再是永久红点）
@@ -183,13 +192,15 @@
 
   // ---- 保活：Vue 重渲染后按钮/暂存条/拦截不丢失 ----
   function keepAlive() {
-    ensureBtn()
-    interceptSend()
-    ensurePendingBar()
-    ensureBadge()
+    try { ensureBtn() } catch (e) { /* ignore */ }
+    try { interceptSend() } catch (e) { /* ignore */ }
+    try { ensurePendingBar() } catch (e) { /* ignore */ }
+    try { ensureBadge() } catch (e) { /* ignore */ }
   }
   var observer = new MutationObserver(keepAlive)
   observer.observe(document.body, { childList: true, subtree: true })
   keepAlive()
   setInterval(keepAlive, 2000)
+  // 角标颜色独立高频刷新（不依赖 keepAlive，确保 Vue 渲染后及时变绿）
+  setInterval(function () { try { ensureBadge() } catch (e) {} }, 500)
 })()
