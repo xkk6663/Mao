@@ -61,6 +61,7 @@ _sub_queues: dict[WebSocket, asyncio.Queue] = {}  # ws -> 发送队列（保序�
 _sub_roles: dict[WebSocket, str] = {}  # ws -> 'main'(桌宠本体，唯一音频播放者) / 'chat'(对话窗口，只收文本)
 _active_ws: WebSocket | None = None
 _vision: dict | None = None  # 小智官方云下发的视觉能力 {"url": str, "token": str}
+_tts_playing: bool = False  # 官方 TTS 是否正在播放（只在播放中才发 abort，避免无意义中断触发官方"播放被中断"问候）
 
 
 class VisionRequest(BaseModel):
@@ -496,7 +497,7 @@ async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = 
     官方云忽略（音频缓存延迟识别），故注入后等待 STT 确认，未确认则免唤醒重试一次。
     30 秒内已唤醒过（会话仍活跃）则跳过唤醒直接走音频流。
     """
-    global _last_wake_ts, _inject_stt_suppress_until, _session_wake_done
+    global _last_wake_ts, _inject_stt_suppress_until, _session_wake_done, _tts_playing
     # 官方 ASR 对长音频识别会截断（>150字几乎必然失败，只回唤醒问候）：
     # 内部注入（vision/observe 分析文本）强制压到 70 字以内，保证官方完整识别 + 完整语音播放
     if source != "user" and len(text) > 70:
@@ -513,9 +514,11 @@ async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = 
         logger.warning("注入小智语音失败：官方云未连接（hello 未建立）")
         return False
     try:
-        # 1. 打断任何进行中的会话
-        await conn.send(json.dumps({"type": "abort", "reason": "user_interrupt", "session_id": _session_id}, ensure_ascii=False))
-        await asyncio.sleep(0.3)
+        # 1. 只在官方 TTS 正在播放时才发 abort（避免无意义中断触发官方"播放被中断，要不要再放一次"问候）
+        if _tts_playing:
+            await conn.send(json.dumps({"type": "abort", "reason": "user_interrupt", "session_id": _session_id}, ensure_ascii=False))
+            await asyncio.sleep(0.3)
+            _tts_playing = False
         # 2. 长连接只唤醒一次：本会话已唤醒过（_session_wake_done）则免唤醒直接走音频流，
         #    避免每次对话都触发唤醒词问候"你来啦"；仅官方断线重连（新会话）后才重新唤醒
         need_wake = not _session_wake_done
@@ -537,22 +540,17 @@ async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = 
             await asyncio.sleep(0.3)
             _last_wake_ts = time.time()
             _session_wake_done = True   # 本会话已唤醒，后续免唤醒直到断线重连
-        # 3. 音频流注入（先注入一次）
+        # 3. 音频流注入（预唤醒已解决首次注入忽略问题，不再重试——重试会导致官方识别两次）
         frames = await _send_audio_stream(conn, text)
         if not frames:
             return False
         await _syslog(f"🎤 已发送语音「{str(text)[:40]}」等待官方识别…")
-        # 4. 等 STT 确认；未确认（官方云缓存/忽略）则免唤醒重试一次
-        confirmed = await _wait_stt_confirmed(8.0)
-        if not confirmed:
-            logger.info("首次注入未被识别，免唤醒重试: %s", str(text)[:40])
-            await asyncio.sleep(1.5)
-            frames = await _send_audio_stream(conn, text)
-            if not frames:
-                return False
-            confirmed = await _wait_stt_confirmed(8.0)
+        # 4. 等 STT 确认（15s 超时；不重试，避免相同音频被官方识别两次）
+        confirmed = await _wait_stt_confirmed(15.0)
         if confirmed:
             await _syslog("🧠 官方已识别语音，小智正在思考回答…")
+        else:
+            logger.warning("注入后 15s 内未收到官方 STT 确认（文本可能未被识别）: %s", str(text)[:40])
         logger.info("注入小智语音成功(音频流 %d 帧): %s", len(frames), str(text)[:40])
         # 内部注入（vision/observe）：接下来官方 STT 识别到的文本是注入内容本身，
         # 不应写入"你说"历史（否则 AI 分析文本被当成用户发言）。记录注入文本 + 抑制窗口 60s 兜底。
@@ -899,7 +897,7 @@ async def _heartbeat_loop(conn) -> None:
 
 async def _pump_upstream(conn) -> None:
     """上游消息持续转发给最近活跃订阅者；断线自动清理并允许重建。"""
-    global _upstream, _last_tts_stop, _llm_text, _last_stt_ts, _last_stt_text
+    global _upstream, _last_tts_stop, _llm_text, _last_stt_ts, _last_stt_text, _tts_playing
     decoder = _OpusDecoder()
     _pump_audio_count = 0
     _pump_audio_bytes = 0
@@ -923,8 +921,10 @@ async def _pump_upstream(conn) -> None:
                             _chat_append("pet", "text", _llm_text, tag="llm")
                     if j.get("type") == "tts" and j.get("state") == "stop":
                         _last_tts_stop = time.time()
+                        _tts_playing = False
                         await _syslog("🔊 小智说话结束")
                     if j.get("type") == "tts" and j.get("state") == "start":
+                        _tts_playing = True
                         await _syslog("🗣️ 小智开始说话…")
                 except Exception:  # noqa: BLE001
                     pass
@@ -945,8 +945,10 @@ async def _pump_upstream(conn) -> None:
                             _capture_vision_from_mcp(j.get("payload"))
                         if j.get("type") == "tts" and j.get("state") == "stop":
                             _last_tts_stop = time.time()
+                            _tts_playing = False
                             await _syslog("🔊 小智说话结束")
                         if j.get("type") == "tts" and j.get("state") == "start":
+                            _tts_playing = True
                             await _syslog("🗣️ 小智开始说话…")
                         if j.get("type") == "stt":
                             _last_stt_ts = time.time()
@@ -985,7 +987,7 @@ async def _pump_upstream(conn) -> None:
 
 async def _ensure_upstream() -> tuple[object | None, str | None]:
     """确保全局单例上游存在并已 hello；返回 (conn, error)。"""
-    global _upstream, _session_id, _session_wake_done
+    global _upstream, _session_id, _session_wake_done, _tts_playing
     if _upstream is not None:
         return _upstream, None
     identity = _device_identity()
@@ -1022,6 +1024,7 @@ async def _ensure_upstream() -> tuple[object | None, str | None]:
         _session_id = j.get("session_id")
         _upstream = conn
         _session_wake_done = False   # 新会话：首次注入需唤醒一次，之后长连接免唤醒
+        _tts_playing = False
         await _syslog(f"🔗 小智已连接（会话 {_session_id}）")
         # 后台预唤醒：新会话建立后自动完成一次唤醒，后续对话永远免唤醒（不再"你来啦"）
         async def _prewake():
@@ -1073,6 +1076,10 @@ async def _relay_browser_message(ws: WebSocket, text: str) -> None:
         if isinstance(j, dict) and not j.get("session_id") and _session_id:
             j["session_id"] = _session_id
             text = json.dumps(j, ensure_ascii=False)
+        # 拦截前端 abort：不透明传给官方（_inject_say_impl 会在 TTS 播放中时自己发一次 abort，
+        # 避免双 abort 导致官方状态机混乱 + 触发"播放被中断，要不要再放一次"问候）
+        if isinstance(j, dict) and j.get("type") == "abort":
+            return
         if isinstance(j, dict) and j.get("type") == "listen" and j.get("state") == "detect":
             t = str(j.get("text") or "").strip()
             if t and t not in ("你好", "嗨", "hello", "您好", "在吗"):
