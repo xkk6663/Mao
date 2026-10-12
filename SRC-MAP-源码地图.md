@@ -118,20 +118,30 @@
 
 ---
 
-## 5. 已弃用 / 已隔离（别再去改这些）
+## 5. 已弃用 / 已删除（2026-10-12 清理完成）
 
-| 内容 | 位置 | 说明 |
+以下内容已**从磁盘删除**（git 历史可回溯已入库部分），别再去找：
+
+| 内容 | 处理 | 说明 |
 |---|---|---|
-| 旧桌宠管理页 | `dist\live2d-pet\_deprecated\admin.html` | 已被 MIO 管理窗口取代 |
-| 旧小智对话页 | `dist\live2d-pet\_deprecated\pet-chat-xiaozhi.html` | 已被 xiaozhi-chat.html 取代 |
-| 旧 index 备份 | `dist\live2d-pet\_deprecated\index.html.bak_20261009` | 保留备查 |
-| Agent 工作台 / 创作对话 | 前端已阉割（入口不显示） | 原版功能，不恢复 |
-| QQ 共享对话 | 对话抽屉中隐藏 | 原版功能，不恢复 |
-| 原版 README/CHANGELOG | 项目根 `README.md` 等 | 上游项目文档，保留不改 |
-| 原版源码备份 | `_mio_orig\` | 上游原始发布，只读 |
-| 本地 TTS（SAPI） | `xiaozhi.py` 中 `_speak_local` | **已禁用**（音色难听，图片识别走纯文本气泡） |
+| 旧桌宠管理页 `admin.html` | ✅ 已删除 | 已被 MIO 管理窗口取代 |
+| 旧小智对话页 `pet-chat-xiaozhi.html` | ✅ 已删除 | 已被 xiaozhi-chat.html 取代 |
+| 旧 index 备份 `index.html.bak_20261009` | ✅ 已删除 | 前端已 git 入库，无需此备份 |
+| Agent 工作台分片（AgentHomePage/AgentRightRail/AgentSettingsPage/TasksPage/creationApi） | ✅ 已删除 | 原版功能，已阉割 |
+| 记录页分片（RecordsPage） | ✅ 已删除 | 导航已隐藏 |
+| 历史排查工具 `_tools\`（test_*.py、官方协议脚本、诊断 ps1） | ✅ 已删除 | git 有记录 |
+| 历史排查输出 `_logs\` | ✅ 已删除 | 日志类，无需保留 |
+| 模型下载缓存 `l2d_downloads\` `l2d_official_models\` | ✅ 已删除 | 前端/后端无引用 |
+| opus 录音包 `opus-recorder-pkg\` `opus-recorder.tgz` | ✅ 已删除 | 无引用 |
+| 小智调研源码 `xzclient_src\` | ✅ 已删除 | 调研完成 |
 
-**历史排查工具**：`_tools\`（test_*.py、官方协议脚本、诊断 ps1）；**历史排查输出**：`_logs\`（say_now*.txt、diag 输出等）。均不影响运行，需要时可翻阅。
+**保留（别删）**：
+- `_mio_orig\`（上游原版发布备份，120MB，只读参照）
+- `本地视觉\`（后端 config 引用路径 `MIO_LOCAL_VISION_DIR`，空目录也要留）
+- `xiaozhi_device.json` / `xiaozhi_chat_history.json` / `status.json`（运行数据）
+- `backend_out.log` / `backend_err.log` / `start_mio.log`（start_mio.ps1 引用路径）
+- `routes\agent.py`（bootstrap/messages/conversations 仍被前端使用）
+- 本地 TTS `_speak_local`（函数保留但已禁用——音色难听，图片识别走纯文本气泡）
 
 ---
 

@@ -1,4 +1,0 @@
-backend tests+scripts: 84 files removed
-QQ+UI tests: 17 files removed
-dist_backup_20261009 deleted
-pycache dirs cleaned: 90
