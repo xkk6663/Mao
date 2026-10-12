@@ -2,82 +2,74 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>小智快速对话</title>
+<title>小智对话</title>
 <style>
-  :root { --bg:#fff; --fg:#1f2328; --accent:#4f6ef7; --muted:#8a919c; }
   * { margin:0; padding:0; box-sizing:border-box; }
-  html,body { height:100%; }
+  html,body { height:100%; overflow:hidden; background:transparent; }
   body {
     font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;
-    color:var(--fg);
-    background:rgba(255,255,255,0.985);
-    display:flex; flex-direction:column;
-    overflow:hidden; border-radius:14px;
+    display:flex; align-items:center; padding:6px;
   }
-  .titlebar {
-    -webkit-app-region:drag;
-    display:flex; align-items:center; gap:8px;
-    padding:8px 12px; background:linear-gradient(90deg,#4f6ef7,#7a5cf0);
-    color:#fff; border-radius:14px 14px 0 0; user-select:none;
-    flex:none;
+  /* 一条胶囊横条：状态点 + 输入框 + 发图 + 发送 + 关闭 */
+  .bar {
+    position:relative; flex:1; display:flex; align-items:center; gap:8px;
+    background:rgba(24,28,38,0.92);
+    border:1px solid rgba(255,255,255,0.14);
+    border-radius:16px; padding:6px 7px 6px 12px;
+    box-shadow:0 6px 22px rgba(0,0,0,0.30);
+    -webkit-app-region: drag;   /* 空白区域可拖动窗口 */
   }
-  .titlebar .dot { width:9px; height:9px; border-radius:50%; background:#7ef0a6; box-shadow:0 0 6px #7ef0a6; }
-  .titlebar .dot.connecting { background:#f5c26b; box-shadow:0 0 6px #f5c26b; }
-  .titlebar .dot.offline { background:#f0785e; box-shadow:0 0 6px #f0785e; }
-  .titlebar .title { font-size:13px; font-weight:600; flex:1; letter-spacing:1px; }
-  .titlebar .hist {
-    -webkit-app-region:no-drag; cursor:pointer;
-    height:24px; padding:0 10px; border-radius:7px; background:rgba(255,255,255,0.16);
-    color:#fff; border:none; font-size:11px; display:flex; align-items:center; gap:4px;
+  .dot {
+    width:8px; height:8px; border-radius:50%;
+    background:#5ee08a; box-shadow:0 0 6px #5ee08a;
+    flex:none; -webkit-app-region:no-drag;
   }
-  .titlebar .hist:hover { background:rgba(255,255,255,0.32); }
-  .titlebar .close {
-    -webkit-app-region:no-drag; cursor:pointer;
-    width:24px; height:24px; border-radius:7px; background:rgba(255,255,255,0.16);
-    color:#fff; border:none; font-size:14px; line-height:1; display:flex; align-items:center; justify-content:center;
+  .dot.connecting { background:#f5c26b; box-shadow:0 0 6px #f5c26b; }
+  .dot.offline { background:#f0785e; box-shadow:0 0 6px #f0785e; }
+  .bar input {
+    flex:1; min-width:0;
+    background:transparent; border:none; outline:none;
+    color:#fff; font-size:14px; letter-spacing:0.3px;
+    -webkit-app-region:no-drag;
   }
-  .titlebar .close:hover { background:rgba(255,255,255,0.32); }
-  .statusline {
-    flex:none; min-height:0; padding:3px 12px 0;
-    font-size:11px; color:var(--muted); display:flex; align-items:center; gap:6px;
-    overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
+  .bar input::placeholder { color:rgba(255,255,255,0.42); }
+  .ibtn {
+    flex:none; width:30px; height:30px; border-radius:50%;
+    border:none; cursor:pointer; font-size:14px;
+    background:rgba(255,255,255,0.10); color:rgba(255,255,255,0.92);
+    display:flex; align-items:center; justify-content:center;
+    transition:background 0.15s;
+    -webkit-app-region:no-drag;
   }
-  .statusline.thinking { color:var(--accent); }
-  .statusline .spin { width:12px; height:12px; border:2px solid #d6d9e0; border-top-color:var(--accent); border-radius:50%; animation:rot 0.9s linear infinite; flex:none; }
-  @keyframes rot { to { transform:rotate(360deg); } }
-  .pending { display:none; flex-wrap:wrap; gap:6px; padding:4px 12px 0; flex:none; }
-  .pending .item { position:relative; width:46px; height:46px; border-radius:8px; overflow:hidden; border:1px solid #dcdfe4; flex:none; }
-  .pending .item img { width:100%; height:100%; object-fit:cover; display:block; }
-  .pending .item button { position:absolute; top:1px; right:1px; width:15px; height:15px; border-radius:50%; border:none; background:rgba(0,0,0,0.55); color:#fff; font-size:9px; line-height:15px; cursor:pointer; padding:0; }
-  .inputbar { display:flex; gap:8px; padding:8px 12px 10px; border-top:1px solid #e8eaee; flex:none; }
-  .inputbar .imgbtn {
-    border:1px solid #dcdfe4; border-radius:10px; background:#fff; color:var(--muted);
-    font-size:15px; cursor:pointer; width:38px; display:flex; align-items:center; justify-content:center; flex:none;
+  .ibtn:hover { background:rgba(255,255,255,0.22); }
+  .send {
+    flex:none; border:none; cursor:pointer;
+    background:linear-gradient(135deg,#4f6ef7,#7a5cf0);
+    color:#fff; font-size:13px; font-weight:600;
+    padding:7px 15px; border-radius:11px;
+    -webkit-app-region:no-drag;
   }
-  .inputbar .imgbtn:hover { border-color:var(--accent); color:var(--accent); }
-  .inputbar input {
-    flex:1; border:1px solid #dcdfe4; border-radius:10px; padding:8px 12px; font-size:14px; outline:none; background:#fff; min-width:0;
+  .send:disabled { opacity:0.45; cursor:default; }
+  .close {
+    position:absolute; top:-8px; right:-8px;
+    width:18px; height:18px; border-radius:50%;
+    border:none; cursor:pointer;
+    background:rgba(40,44,56,0.94);
+    color:rgba(255,255,255,0.85); font-size:10px; line-height:1;
+    display:flex; align-items:center; justify-content:center;
+    box-shadow:0 2px 8px rgba(0,0,0,0.35);
+    -webkit-app-region:no-drag;
   }
-  .inputbar input:focus { border-color:var(--accent); }
-  .inputbar button {
-    border:none; border-radius:10px; padding:0 16px; background:var(--accent); color:#fff; font-size:13px; cursor:pointer; flex:none;
-  }
-  .inputbar button:disabled { opacity:0.45; cursor:default; }
+  .close:hover { background:#e0574a; color:#fff; }
 </style>
 </head>
 <body>
-  <div class="titlebar">
+  <div class="bar">
     <span class="dot offline" id="statusDot"></span>
-    <span class="title">小智快速对话</span>
-    <button class="hist" id="histBtn" title="查看完整聊天记录（打开主聊天界面）">历史记录</button>
-    <button class="close" id="closeBtn" title="关闭">&#10005;</button>
-  </div>
-  <div class="statusline" id="statusLine"></div>
-  <div class="pending" id="pendingBar"></div>
-  <div class="inputbar">
-    <button class="imgbtn" id="imgBtn" title="选择图片（暂存，点发送才发）">&#128247;</button>
-    <input id="input" type="text" placeholder="给小智发消息，回车发送…" autocomplete="off">
-    <button id="sendBtn">发送</button>
+    <input id="input" type="text" placeholder="和小智说点什么…" autocomplete="off" spellcheck="false">
+    <button type="button" class="ibtn" id="imgBtn" title="发送图片">&#128247;</button>
+    <button type="button" class="send" id="sendBtn" disabled>发送</button>
+    <button type="button" class="close" id="closeBtn" title="退出对话">&#10005;</button>
     <input type="file" id="fileInput" accept="image/*" style="display:none">
   </div>
 <script src="xiaozhi-chat.js"></script>
