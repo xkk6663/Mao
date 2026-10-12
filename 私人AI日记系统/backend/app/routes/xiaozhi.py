@@ -524,7 +524,7 @@ async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = 
             return False
         await _syslog(f"🎤 已发送语音「{str(text)[:40]}」等待官方识别…")
         # 4. 等 STT 确认（15s 超时；不重试，避免相同音频被官方识别两次）
-        confirmed = await _wait_stt_confirmed(15.0)
+        confirmed = await _wait_stt_confirmed(20.0)
         if confirmed:
             await _syslog("🧠 官方已识别语音，小智正在思考回答…")
         else:
@@ -847,8 +847,8 @@ async def _sub_writer(ws: WebSocket) -> None:
             return
 
 
-async def _reconnect_loop(initial_delay: float = 1.5) -> None:
-    """上游断开后自动重连（退避 1.5s→8s），成功后广播 hello 让前端恢复。"""
+async def _reconnect_loop(initial_delay: float = 0.8) -> None:
+    """上游断开后自动重连（退避 0.8s→5s），成功后广播 hello 让前端恢复。"""
     delay = initial_delay
     while True:
         await asyncio.sleep(delay)
@@ -858,9 +858,9 @@ async def _reconnect_loop(initial_delay: float = 1.5) -> None:
             await _broadcast(json.dumps({"type": "hello", "version": 1, "session_id": _session_id}, ensure_ascii=False))
             await _syslog("🔗 小智已重连（会话 " + str(_session_id) + "）")
             return
-        logger.warning("上游重连失败，%.0fs 后重试: %s", delay, err)
+        logger.warning("上游重连失败，%.1fs 后重试: %s", delay, err)
         await _broadcast(json.dumps({"type": "error", "error": "connecting"}, ensure_ascii=False))
-        delay = min(8.0, delay * 1.5)
+        delay = min(5.0, delay * 1.5)
 
 
 async def _app_keepalive_loop(conn) -> None:
@@ -868,7 +868,7 @@ async def _app_keepalive_loop(conn) -> None:
     定期发 IoT 状态上报模拟真实设备行为，防止官方云 1005 主动断连。
     IoT states 不触发对话/ASR/TTS，是官方协议里设备端的标准定期上报行为。"""
     while True:
-        await asyncio.sleep(25)
+        await asyncio.sleep(15)
         try:
             if _upstream is not conn:
                 return
@@ -959,6 +959,7 @@ async def _pump_upstream(conn) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("上游下行中断: %s", exc)
     finally:
+        _tts_playing = False
         if _upstream is conn:
             _upstream = None
         try:
