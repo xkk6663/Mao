@@ -489,13 +489,10 @@ async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = 
             "vision"/"observe"=内部注入（AI 分析文本，STT 结果不写"你说"历史，
             避免"把云端发回的信息当成用户发的"角色错乱）。
 
-    【官方路径（音频流注入）】官方协议中 detect 只用于唤醒词，长文本会被拒绝/忽略
-    （用户实测"只有它在听没有后续"）。正确做法（官方设备行为）：
-        detect(唤醒词) → 唤醒回复播完 → listen start → 发送 TTS 合成的语音流(opus)
-        → listen stop → 官方云 ASR 识别文本 → LLM 回答 → TTS 声音
-    实测：SAPI TTS 音频被官方 ASR 识别，回答音频连续输出。唤醒后第一次注入可能被
-    官方云忽略（音频缓存延迟识别），故注入后等待 STT 确认，未确认则免唤醒重试一次。
-    30 秒内已唤醒过（会话仍活跃）则跳过唤醒直接走音频流。
+    【静默连接·音频流注入】不发唤醒词 detect，直接 listen start → SAPI TTS 合成语音流(opus)
+        → listen stop → 官方云 ASR 识别文本 → LLM 回答 → TTS 声音。
+    避免每次新会话/断线重连都触发"你好呀今天过得怎么样"唤醒问候。
+    只在官方 TTS 播放中才发 abort（避免无意义中断触发官方"播放被中断"问候）。
     """
     global _last_wake_ts, _inject_stt_suppress_until, _session_wake_done, _tts_playing
     # 官方 ASR 对长音频识别会截断（>150字几乎必然失败，只回唤醒问候）：
@@ -519,28 +516,9 @@ async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = 
             await conn.send(json.dumps({"type": "abort", "reason": "user_interrupt", "session_id": _session_id}, ensure_ascii=False))
             await asyncio.sleep(0.3)
             _tts_playing = False
-        # 2. 长连接只唤醒一次：本会话已唤醒过（_session_wake_done）则免唤醒直接走音频流，
-        #    避免每次对话都触发唤醒词问候"你来啦"；仅官方断线重连（新会话）后才重新唤醒
-        need_wake = not _session_wake_done
-        if need_wake:
-            await _syslog("🔔 正在唤醒小智（本次会话仅唤醒一次，之后长连接免唤醒）")
-            await conn.send(json.dumps({
-                "type": "listen",
-                "state": "detect",
-                "text": "你好",
-                "source": "text",
-                "session_id": _session_id,
-            }, ensure_ascii=False))
-            wake_ts_before = _last_tts_stop
-            wait_until = time.time() + 2.5   # 唤醒确认窗口（不等问候播完，快速进入注入）
-            while time.time() < wait_until:
-                await asyncio.sleep(0.3)
-                if _last_tts_stop > wake_ts_before:
-                    break
-            await asyncio.sleep(0.3)
-            _last_wake_ts = time.time()
-            _session_wake_done = True   # 本会话已唤醒，后续免唤醒直到断线重连
-        # 3. 音频流注入（预唤醒已解决首次注入忽略问题，不再重试——重试会导致官方识别两次）
+        # 2. 静默连接：不发唤醒词 detect("你好")，直接音频流注入（listen start → 语音 → listen stop），
+        #    官方靠 listen start + 音频帧直接 ASR 识别，避免每次新会话/重连都触发"你好呀今天过得怎么样"问候
+        # 3. 音频流注入（不重试，避免相同音频被官方识别两次）
         frames = await _send_audio_stream(conn, text)
         if not frames:
             return False
@@ -1023,25 +1001,9 @@ async def _ensure_upstream() -> tuple[object | None, str | None]:
             return None, f"官方云 hello 响应异常: {msg[:120]}"
         _session_id = j.get("session_id")
         _upstream = conn
-        _session_wake_done = False   # 新会话：首次注入需唤醒一次，之后长连接免唤醒
+        _session_wake_done = False   # 保留变量（不再用于唤醒，静默连接直接音频流注入）
         _tts_playing = False
         await _syslog(f"🔗 小智已连接（会话 {_session_id}）")
-        # 后台预唤醒：新会话建立后自动完成一次唤醒，后续对话永远免唤醒（不再"你来啦"）
-        async def _prewake():
-            global _session_wake_done
-            await asyncio.sleep(1.5)
-            if _upstream is None or _session_wake_done:
-                return
-            try:
-                await _upstream.send(json.dumps({
-                    "type": "listen", "state": "detect", "text": "你好",
-                    "source": "text", "session_id": _session_id,
-                }, ensure_ascii=False))
-                _session_wake_done = True
-                await _syslog("⚡ 后台预唤醒完成，本次会话后续对话免唤醒")
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("后台预唤醒失败: %s", exc)
-        asyncio.create_task(_prewake())
     except Exception as exc:  # noqa: BLE001
         logger.error("上游 hello 失败: %s", exc)
         try:
@@ -1082,8 +1044,9 @@ async def _relay_browser_message(ws: WebSocket, text: str) -> None:
             return
         if isinstance(j, dict) and j.get("type") == "listen" and j.get("state") == "detect":
             t = str(j.get("text") or "").strip()
-            if t and t not in ("你好", "嗨", "hello", "您好", "在吗"):
-                # 用户问题也压短（官方 ASR 对长音频会截断），超过 100 字截断
+            if t:
+                # 所有文本（含"你好"等唤醒词）统一走音频流注入，不透传 detect 文本通道
+                # （透传 detect 会触发官方"你好呀今天过得怎么样"唤醒问候；静默连接直接注入）
                 if len(t) > 100:
                     t = t[:97] + "…"
                 _chat_append("user", "text", t, tag="chat")
