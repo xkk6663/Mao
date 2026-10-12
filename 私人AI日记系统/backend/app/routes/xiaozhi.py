@@ -847,8 +847,8 @@ async def _sub_writer(ws: WebSocket) -> None:
             return
 
 
-async def _reconnect_loop(initial_delay: float = 3.0) -> None:
-    """上游断开后自动重连（退避 3s→15s），成功后广播 hello 让前端恢复。"""
+async def _reconnect_loop(initial_delay: float = 1.5) -> None:
+    """上游断开后自动重连（退避 1.5s→8s），成功后广播 hello 让前端恢复。"""
     delay = initial_delay
     while True:
         await asyncio.sleep(delay)
@@ -860,17 +860,7 @@ async def _reconnect_loop(initial_delay: float = 3.0) -> None:
             return
         logger.warning("上游重连失败，%.0fs 后重试: %s", delay, err)
         await _broadcast(json.dumps({"type": "error", "error": "connecting"}, ensure_ascii=False))
-        delay = min(15.0, delay * 1.5)
-
-
-async def _heartbeat_loop(conn) -> None:
-    """上游心跳保活：每 30 秒发 ping，防止官方云因空闲超时断连。"""
-    while True:
-        await asyncio.sleep(30)
-        try:
-            await conn.ping()
-        except Exception:  # noqa: BLE001
-            return
+        delay = min(8.0, delay * 1.5)
 
 
 async def _pump_upstream(conn) -> None:
@@ -985,7 +975,8 @@ async def _ensure_upstream() -> tuple[object | None, str | None]:
             additional_headers=headers,
             max_size=None,
             open_timeout=10,
-            ping_interval=30,   # 主动保活心跳（官方云空闲断连）
+            ping_interval=20,   # WebSocket 协议层心跳（官方协议无应用层心跳，靠库自动 ping/pong）
+            ping_timeout=30,    # pong 超时 30s（默认 20s 太短，网络抖动易误判断连）
         )
         # 先完成 hello 会话握手，确认官方云接受后才开放全局连接，
         # 避免 hello 被拒(如 1005)时注入接口出现“假成功”
@@ -1012,7 +1003,6 @@ async def _ensure_upstream() -> tuple[object | None, str | None]:
             pass
         return None, f"官方云会话建立失败: {exc}"
     asyncio.create_task(_pump_upstream(conn))
-    asyncio.create_task(_heartbeat_loop(conn))
     return conn, None
 
 
