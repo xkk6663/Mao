@@ -92,10 +92,10 @@ C:\Users\xiao1\Mio
 │   │       ├── xiaozhi\xiaozhi-chat.html/.js  # 横条对话浮窗
 │   │       ├── models\             # Live2D 模型（导入模型放这里）
 │   │       └── libs\               # pixi / cubism4 渲染库
-│   └── src\ public\ desktop\ scripts\   # ⚠ 原版上游源码与发布工具链（运行时不用，可后续精简）
+│   └── scripts\                    # 原版 worker 脚本（system_audio/genie_tts/so_vits，后端引用，保留）
 │
 ├── 私人AI日记系统\backend\         # 后端（FastAPI）
-│   ├── app\main.py                 # 应用入口（挂载全部路由）
+│   ├── app\main.py                 # 应用入口（挂载全部路由，仅保留桌宠相关后台任务）
 │   ├── app\routes\xiaozhi.py       # ★ 小智核心：WS 代理/say/vision/observe/prompts/status
 │   ├── app\routes\companion.py     # 桌宠状态/截图/窗口/音频体检
 │   └── requirements.txt             # 后端依赖
@@ -105,8 +105,7 @@ C:\Users\xiao1\Mio
 ├── xiaozhi_prompts.json            # 图片/观察提示词配置
 ├── xiaozhi_chat_history.json       # 对话历史持久化（运行数据）
 ├── status.json                     # 运行状态（运行数据）
-├── SRC-MAP-源码地图.md              # 界面导航手册（改代码先看它）
-└── _mio_orig\                      # 上游原版发布备份（只读参照）
+└── SRC-MAP-源码地图.md              # 界面导航手册（改代码先看它）
 ```
 
 ---

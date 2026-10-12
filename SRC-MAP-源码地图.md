@@ -138,9 +138,15 @@
 | 根目录探测脚本 `_probe_del5.py` | ✅ 已删除 | git rm 移除 + `.gitignore` 新增 `_probe*.py` 防再入库 |
 | 启动诊断 `boot_diag.txt` | ✅ 已删除 | 一次性诊断输出（.gitignore 新增 `boot_diag.txt`） |
 | 临时音频 `tts_tmp.wav` | ✅ 已删除 | 本地 TTS 已禁用，无引用 |
+| 上游备份 `_mio_orig\`（120MB，含回收站垃圾） | ✅ 已删除 | git 历史可回溯（提交 eb520213） |
+| 顶层 `node_modules\`（83MB，vite 构建依赖） | ✅ 已删除 | dist 即源码模式不再构建 |
+| 原版构建源 `src\`、`public\`（Vue 源码+静态源） | ✅ 已删除 | 运行时用 dist，不重建 |
+| 原版发布链 `desktop\`（launcher/updater/installer） | ✅ 已删除 | 发自己的仓库不需要原版打包链 |
+| 构建脚本 `vite.config.js`/`启动预览.ps1`/`构建Windows应用.ps1`/`build_frontend.ps1` | ✅ 已删除 | 不再构建前端 |
+| 原版文档（根/子项目 README_EN、CHANGELOG*、CONTRIBUTING、SECURITY、.github CI） | ✅ 已删除 | 保留 LICENSE / THIRD_PARTY_NOTICES |
+| 后端空转后台任务（QQ/日记/备份/周月报/费用对账等 9 项） | ✅ 已移除 | main.py 任务工厂 13→4（提交见下） |
 
 **保留（别删）**：
-- `_mio_orig\`（上游原版发布备份，120MB，只读参照）
 - `本地视觉\`（后端 config 引用路径 `MIO_LOCAL_VISION_DIR`，空目录也要留）
 - `xiaozhi_device.json` / `xiaozhi_chat_history.json` / `status.json`（运行数据）
 - `backend_out.log` / `backend_err.log` / `start_mio.log`（start_mio.ps1 引用路径）
