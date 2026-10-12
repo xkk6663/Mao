@@ -138,9 +138,12 @@ def _load_observe_cfg() -> None:
                 for k in ("enabled", "min_seconds", "max_seconds", "quiet_start", "quiet_end", "prompt"):
                     if k in data:
                         _observe_cfg[k] = data[k]
-        # 重启前观察开启中 → 恢复排程（20 秒后触发首次，避免立即轰炸）
+        # 重启前观察开启中 → 恢复排程（按用户设置的间隔随机排首次，避免 20 秒后立即触发一次"误观察"）
         if _observe_cfg.get("enabled"):
-            _observe_next_at = time.time() + 20
+            import random as _random
+            _lo = max(60, int(_observe_cfg.get("min_seconds") or 300))
+            _hi = max(_lo + 60, int(_observe_cfg.get("max_seconds") or 900))
+            _observe_next_at = time.time() + _random.randint(_lo, _hi)
     except Exception as exc:  # noqa: BLE001
         logger.warning("加载自动观察配置失败: %s", exc)
 
