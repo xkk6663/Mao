@@ -773,7 +773,9 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
         # 3. 分析文本写入历史 → 聊天界面显示为"她说"气泡（AI 在描述图片，不是用户发言）
         _chat_append("pet", "text", text, tag="vision")
         await _syslog("✅ 图片分析完成（小智返回文本）")
-        # 4. 图片识别只显示文本气泡：不注入官方（官方视觉仅返回文本；注入会触发唤醒/官方主动"拜拜"结束，
+        # 4. 广播气泡给桌宠（自动消失，与截图提问/立即观察一致）：分析结果直接显示在桌宠旁气泡
+        await _broadcast_observe_bubble(text)
+        # 5. 图片识别只显示文本气泡：不注入官方（官方视觉仅返回文本；注入会触发唤醒/官方主动"拜拜"结束，
         #    且官方无独立 TTS 无法朗读分析文本）——用户确认接受"返回文本显示气泡"
         return {"ok": True, "text": text}
     except (ValueError, RuntimeError) as exc:

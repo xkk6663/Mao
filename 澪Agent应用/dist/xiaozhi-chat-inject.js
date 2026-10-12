@@ -112,6 +112,7 @@
     if (!btn || btn.__xzHandled) return
     btn.__xzHandled = true
     btn.addEventListener('click', function (e) {
+      if (window.__mioXzChatInjectPaused) return // 小智历史面板打开时不拦截原版发送
       if (!pendingImages.length) return // 无暂存图 → 放行原文字发送逻辑
       e.preventDefault()
       e.stopPropagation()
@@ -121,6 +122,7 @@
   // Enter 键：有暂存图时优先发图
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter' || e.isComposing) return
+    if (window.__mioXzChatInjectPaused) return
     if (!pendingImages.length) return
     var draft = findDraft()
     if (!draft || draft !== document.activeElement) return
@@ -161,8 +163,11 @@
     fileInput.click()
   }
 
-  // ---- 粘贴图片 → 暂存（全局拦截：焦点不必在输入框内，防止粘贴图片无反应）----
+  // 粘贴图片 → 暂存（全局拦截：焦点不必在输入框内，防止粘贴图片无反应）
+  // 小智历史面板打开时（window.__mioXzChatInjectPaused）暂停暂存，避免同一张图被两个脚本
+  // 各自暂存、导致发送时双发两次 /vision 分析。
   document.addEventListener('paste', function (e) {
+    if (window.__mioXzChatInjectPaused) return
     var composer = findComposer()
     if (!composer) return
     var items = (e.clipboardData || window.clipboardData)
