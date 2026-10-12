@@ -679,16 +679,15 @@ function setClickThroughLocked(enabled, notifyRenderer = false) {
   clickThroughLocked = nextValue
   if (changed) saveRuntimeState({ clickThroughLocked })
   if (nextValue) {
-    // 进入锁定穿透模式：按需创建解锁浮窗
+    // 进入锁定穿透模式：确保解锁浮窗存在（锁定模式下它是唯一可点击的交互入口）
     if (!lockControlWindow || lockControlWindow.isDestroyed()) {
       createLockControlWindow()
     } else if (!lockControlWindow.isVisible()) {
       lockControlWindow.showInactive()
     }
-  } else if (lockControlWindow && !lockControlWindow.isDestroyed()) {
-    // 退出锁定模式：销毁解锁浮窗，回收渲染进程与合成内存
-    lockControlWindow.destroy()
-    lockControlWindow = null
+  } else if (lockControlWindow && !lockControlWindow.isDestroyed() && !lockControlWindow.isVisible()) {
+    // 退出锁定模式：浮窗保持常驻（按钮继续提供"锁定"入口），恢复显示
+    lockControlWindow.showInactive()
   }
   if (mainWindow && !mainWindow.isDestroyed()) {
     applyMainWindowMousePolicy()
@@ -806,7 +805,7 @@ function createWindow() {
     reportWindowAction('pet-root', mainWindow, 'closed')
     mainWindow = null
   })
-  if (clickThroughLocked) createLockControlWindow()  // 仅在锁定穿透模式才创建解锁浮窗，省一个常驻渲染进程
+  createLockControlWindow()  // 锁定/解锁按钮常驻（右下角圆钮），锁定模式提供穿透豁免入口，非锁定模式提供锁定入口
   clearInterval(topmostWatchdog)
   topmostWatchdog = setInterval(() => {
     if (!quitting && desiredAlwaysOnTop) restoreWindowVisibility()
