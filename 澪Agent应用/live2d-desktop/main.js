@@ -197,8 +197,8 @@ function openPetAdmin() {
   // 强制清缓存 + 清存储：防止旧页面/旧分片残留导致红点（输入区找不到）/按钮不注入
   const sess = petAdminWindow.webContents.session
   sess.clearCache().then(() => sess.clearStorageData()).then(() => {
-    // 桌宠管理窗口：原版主聊天界面已由"小智对话记录"面板整体替代（打开即面板，原版仅用于桌宠管理页）
-    petAdminWindow.loadURL(`${API_BASE}/agent-app/?workspace=main&v=20261012e`)
+    // 桌宠管理窗口：小智对话记录已替代原版左侧"对话"栏内容区（打开即显示，非独立浮窗；桌宠/设置视图正常）
+    petAdminWindow.loadURL(`${API_BASE}/agent-app/?workspace=main&v=20261012f`)
   })
   petAdminWindow.on('closed', () => { petAdminWindow = null })
 }
