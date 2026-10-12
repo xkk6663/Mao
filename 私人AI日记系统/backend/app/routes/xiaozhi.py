@@ -253,6 +253,8 @@ _last_tts_stop: float = 0.0  # 上游最后一次 TTS 播完时间戳（用于�
 _last_stt_ts: float = 0.0    # 上游最后一次 STT 识别时间戳（用于确认注入的语音是否被官方云识别）
 _last_stt_text: str = ""     # 上游最后一次 STT 识别文本
 _llm_text: str = ""          # 上游最后一次 LLM 回答文本（回声过滤用）
+_tts_sentences: list[str] = []   # 当前一段 TTS 的分句文本累积（tts stop 时拼接为完整回复写入历史）
+_pending_llm_text: str = ""      # LLM 完整文本暂存（tts stop 时若 TTS 无分句则回退使用；不逐帧写历史）
 _last_injected_text: str = ""  # 最近一次内部注入（vision/observe）的文本（STT 匹配即丢弃，不写"你说"历史）
 _inject_stt_suppress_until: float = 0.0  # 内部注入（vision/observe）后 STT 写入"你说"历史的抑制截止时间
 
@@ -292,7 +294,7 @@ def _is_echo_stt(stt_text: str) -> bool:
 
 # ---- 会话历史（长连接建立以来的所有来往记录，文字/图片；持久化到文件，重启不丢）----
 # 每条: {id, ts, role(user/pet/system), type(text/image), text, image_base64, tag(chat/observe/screenshot/stt/llm/vision/sys)}
-_CHAT_HISTORY_MAX = 500
+_CHAT_HISTORY_MAX = 1000
 _hist_seq = 0  # 历史条目唯一 id 计数器（前端按 id 去重，避免同文本/同秒误去重丢记录）
 _env_history = os.getenv("MIO_CHAT_HISTORY_FILE", "").strip()
 CHAT_HISTORY_FILE = Path(_env_history) if _env_history else (_PROJECT_ROOT / "xiaozhi_chat_history.json")
@@ -302,7 +304,8 @@ _history_save_task: asyncio.Task | None = None
 
 def _load_chat_history() -> None:
     """启动时从文件加载历史（图片 base64 可能很大，加载时截断大字段以保内存）。
-    旧文件条目可能没有 id（按文本/时间去重时代的记录）→ 按序补发 id。"""
+    旧文件条目 id 可能冲突/缺失（多次重启防抖未落盘导致）→ **一律按序重建单调唯一 id**，
+    消除 id 撞车后前端按 id 去重误吞新消息的问题。"""
     global _chat_history, _hist_seq
     try:
         if CHAT_HISTORY_FILE.exists():
@@ -310,9 +313,10 @@ def _load_chat_history() -> None:
                 data = json.load(f)
             if isinstance(data, list):
                 items = [it for it in data if isinstance(it, dict)][-_CHAT_HISTORY_MAX:]
+                _hist_seq = 0
                 for it in items:
                     _hist_seq += 1
-                    it.setdefault("id", _hist_seq)
+                    it["id"] = _hist_seq  # 强制重建，不保留旧 id
                 _chat_history = items
     except Exception as exc:  # noqa: BLE001
         logger.warning("加载会话历史失败: %s", exc)
@@ -353,6 +357,24 @@ def _chat_append(role: str, type_: str, text: str = "", image_base64: str | None
         del _chat_history[: len(_chat_history) - _CHAT_HISTORY_MAX]
     if _history_save_task is None or _history_save_task.done():
         _history_save_task = asyncio.create_task(_save_chat_history())
+
+
+def _maybe_write_llm_reply(full: str) -> None:
+    """写入小智完整回复文本（tag=llm）。与 vision/observe 主动写入去重：
+    最近 3 秒内已写过同文本的 pet 记录（tag=vision/observe）→ 跳过，避免同一回复双写。"""
+    full = (full or "").strip()
+    if not full:
+        return
+    now = time.time()
+    last = _chat_history[-1] if _chat_history else None
+    if (
+        last
+        and last.get("role") == "pet"
+        and str(last.get("text") or "")[:120] == full[:120]
+        and now - float(last.get("ts") or 0) < 3.0
+    ):
+        return
+    _chat_append("pet", "text", full, tag="llm")
 
 
 async def _syslog(text: str, tag: str = "sys", quiet: bool = False) -> None:
@@ -1048,7 +1070,7 @@ async def _reconnect_loop(initial_delay: float = 3.0) -> None:
 
 async def _pump_upstream(conn) -> None:
     """上游消息持续转发给最近活跃订阅者；断线自动清理并允许重建。"""
-    global _upstream, _last_tts_stop, _llm_text, _last_stt_ts, _last_stt_text, _tts_playing
+    global _upstream, _last_tts_stop, _llm_text, _last_stt_ts, _last_stt_text, _tts_playing, _tts_sentences, _pending_llm_text
     decoder = _OpusDecoder()
     _pump_audio_count = 0
     _pump_audio_bytes = 0
@@ -1067,13 +1089,25 @@ async def _pump_upstream(conn) -> None:
                         # 机制级角色解耦：官方 STT 回传一律不写"你说"历史（含注入回声/官方误听），
                         # "你说"只由浏览器真实输入（_relay_browser_message）写入
                     if j.get("type") == "llm":
-                        _llm_text = str(j.get("text") or "")
-                        if _llm_text:
-                            _chat_append("pet", "text", _llm_text, tag="llm")
+                        _pending_llm_text = str(j.get("text") or "")
+                        _llm_text = _pending_llm_text
+                    if j.get("type") == "tts" and j.get("state") == "start":
+                        _tts_sentences = []
+                    if j.get("type") == "tts" and j.get("state") == "sentence_start":
+                        _txt = str(j.get("text") or "")
+                        if _txt:
+                            _tts_sentences.append(_txt)
                     if j.get("type") == "tts" and j.get("state") == "stop":
                         _last_tts_stop = time.time()
                         _tts_playing = False
                         await _syslog("🔊 小智说话结束")
+                        _full = "".join(_tts_sentences).strip()
+                        if not _full:
+                            _full = (_pending_llm_text or "").strip()
+                        if _full:
+                            _maybe_write_llm_reply(_full)
+                        _tts_sentences = []
+                        _pending_llm_text = ""
                     if j.get("type") == "tts" and j.get("state") == "start":
                         _tts_playing = True
                         await _syslog("🗣️ 小智开始说话…")
@@ -1098,18 +1132,28 @@ async def _pump_upstream(conn) -> None:
                             _last_tts_stop = time.time()
                             _tts_playing = False
                             await _syslog("🔊 小智说话结束")
+                            _full = "".join(_tts_sentences).strip()
+                            if not _full:
+                                _full = (_pending_llm_text or "").strip()
+                            if _full:
+                                _maybe_write_llm_reply(_full)
+                            _tts_sentences = []
+                            _pending_llm_text = ""
                         if j.get("type") == "tts" and j.get("state") == "start":
                             _tts_playing = True
                             await _syslog("🗣️ 小智开始说话…")
+                        if j.get("type") == "tts" and j.get("state") == "sentence_start":
+                            _txt = str(j.get("text") or "")
+                            if _txt:
+                                _tts_sentences.append(_txt)
                         if j.get("type") == "stt":
                             _last_stt_ts = time.time()
                             _last_stt_text = str(j.get("text") or "")
                             # 机制级角色解耦：官方 STT 回传一律不写"你说"历史（含注入回声/官方误听），
                             # "你说"只由浏览器真实输入（_relay_browser_message）写入
                         if j.get("type") == "llm":
-                            _llm_text = str(j.get("text") or "")
-                            if _llm_text:
-                                _chat_append("pet", "text", _llm_text, tag="llm")
+                            _pending_llm_text = str(j.get("text") or "")
+                            _llm_text = _pending_llm_text
                         if j.get("type") in ("llm", "tts", "error", "listen", "abort"):
                             logger.info("上游消息 type=%s", j.get("type"))
                         # 官方 STT 回传**不广播**给前端（含注入回声/官方误听）——否则聊天窗口会把
