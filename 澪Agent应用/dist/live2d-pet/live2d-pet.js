@@ -259,7 +259,7 @@
       backgroundAlpha: 0,
       antialias: true,
       autoDensity: true,
-      resolution: Math.min(window.devicePixelRatio || 1, 1.5),  // 限制渲染采样≤1.5x，GPU 纹理内存较 2x 降约 44%（视觉几乎无差）
+      resolution: Math.min(window.devicePixelRatio || 1, 2),  // 渲染采样上限 2x（清晰度优先；内存由空闲降帧/按需创建解锁窗控制）
     })
     app.stage.sortableChildren = true
     app.ticker.add(updateModelPerformance, undefined, -50)
