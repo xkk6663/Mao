@@ -90,7 +90,12 @@
     var img = pendingImages.shift()
     var draft = findDraft()
     var question = (draft && draft.value && draft.value.trim()) || ''  // 留空 → 后端使用可配置的"图片识别前置提示词"
-    if (draft) draft.value = ''
+    if (draft) {
+      draft.value = ''
+      // 同步 Vue 的 v-model（ChatPage 用 onUpdate:modelValue 绑定内部 ref）：
+      // 只改 DOM 不清 ref，历史轮询触发重渲染会把旧文字恢复回输入框（"文字发出后停留输入框"根因）
+      try { draft.dispatchEvent(new Event('input', { bubbles: true })) } catch (e) { /* ignore */ }
+    }
     renderPending()
     var imgB64 = img.dataUrl.indexOf('data:') === 0 ? img.dataUrl.split(',')[1] : img.dataUrl
     fetch('/api/xiaozhi/vision', {

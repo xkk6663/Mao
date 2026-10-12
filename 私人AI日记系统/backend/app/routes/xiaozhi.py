@@ -685,8 +685,10 @@ async def _inject_say_impl(text: str, wait_upstream: float = 6.0, source: str = 
         logger.warning("注入小智语音失败：官方云未连接（hello 未建立）")
         return False
     try:
-        # 1. 只在官方 TTS 正在播放时才发 abort（避免无意义中断触发官方"播放被中断，要不要再放一次"问候）
-        if _tts_playing:
+        # 1. 中断官方当前流程：vision/observe 注入是用户明确的新指令，总是 abort
+        #    （官方一次只处理一个语音流，不中断会吞掉新注入 → 工具复用旧图）；
+        #    普通文字注入只在官方 TTS 播放中才 abort（避免无意义中断触发官方"播放被中断"问候）
+        if source == "vision" or _tts_playing:
             await conn.send(json.dumps({"type": "abort", "reason": "user_interrupt", "session_id": _session_id}, ensure_ascii=False))
             await asyncio.sleep(0.3)
             _tts_playing = False
@@ -1006,6 +1008,7 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
         # 2. 暂存截图 → 注入触发语（官方 LLM 收到后会调 self.camera.explain 工具，
         #    工具回调里用这张暂存图做官方视觉识别，识别文本作为工具结果回灌 LLM）
         _pending_vision = {"image_base64": image_base64, "question": question}
+        _last_vision_image = None  # 作废旧图副本：官方连续工具调用不得串到上一张图
         # 注入语音用短触发语「请看看这张图片」（9字）：官方 ASR 对本地 SAPI 合成音的长文本
         # 识别质量差（实测 21 字触发语被识别成乱码 → LLM 不调工具）。用户的 image_prompt
         # 不念给官方，而是作为视觉 API 的 question 传入（视觉模型按 prompt 生成对应风格的识别文本，
@@ -1045,6 +1048,7 @@ async def xiaozhi_vision_bubble(payload: VisionRequest) -> dict:
         await _syslog("🖼️ 已发送屏幕/图片给小智分析…")
         # 2. 暂存截图（缺省现截全屏）→ 注入触发语 → 官方 LLM 调工具 → 官方回答 + 官方 TTS 音频
         _pending_vision = {"image_base64": image_base64 or None, "question": question}
+        _last_vision_image = None  # 作废旧图副本：官方连续工具调用不得串到上一张图
         # 注入语音用短触发语（ASR 对 SAPI 合成音的长文本识别差，实测长触发语被识别成乱码
         # 导致 LLM 不调工具）；用户 prompt 作视觉 API question（识别文本自带其风格，已实测生效）
         if str(payload.kind or "").strip() == "observe":
