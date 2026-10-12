@@ -8,13 +8,17 @@
 # ============================================================
 $ErrorActionPreference = 'Stop'
 
-$backendPy      = 'C:\Users\xiao1\Mio\私人AI日记系统\backend\.venv\Scripts\python.exe'
-$backendDir     = 'C:\Users\xiao1\Mio\私人AI日记系统\backend'
-$electronExe    = 'C:\Users\xiao1\Mio\澪Agent应用\live2d-desktop\node_modules\electron\dist\electron.exe'
-$electronDir    = 'C:\Users\xiao1\Mio\澪Agent应用\live2d-desktop'
-$outLog         = 'C:\Users\xiao1\Mio\backend_out.log'
-$errLog         = 'C:\Users\xiao1\Mio\backend_err.log'
-$startLog       = 'C:\Users\xiao1\Mio\start_mio.log'
+# 发布版相对路径：脚本所在目录为项目根，可在任意位置解压运行
+$root = $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($root)) { $root = Split-Path -Parent $MyInvocation.MyCommand.Path }
+
+$backendPy      = Join-Path $root '私人AI日记系统\backend\.venv\Scripts\python.exe'
+$backendDir     = Join-Path $root '私人AI日记系统\backend'
+$electronExe    = Join-Path $root '澪Agent应用\live2d-desktop\node_modules\electron\dist\electron.exe'
+$electronDir    = Join-Path $root '澪Agent应用\live2d-desktop'
+$outLog         = Join-Path $root 'backend_out.log'
+$errLog         = Join-Path $root 'backend_err.log'
+$startLog       = Join-Path $root 'start_mio.log'
 
 function Write-Step($msg) {
     Write-Host $msg -ForegroundColor Cyan

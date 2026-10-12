@@ -16,6 +16,7 @@ import io
 import json
 import logging
 import os
+import tempfile
 import struct
 import time
 import uuid
@@ -35,13 +36,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/xiaozhi", tags=["xiaozhi"])
 
 XIAOZHI_UPSTREAM = os.getenv("MIO_XIAOZHI_UPSTREAM", "wss://api.tenclass.net/xiaozhi/v1/")
-DEVICE_JSON = Path(
-    os.getenv("MIO_XIAOZHI_DEVICE_JSON", "")
-    or r"C:\Users\xiao1\Mio\xiaozhi_device.json"
-)
+
+# 项目根 = 本文件 (backend/app/routes/) 向上 4 级；发布版解压到任意目录均可运行
+_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+
+_env_device = os.getenv("MIO_XIAOZHI_DEVICE_JSON", "").strip()
+DEVICE_JSON = Path(_env_device) if _env_device else (_PROJECT_ROOT / "xiaozhi_device.json")
 
 # ---- 图片识别 / 屏幕观察 前置提示词（可编辑、持久化到 JSON）----
-PROMPTS_FILE = Path(os.getenv("MIO_XIAOZHI_PROMPTS_FILE", r"C:\Users\xiao1\Mio\xiaozhi_prompts.json"))
+_env_prompts = os.getenv("MIO_XIAOZHI_PROMPTS_FILE", "").strip()
+PROMPTS_FILE = Path(_env_prompts) if _env_prompts else (_PROJECT_ROOT / "xiaozhi_prompts.json")
 
 _prompt_defaults = {
     "image_prompt": "请详细描述这张图片里的内容。",
@@ -258,7 +262,8 @@ def _is_echo_stt(stt_text: str) -> bool:
 # ---- 会话历史（长连接建立以来的所有来往记录，文字/图片；持久化到文件，重启不丢）----
 # 每条: {ts, role(user/pet/system), type(text/image), text, image_base64, tag(chat/observe/screenshot/stt/llm)}
 _CHAT_HISTORY_MAX = 500
-CHAT_HISTORY_FILE = Path(os.getenv("MIO_CHAT_HISTORY_FILE", r"C:\Users\xiao1\Mio\xiaozhi_chat_history.json"))
+_env_history = os.getenv("MIO_CHAT_HISTORY_FILE", "").strip()
+CHAT_HISTORY_FILE = Path(_env_history) if _env_history else (_PROJECT_ROOT / "xiaozhi_chat_history.json")
 _chat_history: list[dict] = []
 _history_save_task: asyncio.Task | None = None
 
@@ -347,11 +352,12 @@ def _sapi_tts_wav(text: str) -> bytes:
         pass
     fs = comtypes.client.CreateObject("SAPI.SpFileStream")
     fs.Format.Type = SL.SpeechAudioFormatType.SAFT16kHz16BitMono
-    fs.Open(r"C:\Users\xiao1\Mio\tts_tmp.wav", 3, False)
+    tts_tmp = os.path.join(tempfile.gettempdir(), "mio_tts_tmp.wav")
+    fs.Open(tts_tmp, 3, False)
     sp.AudioOutputStream = fs
     sp.Speak(text)
     fs.Close()
-    with open(r"C:\Users\xiao1\Mio\tts_tmp.wav", "rb") as f:
+    with open(tts_tmp, "rb") as f:
         return f.read()
 
 
