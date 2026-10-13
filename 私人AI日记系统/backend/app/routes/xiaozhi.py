@@ -361,6 +361,17 @@ def _mcp_tool_public(name: str) -> dict | None:
     return None
 
 
+def _dump_mcp_tools(tools: list) -> None:
+    """临时诊断：把最近一次 tools/list 响应的工具名写入临时文件，验证云端实际拿到的工具。"""
+    try:
+        import os as _os
+        tmp = _os.path.join(_os.environ.get("TEMP", "/tmp"), "mao_mcp_tools_dump.json")
+        with open(tmp, "w", encoding="utf-8") as _f:
+            _f.write(json.dumps([t["name"] for t in tools], ensure_ascii=False, indent=1))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # 用户手动触发（截图提问/立即观察/聊天发图）后待工具回调使用的截图：
 # {"image_base64": str|None(缺省则工具回调时现截全屏), "question": str(用户配置的识别提示词)}
 _pending_vision: dict | None = None
@@ -1589,7 +1600,15 @@ async def _handle_mcp_message(payload) -> dict | None:
             })
         if method == "tools/list":
             _MCP_STATS["tools_list"] += 1
-            return _mcp_result(req_id, {"tools": _mcp_enabled_tools(), "nextCursor": ""})
+            # 严格对齐官方 MCP 协议：Tool 对象只含 name/description/inputSchema
+            # （旧版直接返回完整定义，多余字段可能导致云端解析失败→LLM 看不到工具→答"没有工具"）
+            tools = [_mcp_tool_public(t["name"]) for t in _MCP_TOOLS_DEF if _mcp_tool_enabled(t["name"])]
+            tools = [t for t in tools if t]
+            try:
+                _dump_mcp_tools(tools)
+            except Exception:  # noqa: BLE001
+                pass
+            return _mcp_result(req_id, {"tools": tools, "nextCursor": ""})
         if method == "tools/call":
             _MCP_STATS["tools_call"] += 1
             name = str(params.get("name") or "")
