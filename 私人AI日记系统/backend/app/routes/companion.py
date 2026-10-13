@@ -964,7 +964,7 @@ async def companion_live2d_model_preview_save(model_id: str, payload: Live2DPrev
 async def companion_live2d_motion_preview(payload: Live2DMotionPreviewRequest):
     if not pet_event_service.has_desktop_renderer():
         raise HTTPException(status_code=409, detail="请先启动 Live2D 桌宠。")
-    event = {"group": payload.group.strip(), "index": payload.index}
+    event = {"group": payload.group.strip(), "index": payload.index if payload.index is not None else 0}
     pet_event_service.publish("motion_preview", event)
     return {"ok": True, **event}
 

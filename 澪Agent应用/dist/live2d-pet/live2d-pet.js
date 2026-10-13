@@ -740,7 +740,7 @@
     const normalizedGroup = String(group)
     if (!force && (now - lastMotionPlayedAt < 1200 || (normalizedGroup === lastMotionGroup && now - lastMotionPlayedAt < 3500))) return false
     try {
-      model.motion(group, index, 2)
+      model.motion(group, Number.isInteger(index) ? index : 0, 2)
       lastMotionGroup = normalizedGroup
       lastMotionPlayedAt = now
       return true
