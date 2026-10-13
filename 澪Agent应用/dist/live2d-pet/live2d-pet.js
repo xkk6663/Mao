@@ -298,6 +298,9 @@
       motionSlots: capabilities.motionSlots && typeof capabilities.motionSlots === 'object'
         ? { ...capabilities.motionSlots }
         : {},
+      expressionSlots: capabilities.expressionSlots && typeof capabilities.expressionSlots === 'object'
+        ? { ...capabilities.expressionSlots }
+        : {},
       unassignedMotions: Array.isArray(capabilities.unassignedMotions)
         ? capabilities.unassignedMotions.map(String)
         : [],
@@ -798,12 +801,48 @@
   }
 
   function expressionForEmotion(emotion) {
+    const cap = currentCapabilityPayload()
+    const names = window.MioLive2DExpression.expressionNames(cap.expressions)
     const configured = settings.live2d_expression_slots?.[currentModelId]?.[emotion]
-    return window.MioLive2DExpression.selectExpression(
-      currentCapabilityPayload().expressions,
-      emotion,
-      configured,
-    )
+    if (configured && names.includes(String(configured))) return String(configured)
+    const capSlot = cap.expressionSlots?.[emotion]
+    if (capSlot && names.includes(String(capSlot))) return String(capSlot)
+    return window.MioLive2DExpression.selectExpression(cap.expressions, emotion)
+  }
+
+  // 本地情绪扫描（后端 emotion 兜底）：从小智回复/上下文文本识别"哭/笑/生气/害羞"等指令
+  function localInferEmotion(text) {
+    const t = String(text || '')
+    if (/(哭|泪|呜呜|想哭|难过|伤心|抽泣)/.test(t)) return 'concerned'
+    if (/(生气|气死|凶|发火|愤怒|恼怒)/.test(t)) return 'serious'
+    if (/(害羞|脸红|羞涩|不好意思)/.test(t)) return 'shy'
+    if (/(开心|高兴|哈哈|嘿嘿|笑|好耶)/.test(t)) return 'cheerful'
+    if (/(温柔|轻柔|抱抱|哄|抱一下)/.test(t)) return 'gentle'
+    return ''
+  }
+
+  // 情绪 → 语义动作（供 speak/视觉气泡触发动作联动）
+  const EMOTION_MOTION_HINT = {
+    concerned: 'concern',
+    cheerful: 'celebrate',
+    serious: 'alert',
+    shy: 'shy',
+    gentle: 'touch',
+  }
+
+  // 说话文本到达：应用情绪 + 触发情绪动作
+  function applySpeakEmotionAndMotion(text, emotion) {
+    let effective = String(emotion || 'neutral').toLowerCase()
+    const local = localInferEmotion(text)
+    if (local && (effective === 'neutral' || effective === 'gentle')) effective = local
+    applyEmotion(effective, Math.max(6000, text.length * 180))
+    const hint = EMOTION_MOTION_HINT[effective]
+    if (hint) {
+      const group = semanticMotion(hint)
+      const idleGroup = semanticMotion('idle')
+      if (group && group !== idleGroup) playMotion(group, undefined, { force: true })
+    }
+    return effective
   }
 
   function applyModelExpression(emotion) {
@@ -1563,7 +1602,7 @@
         applyActivity(payload)
       } else if (message.type === 'speak') {
         const text = String(payload.text || payload.content || '').trim()
-        applyEmotion(payload.emotion || 'neutral', Math.max(6000, text.length * 180))
+        applySpeakEmotionAndMotion(text, payload.emotion || 'neutral')
         showSpeechBubble(text, 0, messageResponseId(payload))
         if (payload.should_speak) {
           const speakingMotion = semanticMotion('speaking')

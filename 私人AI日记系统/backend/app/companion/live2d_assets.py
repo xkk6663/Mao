@@ -80,7 +80,7 @@ class Live2DAssetsService:
         return candidate
 
 
-    def _live2d_capabilities(self, document: dict[str, Any]) -> dict[str, Any]:
+    def _live2d_capabilities(self, document: dict[str, Any], metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         references = document.get("FileReferences")
         references = references if isinstance(references, dict) else {}
         raw_motions = references.get("Motions")
@@ -96,29 +96,54 @@ class Live2DAssetsService:
 
         idle = match(r"^idle$", r"idle|wait|stand|breath") or (names[0] if names else "")
         touch = match(r"^tapbody$", r"tap|touch|click|body") or next((name for name in names if name != idle), idle)
+        # 触碰系动作组（Tapface/Taphair/Tapxiongbu/Tapqunzi/Tapleg 等）作为语义动作的合理 fallback
+        tap_face = match(r"^tapface$", r"tapface|tap_face|touchface|face|head")
+        tap_hair = match(r"^taphair$", r"taphair|tap_hair|hair")
+        tap_body = match(r"^tapxiongbu$", r"tapxiongbu|tapchest|tapbody|tap_body|chest|breast")
+        tap_skirt = match(r"^tapqunzi$", r"tapqunzi|tapskirt|tap_skirt|skirt|dress")
+        tap_leg = match(r"^tapleg$", r"tapleg|tap_leg|leg")
         slots = {
             "idle": idle,
             "touch": touch,
-            "think": match(r"think|ponder|question|wonder|confus") or idle,
-            "speak": match(r"speak|talk|voice|mouth|chat") or idle,
+            "think": match(r"think|ponder|question|wonder|confus") or tap_hair or idle,
+            "speak": match(r"speak|talk|voice|mouth|chat") or tap_face or idle,
             "observe": match(r"observe|watch|look|search|scan") or idle,
-            "cheerful": match(r"happy|joy|cheer|smile|laugh|win|victory|success") or touch or idle,
-            "concerned": match(r"sad|worry|concern|trouble|down|lose|defeat") or idle,
-            "alert": match(r"alert|angry|serious|surprise|shock|danger") or touch or idle,
-            "attention": match(r"attention|curious|notice|question|look") or idle,
-            "shy": match(r"shy|blush|embarrass") or idle,
+            "cheerful": match(r"happy|joy|cheer|smile|laugh|win|victory|success") or tap_skirt or tap_face or touch or idle,
+            "concerned": match(r"sad|worry|concern|trouble|down|lose|defeat") or tap_leg or idle,
+            "alert": match(r"alert|angry|serious|surprise|shock|danger") or tap_body or tap_face or touch or idle,
+            "attention": match(r"attention|curious|notice|question|look") or tap_hair or idle,
+            "shy": match(r"shy|blush|embarrass") or tap_skirt or idle,
         }
         slots = {key: value for key, value in slots.items() if value}
         expressions = references.get("Expressions")
+        expressions = expressions if isinstance(expressions, list) else []
+        # 表情语义槽：优先使用 mio-model 预设（导入/人工配置，如 expN 无名表情），否则按名字匹配
+        expression_slots: dict[str, str] = {}
+        if isinstance(metadata, dict):
+            preset = (metadata.get("capabilities") or {}).get("expressionSlots")
+            if isinstance(preset, dict):
+                expression_slots = {str(k): str(v) for k, v in preset.items() if str(v)}
+        if not expression_slots:
+            expr_names = [str(e.get("Name") or e.get("name") or "") for e in expressions if isinstance(e, dict)]
+            expression_slots = {
+                "gentle": next((n for n in expr_names if re.search(r"gentle|soft|smile|normal", n, re.I)), ""),
+                "cheerful": next((n for n in expr_names if re.search(r"happy|joy|cheer|smile|laugh", n, re.I)), ""),
+                "concerned": next((n for n in expr_names if re.search(r"sad|worry|concern|cry|trouble", n, re.I)), ""),
+                "serious": next((n for n in expr_names if re.search(r"serious|angry|stern|frown", n, re.I)), ""),
+                "shy": next((n for n in expr_names if re.search(r"shy|blush|embarrass", n, re.I)), ""),
+                "alert": next((n for n in expr_names if re.search(r"alert|surprise|shock|angry", n, re.I)), ""),
+            }
+            expression_slots = {k: v for k, v in expression_slots.items() if v}
         return {
             "format": str(document.get("Version") or "Cubism 4"),
             "motions": motions,
-            "expressions": expressions if isinstance(expressions, list) else [],
+            "expressions": expressions,
             "physics": bool(references.get("Physics")),
             "pose": bool(references.get("Pose")),
             "idleGroup": idle,
             "tapGroup": touch,
             "motionSlots": slots,
+            "expressionSlots": expression_slots,
             "unassignedMotions": [name for name in names if name not in set(slots.values())],
         }
 
@@ -209,7 +234,7 @@ class Live2DAssetsService:
                     model_path.parent,
                     model_files,
                 )
-                refreshed_capabilities = self._live2d_capabilities(document)
+                refreshed_capabilities = self._live2d_capabilities(document, metadata)
                 metadata_changed = expressions_changed or metadata.get("capabilities") != refreshed_capabilities
                 if expressions_changed:
                     model_path.write_text(
