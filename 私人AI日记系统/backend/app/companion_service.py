@@ -113,19 +113,50 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 
-LIVE2D_MODELS: tuple[dict[str, Any], ...] = (
-    {
-        "id": "hiyori",
-        "name": "Hiyori Momose",
-        "description": "Live2D 官方免费示例，包含完整待机与点击动作",
-        "model_path": "models/hiyori/Hiyori.model3.json",
-        "preview_path": "models/hiyori/preview.png",
-        "license": "Live2D Free Material License",
-        "source": "Live2D/CubismWebSamples",
-        "source_url": "https://github.com/Live2D/CubismWebSamples",
-        "motion_count": 10,
-    },
-)
+def _builtin_live2d_models() -> tuple[dict[str, Any], ...]:
+    """内置官方模型注册表：静态 Hiyori + 动态扫描 dist/live2d-pet/models，
+    新增官方模型放入该目录后无需改代码即可出现在模型管理列表。"""
+    models: list[dict[str, Any]] = [
+        {
+            "id": "hiyori",
+            "name": "Hiyori Momose",
+            "description": "Live2D 官方免费示例，包含完整待机与点击动作",
+            "model_path": "models/hiyori/Hiyori.model3.json",
+            "preview_path": "models/hiyori/preview.png",
+            "license": "Live2D Free Material License",
+            "source": "Live2D/CubismWebSamples",
+            "source_url": "https://github.com/Live2D/CubismWebSamples",
+            "motion_count": 10,
+        },
+    ]
+    builtin_root = settings.agent_frontend_dir / "live2d-pet" / "models"
+    if builtin_root.is_dir():
+        known_ids = {m["id"] for m in models}
+        for entry in sorted(builtin_root.iterdir(), key=lambda p: p.name.lower()):
+            if not entry.is_dir():
+                continue
+            model_file = next(
+                (f for f in entry.iterdir() if f.name.lower().endswith(".model3.json")),
+                None,
+            )
+            if model_file is None:
+                continue
+            mid = entry.name.lower()
+            if mid in known_ids:
+                continue
+            known_ids.add(mid)
+            models.append({
+                "id": mid,
+                "name": entry.name,
+                "description": "Live2D 官方免费示例，含待机与点击动作",
+                "model_path": f"models/{entry.name}/{model_file.name}",
+                "preview_path": "",
+                "license": "Live2D Free Material License",
+                "source": "Live2D/CubismWebSamples",
+                "source_url": "https://github.com/Live2D/CubismWebSamples",
+                "motion_count": 0,
+            })
+    return tuple(models)
 
 
 LIVE2D_MOTION_SLOT_IDS = frozenset(
@@ -559,7 +590,7 @@ save_pet_size = _configuration_service.save_pet_size
 
 from .companion.live2d_assets import Live2DAssetsService
 _live2d_assets_service = Live2DAssetsService(
-    dep_LIVE2D_MODELS=lambda: LIVE2D_MODELS,
+    dep_LIVE2D_MODELS=lambda: _builtin_live2d_models(),
     dep__decode_image_data_url=lambda *args, **kwargs: _decode_image_data_url(*args, **kwargs),
     dep_load_config=lambda *args, **kwargs: load_config(*args, **kwargs),
     dep_save_config=lambda *args, **kwargs: save_config(*args, **kwargs),
