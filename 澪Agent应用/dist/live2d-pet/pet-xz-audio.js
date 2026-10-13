@@ -178,11 +178,29 @@
           hideBubble()
         }
         break
+      case 'pet_text':
+        // 小智回复文本流：附加 emotion（后端以用户输入推断），本地关键词兜底
+        if (j.text) {
+          var emo = j.emotion || localEmotion(j.text)
+          if (emo) setEmotion(emo)
+        }
+        break
       case 'error':
         // 断连/重连静默，不弹气泡打扰
         break
       default: break
     }
+  }
+
+  // ---- 本地情绪关键词兜底（后端未推断时）----
+  function localEmotion(text) {
+    var t = String(text || '')
+    if (/(哭|泪|呜呜|想哭|难过|伤心|抽泣)/.test(t)) return 'concerned'
+    if (/(生气|气死|凶|发火|愤怒|恼怒)/.test(t)) return 'serious'
+    if (/(害羞|脸红|羞涩|不好意思)/.test(t)) return 'shy'
+    if (/(开心|高兴|哈哈|嘿嘿|笑|好耶)/.test(t)) return 'cheerful'
+    if (/(温柔|轻柔|抱抱|哄|抱一下)/.test(t)) return 'gentle'
+    return ''
   }
 
   // ---- 表情（小智 emotion → 桌宠表情）----

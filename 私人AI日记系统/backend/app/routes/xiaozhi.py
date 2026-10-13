@@ -602,6 +602,7 @@ _last_stt_text: str = ""     # 上游最后一次 STT 识别文本
 _llm_text: str = ""          # 上游最后一次 LLM 回答文本（回声过滤用）
 _tts_sentences: list[str] = []   # 当前一段 TTS 的分句文本累积（tts stop 时拼接为完整回复写入历史）
 _pending_llm_text: str = ""      # LLM 完整文本暂存（tts stop 时若 TTS 无分句则回退使用；不逐帧写历史）
+_last_user_input: str = ""  # 最近一条用户真实输入（浏览器/STT），用于回复情绪推断上下文
 _last_injected_text: str = ""  # 最近一次内部注入（vision/observe）的文本（STT 匹配即丢弃，不写"你说"历史）
 _inject_stt_suppress_until: float = 0.0  # 内部注入（vision/observe）后 STT 写入"你说"历史的抑制截止时间
 
@@ -2225,7 +2226,14 @@ async def _pump_upstream(conn) -> None:
                                     _tts_sentences.append(_txt)
                                     # 实时文本流：分句广播给前端聊天列表（边听边冒字），
                                     # tts stop 时后端拼接完整回复写历史，前端轮询自动替换临时项
-                                    await _broadcast(json.dumps({"type": "pet_text", "text": _txt}, ensure_ascii=False))
+                                    # 附加 emotion：以用户真实输入为上下文推断（支持"哭一下/笑一个"等情绪指令联动桌宠表情动作）
+                                    _xz_emotion = ""
+                                    try:
+                                        from ..companion_service import infer_speech_emotion as _infer_xz_emo
+                                        _xz_emotion = _infer_xz_emo(_txt, _last_user_input)
+                                    except Exception:
+                                        _xz_emotion = ""
+                                    await _broadcast(json.dumps({"type": "pet_text", "text": _txt, "emotion": _xz_emotion}, ensure_ascii=False))
                             if j.get("type") == "stt":
                                 _last_stt_ts = time.time()
                                 _last_stt_text = str(j.get("text") or "")
@@ -2356,6 +2364,7 @@ async def _relay_browser_message(ws: WebSocket, text: str) -> None:
                 if len(t) > 100:
                     t = t[:97] + "…"
                 _chat_append("user", "text", t, tag="chat")
+                _last_user_input = t
                 # 本地工具意图兜底：官方免费 LLM 同会话内工具调用不稳定（第一次调用后不再调，
                 # 答"没有工具"），明确要求工具时本地直接执行 handler → 结果注入官方 → 官方 TTS。
                 hit = _match_local_tool_intent(t)

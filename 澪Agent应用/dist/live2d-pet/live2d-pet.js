@@ -2074,10 +2074,18 @@
       currentActivity = 'idle'
     }
   })
-  // 小智表情联动：llm.emotion → 桌宠表情（含情绪参数）
+  // 小智表情联动：llm/pet_text.emotion → 桌宠表情 + 情绪动作（支持"哭一下/笑一个"等指令）
   window.addEventListener('mio-xz-emotion', (e) => {
     const emo = ((e && e.detail && e.detail.emotion) || '').toLowerCase()
-    if (emo) { currentEmotion = emo; emotionUntil = Date.now() + 6000 }
+    if (emo) {
+      applyEmotion(emo, 6000)
+      const hint = EMOTION_MOTION_HINT[emo]
+      if (hint) {
+        const group = semanticMotion(hint)
+        const idleGroup = semanticMotion('idle')
+        if (group && group !== idleGroup) playMotion(group, undefined, { force: true })
+      }
+    }
   })
   // 小智语音真实口型：pet-xz-audio.js 音频能量分析高频派发 → 优先驱动 ParamMouthOpenY
   window.addEventListener('mio-xz-mouth', (e) => {
