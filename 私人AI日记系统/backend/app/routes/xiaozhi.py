@@ -227,7 +227,7 @@ def _pick_next_observe_at() -> float:
 
 
 async def _observe_loop() -> None:
-    global _observe_next_at, _observe_last_result
+    global _observe_next_at, _observe_last_result, _pending_vision, _last_vision_image
     from ..screen_capture import MssCapture
     while True:
         try:
@@ -237,19 +237,26 @@ async def _observe_loop() -> None:
                 try:
                     img = await asyncio.to_thread(_full_screen_jpeg, MssCapture)
                     if img:
-                        text = await asyncio.to_thread(
-                            _vision_explain_sync,
-                            img,
-                            str(_prompt_cfg.get("observe_prompt") or _prompt_defaults["observe_prompt"]),
-                        )
+                        # 与"立即观察"同一条官方 MCP 工具链路：暂存截图 → 注入触发语
+                        # → 官方 LLM 调 self.camera.explain 工具 → 官方视觉识别 → 工具结果回灌
+                        # → 官方 TTS（官方音色）语音回答 + 气泡 + 历史（不再旁路只显示文本）
+                        question = str(_prompt_cfg.get("observe_prompt") or _prompt_defaults["observe_prompt"])
+                        if _prompt_cfg.get("force_60", True) and "字以内" not in question:
+                            question = f"{question}（请用60字以内的简洁口语回答）"
                         # 观察截图写入会话历史（同步到聊天界面）
                         _chat_append("user", "image", text="（屏幕观察）", image_base64=img, tag="observe")
-                        # 观察评价写入历史 → 聊天界面显示为"她说"气泡（AI 在评价屏幕）
-                        _chat_append("pet", "text", text, tag="observe")
-                        # 屏幕观察只显示文本气泡：不注入官方（不触发唤醒/官方"拜拜"；官方视觉仅返回文本）
-                        # 广播 speech-bubble → 桌宠显示气泡并自动消失（与截图提问一致）
-                        await _broadcast_observe_bubble(text)
-                        _observe_last_result = "已生成评价（文本气泡） · " + str(text)[:50]
+                        # 暂存截图 → 注入触发语（官方 LLM 收到后调 self.camera.explain 工具）
+                        _pending_vision = {"image_base64": img, "question": question}
+                        _last_vision_image = None  # 作废旧图副本：工具调用不得串到上一张图
+                        await _reset_upstream_connection()  # 每次观察强制重置会话，确保官方视觉工具可调用
+                        trigger = _next_observe_trigger()
+                        ok = await _inject_say(trigger, source="vision", confirm_timeout=8.0)
+                        if ok:
+                            _observe_last_result = "已触发官方观察（工具链路） · " + str(trigger)[:30]
+                        else:
+                            _observe_last_result = "观察失败：小智连接不可用"
+                    else:
+                        _observe_last_result = "观察失败：截屏失败"
                 except Exception as exc:  # noqa: BLE001
                     _observe_last_result = "观察失败：" + str(exc)[:60]
                     logger.warning("随机观察触发失败: %s", exc)
