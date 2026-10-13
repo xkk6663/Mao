@@ -123,6 +123,7 @@ def _builtin_live2d_models() -> tuple[dict[str, Any], ...]:
             "description": "Live2D 官方免费示例，包含完整待机与点击动作",
             "model_path": "models/hiyori/Hiyori.model3.json",
             "preview_path": "models/hiyori/preview.png",
+            "preview_url": "/agent-app/live2d-pet/models/Hiyori/preview.png",
             "license": "Live2D Free Material License",
             "source": "Live2D/CubismWebSamples",
             "source_url": "https://github.com/Live2D/CubismWebSamples",
@@ -145,12 +146,19 @@ def _builtin_live2d_models() -> tuple[dict[str, Any], ...]:
             if mid in known_ids:
                 continue
             known_ids.add(mid)
+            preview_path = ""
+            preview_url = ""
+            preview_candidate = entry / "preview.png"
+            if preview_candidate.is_file():
+                preview_path = f"models/{entry.name}/preview.png"
+                preview_url = f"/agent-app/live2d-pet/models/{entry.name}/preview.png"
             models.append({
                 "id": mid,
                 "name": entry.name,
                 "description": "Live2D 官方免费示例，含待机与点击动作",
                 "model_path": f"models/{entry.name}/{model_file.name}",
-                "preview_path": "",
+                "preview_path": preview_path,
+                "preview_url": preview_url,
                 "license": "Live2D Free Material License",
                 "source": "Live2D/CubismWebSamples",
                 "source_url": "https://github.com/Live2D/CubismWebSamples",
