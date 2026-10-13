@@ -1,74 +1,87 @@
-/* settings-clean-inject.js — 设置页收敛：隐藏原版已弃用的设置项与分类
+/* settings-clean-inject.js — 设置页收敛：隐藏原版已弃用的设置项与分类（保守版）
  *
  * 背景：后端已删除原版遗留功能（启动打招呼/主动联系/QQ/本地TTS等），
- * 但原版 SettingsPage 组件骨架仍渲染"基础与启动"分类下的遗留设置项，
- * 且导航"设置"下仍显示原版分类入口。
+ * 但原版 SettingsPage 组件骨架仍渲染"基础与启动"分类下的遗留设置项。
  *
- * 方案：DOM 文本匹配 + 向上定位设置行/分类容器并隐藏，只保留"桌宠"分类。
- * 不改动压缩混淆的构建产物。MutationObserver 持续监听，兼容路由切换后重渲染。
+ * 保守策略（防误杀白屏）：
+ * 1) 文本匹配命中后，只在"小尺寸容器"内向上定位：
+ *    - 含开关控件（role=switch / checkbox / radio）的容器 → 视为"设置行"，隐藏
+ *    - 无控件的 → 只隐藏文本所在最近的小块级容器（≤2 层，尺寸小）
+ * 2) 绝不隐藏大容器（宽度>600 或 高度>200），避免隐藏到页面/主区域导致白屏
  */
 (function () {
   'use strict';
-  // 要隐藏的设置项/分类（按 UI 文案匹配；命中任意即隐藏所在行/分类）
   var HIDE_ITEMS = [
     '主动打招呼', '主动联系', '关闭窗口后留在后台', '默认打开页面',
     '启动行为', '启动行为和主动联系', '打开应用时主动打招呼',
   ];
-  var HIDE_CATEGORIES = ['基础与启动', '启动、后台与主动消息'];
+
+  function isBigContainer(el) {
+    try {
+      var r = el.getBoundingClientRect();
+      return r.width > 600 || r.height > 200;
+    } catch (e) {
+      return true; // 测量失败视为大容器，不隐藏
+    }
+  }
 
   function hideRow(elm) {
-    // 从命中文本所在元素向上爬，找"设置行/分类"容器：
-    // 特征 = 至少 2 个子元素（label+控件）或包含开关，宽度较宽
+    // 方案1：向上找含开关控件的"设置行"容器（最多4层，不碰大容器）
     var node = elm;
-    for (var i = 0; i < 8; i++) {
-      if (!node || !node.parentElement) break;
+    for (var i = 0; i < 4 && node.parentElement; i++) {
       node = node.parentElement;
-      if (node.children.length >= 2) {
-        try {
-          var r = node.getBoundingClientRect();
-          if (r.width > 200 && r.height > 20) {
-            node.style.display = 'none';
-            node.style.visibility = 'hidden';
-            return true;
-          }
-        } catch (e) { /* ignore */ }
-      }
-      if (node === document.body) break;
+      if (isBigContainer(node)) break;
+      try {
+        if (node.querySelector && node.querySelector('[role="switch"], input[type="checkbox"], input[type="radio"]')) {
+          node.style.display = 'none';
+          return true;
+        }
+      } catch (e) { /* ignore */ }
     }
-    // 兜底：隐藏文本所在元素本身
+    // 方案2：无开关控件 → 隐藏文本最近的小块级容器（≤2 层）
+    node = elm;
+    var target = elm;
+    for (var j = 0; j < 2 && node.parentElement; j++) {
+      node = node.parentElement;
+      if (isBigContainer(node)) break;
+      target = node;
+    }
+    if (!isBigContainer(target)) {
+      target.style.display = 'none';
+      return true;
+    }
+    // 兜底：只隐藏文本节点本身所在的元素
     elm.style.display = 'none';
     return true;
   }
 
   function clean() {
     if (!document.body) return;
-    var texts = HIDE_ITEMS.concat(HIDE_CATEGORIES);
     var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
     var nodes = [];
     while (walker.nextNode()) {
       var t = walker.currentNode.textContent || '';
       if (t.length < 2 || t.length > 60) continue;
-      for (var i = 0; i < texts.length; i++) {
-        if (t.indexOf(texts[i]) >= 0) {
-          nodes.push({ el: walker.currentNode, key: texts[i] });
+      for (var i = 0; i < HIDE_ITEMS.length; i++) {
+        if (t.indexOf(HIDE_ITEMS[i]) >= 0) {
+          nodes.push(walker.currentNode);
           break;
         }
       }
     }
     for (var j = 0; j < nodes.length; j++) {
-      hideRow(nodes[j].el);
+      hideRow(nodes[j]);
     }
   }
 
-  // 设置页/导航渲染是异步的（Vue 挂载后），用 MutationObserver 持续清理
   var timer = null;
   function schedule() {
     if (timer) clearTimeout(timer);
-    timer = setTimeout(clean, 150);
+    timer = setTimeout(clean, 200);
   }
   try {
     var obs = new MutationObserver(schedule);
-    obs.observe(document.documentElement, { childList: true, subtree: true, attributes: false });
+    obs.observe(document.documentElement, { childList: true, subtree: true });
   } catch (e) { /* ignore */ }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', clean);
