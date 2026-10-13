@@ -1597,6 +1597,7 @@ async def companion_chat_history(limit: int = Query(default=120, ge=1, le=500)):
 
 
 
+@router.patch("/position")
 async def companion_position(payload: CompanionPositionRequest):
     await asyncio.to_thread(companion_service.save_pet_position, payload.x, payload.y)
     return await asyncio.to_thread(_status_payload)
