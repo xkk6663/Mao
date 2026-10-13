@@ -1,5 +1,5 @@
 {
   "image_prompt": "请详细描述这张图片里的内容。",
-  "observe_prompt": "用一句话带有调侃的语气锐评现在画面的内容",
+  "observe_prompt": "一句话锐评当前界面(10字以内)",
   "force_60": false
 }

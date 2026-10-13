@@ -435,9 +435,9 @@
       const vh = Number(virtual.height) || window.innerHeight
       const marginX = Math.min(72, Math.max(32, vw * 0.08))
       const marginY = Math.min(96, Math.max(48, vh * 0.1))
-      // 顶部放开：允许半身出屏（保存的位置可到屏幕上方半身出屏），底部/左右保持可见
+      // 顶部放开：允许半身出屏（保存的位置可到屏幕上方半身出屏），底部同样放开（允许半身出屏，不回弹）
       posX = Math.min(Math.max(posX, virtual.x + marginX), virtual.x + vw - marginX)
-      posY = Math.min(Math.max(posY, virtual.y - Math.round(vh * 0.5)), virtual.y + vh - marginY)
+      posY = Math.min(Math.max(posY, virtual.y - Math.round(vh * 0.5)), virtual.y + vh + Math.round(vh * 0.5))
       model.x = posX - Number(virtual.x || 0) + target.width / 2
       model.y = posY - Number(virtual.y || 0) + target.height / 2
         + target.height * Number(settings.live2d_vertical_offset || 0)
@@ -454,7 +454,6 @@
     if (!model) return
     const margin = 8
     const minimumVisibleWidth = Math.min(72, Math.max(32, window.innerWidth * 0.08))
-    const minimumVisibleHeight = Math.min(96, Math.max(48, window.innerHeight * 0.1))
     const bounds = model.getBounds()
     let dx = 0
     let dy = 0
@@ -463,11 +462,12 @@
     } else if (bounds.x > window.innerWidth - margin - minimumVisibleWidth) {
       dx = window.innerWidth - margin - minimumVisibleWidth - bounds.x
     }
-    // 顶部放开：仅当模型完全出屏顶部（底部也在屏幕顶之上）才拉回，允许半身出屏
+    // 顶部/底部都放开：允许半身出屏，仅当模型完全出屏才拉回（保证不彻底丢失）
+    const halfH = Math.round(window.innerHeight * 0.5)
     if (bounds.y + bounds.height < margin) {
       dy = margin - bounds.y - bounds.height
-    } else if (bounds.y > window.innerHeight - margin - minimumVisibleHeight) {
-      dy = window.innerHeight - margin - minimumVisibleHeight - bounds.y
+    } else if (bounds.y > window.innerHeight + halfH) {
+      dy = window.innerHeight + halfH - bounds.y
     }
     model.x += dx
     model.y += dy
@@ -1928,9 +1928,10 @@
       const vh = Number(virtual.height) || window.innerHeight
       const marginX = Math.min(72, Math.max(32, vw * 0.08))
       const marginY = Math.min(96, Math.max(48, vh * 0.1))
-      // 顶部放开：允许半身出屏（用户可把桌宠拖到屏幕上方半身出屏），底部/左右保持可见
+      // 顶部放开：允许半身出屏（用户可把桌宠拖到屏幕上方半身出屏）
+      // 底部同样放开：允许半身出屏，不再把拖到底部的桌宠向上弹回
       const topLimit = virtual.y - Math.round(vh * 0.5)
-      const bottomLimit = virtual.y + vh - marginY
+      const bottomLimit = virtual.y + vh + Math.round(vh * 0.5)
       const nextX = Math.round(Math.min(Math.max(interaction.positionX + dx, virtual.x + marginX), virtual.x + vw - marginX))
       const nextY = Math.round(Math.min(Math.max(interaction.positionY + dy, topLimit), bottomLimit))
       settings.position_x = nextX
