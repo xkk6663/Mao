@@ -143,7 +143,7 @@ _MCP_TOOLS_DEF: list[dict] = [
             },
             "required": [],
         },
-        "handler": "_exec_screen_explain",
+        "handler": "_mcp_camera_explain",
         "default_enabled": True,
         "category": "视觉",
     },
@@ -479,7 +479,7 @@ async def _observe_loop() -> None:
                         # 暂存截图 → 注入触发语（官方 LLM 收到后调 self.camera.explain 工具）
                         _pending_vision = {"image_base64": img, "question": question}
                         _last_vision_image = None  # 作废旧图副本：工具调用不得串到上一张图
-                        await _reset_upstream_connection()  # 每次观察强制重置会话，确保官方视觉工具可调用
+                        # 云端 LLM 已能真调工具，不再每次强制断连重置会话（旧方案导致注入期间连接不可用）
                         trigger = _next_observe_trigger()
                         ok = await _inject_say(trigger, source="vision", confirm_timeout=8.0)
                         if ok:
@@ -1182,6 +1182,15 @@ async def _exec_screen_explain(question: str) -> str:
     return text
 
 
+async def _mcp_camera_explain(args: dict) -> str:
+    """self.camera.explain 的 MCP 适配层：tools/call 的 arguments 是 dict，
+    取出 question 字段后交给 _exec_screen_explain（官方云端 LLM 真调工具时走这里）。"""
+    if not isinstance(args, dict):
+        args = {}
+    q = str(args.get("question") or "").strip()
+    return await _exec_screen_explain(q)
+
+
 def _mcp_error(req_id, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
 
@@ -1675,9 +1684,8 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
         #    工具回调里用这张暂存图做官方视觉识别，识别文本作为工具结果回灌 LLM）
         _pending_vision = {"image_base64": image_base64, "question": question}
         _last_vision_image = None  # 作废旧图副本：官方连续工具调用不得串到上一张图
-        # 每次发图强制重置官方会话（新上下文）：官方视觉工具只在干净会话里稳定被调用，
-        # 同一会话内第一次工具调用后，后续"看图片"指令官方不再调工具（实测"第一张通、后续全失败"）
-        await _reset_upstream_connection()
+        # 云端 LLM 已能真调 self.camera.explain（tools/call），不再每次强制断连重置会话
+        # （旧方案重置连接导致注入期间连接不可用 → 409 注入失败）
         # 注入语音用短触发语（ASR 对 SAPI 合成音的长文本识别差，实测长触发语被识别成乱码 → LLM 不调工具）。
         # 每次发图轮换不同触发语：官方 LLM 对重复的用户指令（同一会话内相同文本）会去重/不重复响应
         # （实测第一张图正常调工具，第二张起注入文本相同 → 官方识别了触发语却不调工具 → 回答"没收到图片"）
@@ -1717,7 +1725,7 @@ async def xiaozhi_vision_bubble(payload: VisionRequest) -> dict:
         # 2. 暂存截图（缺省现截全屏）→ 注入触发语 → 官方 LLM 调工具 → 官方回答 + 官方 TTS 音频
         _pending_vision = {"image_base64": image_base64 or None, "question": question}
         _last_vision_image = None  # 作废旧图副本：官方连续工具调用不得串到上一张图
-        await _reset_upstream_connection()  # 每次观察/提问强制重置会话，确保官方视觉工具可调用
+        # 云端 LLM 已能真调 self.camera.explain（tools/call），不再每次强制断连重置会话
         # 注入语音用短触发语（ASR 对 SAPI 合成音的长文本识别差，实测长触发语被识别成乱码
         # 导致 LLM 不调工具）；用户 prompt 作视觉 API question（识别文本自带其风格，已实测生效）。
         # 每次触发轮换不同短语：官方 LLM 对同一会话内重复的用户指令会去重/不重复响应
