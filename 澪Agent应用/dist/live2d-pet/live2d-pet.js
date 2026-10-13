@@ -1522,6 +1522,17 @@
     return true
   }
 
+  function previewFeedback(data) {
+    // 预览播放回执（诊断用）：确认后端广播的消息已到达桌宠并播放
+    try {
+      fetch('/api/companion/preview-feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      }).catch(() => {})
+    } catch (_) {}
+  }
+
   function connectSocket() {
     if (!electronRuntime) return
     window.clearTimeout(socketRetryTimer)
@@ -1586,7 +1597,10 @@
         if (!electronRuntime) window.mioDesktop?.setChatWindowOpen?.(Boolean(payload.open))
       } else if (message.type === 'motion_preview') {
         // 用户主动预览动作：force 强制即时播放（绕过节流，避免连续点击/与待机动作撞车被吞）
-        playMotion(String(payload.group || ''), Number.isInteger(payload.index) ? payload.index : undefined, { force: true })
+        const _mpGroup = String(payload.group || '')
+        const _mpIndex = Number.isInteger(payload.index) ? payload.index : undefined
+        const _mpPlayed = playMotion(_mpGroup, _mpIndex, { force: true })
+        previewFeedback({ kind: 'motion', group: _mpGroup, index: _mpIndex, played: _mpPlayed })
         // 动作预览 8s 后恢复待机动作（当前无其他活动时），防止动作播完不回待机
         window.clearTimeout(motionPreviewResetTimer)
         motionPreviewResetTimer = window.setTimeout(() => {
@@ -1596,7 +1610,9 @@
       } else if (message.type === 'expression_preview') {
         if (payload.expression && model?.expression) {
           const previewExpression = String(payload.expression)
-          Promise.resolve(model.expression(previewExpression)).catch(() => {})
+          Promise.resolve(model.expression(previewExpression))
+            .then(() => previewFeedback({ kind: 'expression', expression: previewExpression, played: true }))
+            .catch(() => previewFeedback({ kind: 'expression', expression: previewExpression, played: false }))
           // 预览表情 5.5s 后自动恢复当前情绪表情（小智联动/默认中性），防止表情卡住不回待机
           window.clearTimeout(expressionPreviewResetTimer)
           expressionPreviewResetTimer = window.setTimeout(() => {

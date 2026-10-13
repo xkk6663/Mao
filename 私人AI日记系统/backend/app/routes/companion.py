@@ -965,7 +965,9 @@ async def companion_live2d_motion_preview(payload: Live2DMotionPreviewRequest):
     if not pet_event_service.has_desktop_renderer():
         raise HTTPException(status_code=409, detail="请先启动 Live2D 桌宠。")
     event = {"group": payload.group.strip(), "index": payload.index if payload.index is not None else 0}
+    _preview_diag_log("motion_preview REQUEST", event)
     pet_event_service.publish("motion_preview", event)
+    _preview_diag_log("motion_preview PUBLISHED", event)
     return {"ok": True, **event}
 
 
@@ -974,8 +976,29 @@ async def companion_live2d_expression_preview(payload: Live2DExpressionPreviewRe
     if not pet_event_service.has_desktop_renderer():
         raise HTTPException(status_code=409, detail="请先启动 Live2D 桌宠。")
     event = {"expression": payload.expression.strip()}
+    _preview_diag_log("expression_preview REQUEST", event)
     pet_event_service.publish("expression_preview", event)
+    _preview_diag_log("expression_preview PUBLISHED", event)
     return {"ok": True, **event}
+
+
+@router.post("/preview-feedback")
+async def companion_preview_feedback(payload: dict):
+    """桌宠端播放回执（临时诊断：确认预览消息是否到达桌宠并播放）。"""
+    _preview_diag_log("PET FEEDBACK", payload)
+    return {"ok": True}
+
+
+_PREVIEW_DIAG_FILE = r"C:\Users\xiao1\Mao\preview_diag.log"
+
+
+def _preview_diag_log(tag: str, data) -> None:
+    try:
+        import json as _json
+        with open(_PREVIEW_DIAG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"[{__import__('time').strftime('%H:%M:%S')}] {tag} {_json.dumps(data, ensure_ascii=False)}\n")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @router.post("/app-ready")
