@@ -435,8 +435,8 @@
       const vh = Number(virtual.height) || window.innerHeight
       const marginX = Math.min(72, Math.max(32, vw * 0.08))
       const marginY = Math.min(96, Math.max(48, vh * 0.1))
-      // 水平保留防丢失；上下完全放开（保存的位置原样恢复，不做回弹）
-      posX = Math.min(Math.max(posX, virtual.x + marginX), virtual.x + vw - marginX)
+      // 位置原样恢复，不做任何限位（用户自由拖拽）
+      posX = posX
       posY = posY
       model.x = posX - Number(virtual.x || 0) + target.width / 2
       model.y = posY - Number(virtual.y || 0) + target.height / 2
@@ -458,20 +458,8 @@
   }
 
   function clampModelToViewport() {
+    // 用户要求完全自由拖拽：上下/水平均不做任何限位，此函数为空操作（保留入口以防历史调用）
     if (!model) return
-    const margin = 8
-    const minimumVisibleWidth = Math.min(72, Math.max(32, window.innerWidth * 0.08))
-    const bounds = model.getBounds()
-    let dx = 0
-    let dy = 0
-    if (bounds.x + bounds.width < margin + minimumVisibleWidth) {
-      dx = margin + minimumVisibleWidth - bounds.x - bounds.width
-    } else if (bounds.x > window.innerWidth - margin - minimumVisibleWidth) {
-      dx = window.innerWidth - margin - minimumVisibleWidth - bounds.x
-    }
-    // 上下完全放开：不做任何回弹（用户要求自由拖拽）；只保留水平防丢失
-    model.x += dx
-    model.y += dy
   }
 
   function setParameter(id, value, weight = 1) {
@@ -1929,8 +1917,8 @@
       const vh = Number(virtual.height) || window.innerHeight
       const marginX = Math.min(72, Math.max(32, vw * 0.08))
       const marginY = Math.min(96, Math.max(48, vh * 0.1))
-      // 完全放开上下限位：不做回弹，位置原样保存（水平仍保留防丢失）
-      const nextX = Math.round(Math.min(Math.max(interaction.positionX + dx, virtual.x + marginX), virtual.x + vw - marginX))
+      // 完全放开上下与水平限位：位置原样保存，不做任何回弹
+      const nextX = Math.round(interaction.positionX + dx)
       const nextY = Math.round(interaction.positionY + dy)
       settings.position_x = nextX
       settings.position_y = nextY
