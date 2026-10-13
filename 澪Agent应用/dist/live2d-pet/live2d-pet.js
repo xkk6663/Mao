@@ -228,7 +228,8 @@
 
   async function request(path, options = {}) {
     // 全局超时：官方云断连时 say/vision 可能长时间阻塞，避免前端无限挂起（"卡住"）
-    const timeoutMs = options.timeoutMs || 12000
+    // 25s：vision 注入（SAPI 合成+发送）与官方回答链路的余量，避免"请求超时(12s)"误报
+    const timeoutMs = options.timeoutMs || 25000
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     let response

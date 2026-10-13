@@ -572,7 +572,7 @@ async def _observe_loop() -> None:
                         _last_vision_image = None  # 作废旧图副本：工具调用不得串到上一张图
                         # 云端 LLM 已能真调工具，不再每次强制断连重置会话（旧方案导致注入期间连接不可用）
                         trigger = _next_observe_trigger()
-                        ok = await _inject_say(trigger, source="vision", confirm_timeout=8.0)
+                        ok = await _inject_say(trigger, source="vision", confirm_timeout=0.0)
                         if ok:
                             _observe_last_result = "已触发官方观察（工具链路） · " + str(trigger)[:30]
                         else:
@@ -1867,7 +1867,7 @@ async def xiaozhi_vision(payload: VisionRequest) -> dict:
         # 每次发图轮换不同触发语：官方 LLM 对重复的用户指令（同一会话内相同文本）会去重/不重复响应
         # （实测第一张图正常调工具，第二张起注入文本相同 → 官方识别了触发语却不调工具 → 回答"没收到图片"）
         trigger = _next_vision_trigger()
-        ok = await _inject_say(trigger, source="vision", confirm_timeout=8.0)
+        ok = await _inject_say(trigger, source="vision", confirm_timeout=0.0)
         if not ok:
             raise HTTPException(status_code=409, detail="注入失败：小智连接不可用")
         return {"ok": True, "trigger": trigger}
@@ -1910,7 +1910,7 @@ async def xiaozhi_vision_bubble(payload: VisionRequest) -> dict:
             trigger = _next_observe_trigger()
         else:
             trigger = _next_vision_trigger()
-        ok = await _inject_say(trigger, source="vision", confirm_timeout=8.0)
+        ok = await _inject_say(trigger, source="vision", confirm_timeout=0.0)
         if not ok:
             raise HTTPException(status_code=409, detail="注入失败：小智连接不可用")
         return {"ok": True, "trigger": trigger}
