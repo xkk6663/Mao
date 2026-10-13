@@ -1713,6 +1713,12 @@ async def _mcp_companion_switch_model(args: dict) -> str:
         chosen = _random.choice(others)
     try:
         await asyncio.to_thread(companion_service.save_config, {"live2d_model_id": chosen})
+        # 渲染器（Electron）实际读 runtime.json 的 selectedModelId 决定加载哪个模型，
+        # 只写 config 不会让桌宠换装——这里同时写运行时选中模型。
+        try:
+            await asyncio.to_thread(companion_service.select_live2d_model, chosen)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("换角色：写渲染器运行时选中模型失败（可忽略）: %s", exc)
         await asyncio.to_thread(companion_service.restart_pet)
     except Exception as exc:  # noqa: BLE001
         logger.warning("换角色：切换模型失败: %s", exc)

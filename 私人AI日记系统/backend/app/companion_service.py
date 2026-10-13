@@ -389,6 +389,12 @@ def stop_pet() -> dict[str, Any]:
 
 def restart_pet() -> dict[str, Any]:
     stop_pet()
+    # 等待外部渲染器（Electron）真正退出、WebSocket 连接断开后再启动，
+    # 否则 start_pet 的 already_running 短路会让桌宠停留在旧实例/旧模型上。
+    for _ in range(24):
+        if not _external_pet_renderer_connected():
+            break
+        time.sleep(0.25)
     return start_pet()
 
 
