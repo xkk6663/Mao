@@ -1,7 +1,6 @@
 **/.env
 **/.venv/
 **/node_modules/
-**/dist/
 **/release/
 **/build/
 **/__pycache__/
@@ -11,6 +10,10 @@
 **/*.db
 **/*.sqlite
 **/*.sqlite3
+# 前端核心代码（live2d-pet 渲染器、注入脚本）手写维护，必须纳入 git 防写坏；
+# dist 下仅第三方构建产物 assets 不入库。
+**/dist/assets/
+**/dist/updates/
 **/*.wav
 **/*.mp3
 **/*.flac
