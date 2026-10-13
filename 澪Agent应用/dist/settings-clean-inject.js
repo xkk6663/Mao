@@ -26,6 +26,11 @@
   }
 
   function hideRow(elm) {
+    // 文本节点没有 style → 先提升到父元素
+    if (elm.nodeType === 3) {
+      elm = elm.parentElement
+      if (!elm) return true
+    }
     // 方案1：向上找含开关控件的"设置行"容器（最多4层，不碰大容器）
     var node = elm;
     for (var i = 0; i < 4 && node.parentElement; i++) {

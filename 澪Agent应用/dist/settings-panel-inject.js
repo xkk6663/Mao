@@ -63,30 +63,40 @@
     return null
   }
 
-  // ---------- 导航：接管原版「设置」项 ----------
+  // ---------- 导航：隐藏原版「设置」项，原位插入自有「设置」按钮（不带 Vue 事件） ----------
   var navBtn = null
+  var ourBtn = null
   function ensureNav() {
-    if (navBtn && navBtn.isConnected) return
     var nav = $q('nav')
     if (!nav) return
     var btns = nav.querySelectorAll('button.nav-item')
+    var orig = null
     for (var i = 0; i < btns.length; i++) {
+      if (btns[i].__mioOurBtn) continue // 跳过我们自己的按钮
       var t = (btns[i].getAttribute('title') || '') + (btns[i].textContent || '')
-      if (t.indexOf('设置') >= 0 || t.indexOf('settings') >= 0) {
-        navBtn = btns[i]
-        // 接管点击：capture 阶段拦截，阻止原版设置页打开
-        if (!navBtn.__mioSettingsTaken) {
-          navBtn.__mioSettingsTaken = true
-          navBtn.addEventListener('click', function (e) {
-            e.preventDefault()
-            e.stopPropagation()
-            togglePanel()
-          }, true)
-        }
-        break
-      }
+      if (t.indexOf('设置') >= 0 && t.indexOf('小智') < 0) { orig = btns[i]; break }
     }
-    return !!navBtn
+    if (!orig) return
+    // 隐藏原版设置按钮（Vue 重渲染后恢复 → keepAlive 再次隐藏）
+    if (!orig.__mioHidden) {
+      orig.style.display = 'none'
+      orig.__mioHidden = true
+    }
+    // 原位插入我们的按钮（clone 外观，去掉数据绑定属性，绑定自有 handler）
+    if (!ourBtn || !ourBtn.isConnected) {
+      ourBtn = orig.cloneNode(true)
+      ourBtn.__mioOurBtn = true
+      ourBtn.removeAttribute('data-scu-ref')
+      ourBtn.addEventListener('click', function (e) {
+        e.preventDefault()
+        e.stopPropagation()
+        togglePanel()
+      })
+      orig.parentNode.insertBefore(ourBtn, orig)
+    }
+    // 确保我们的按钮始终可见（clone 可能复制了 display:none / Vue 可能置 hide）
+    ourBtn.style.display = ''
+    navBtn = ourBtn
   }
 
   // ---------- 面板 ----------
@@ -534,7 +544,12 @@
     } catch (e) { /* ignore */ }
   }
   var mo = new MutationObserver(function () { try { keepAlive() } catch (e) {} })
-  mo.observe(document.body, { childList: true, subtree: true })
+  try {
+    mo.observe(document.body || document.documentElement, { childList: true, subtree: true })
+  } catch (e) {
+    mo.observe(document.documentElement, { childList: true, subtree: true })
+  }
   setInterval(keepAlive, 1500)
-  ensureNav()
+  setTimeout(ensureNav, 1000)
+  setTimeout(ensureNav, 3000)
 })()
