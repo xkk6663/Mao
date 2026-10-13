@@ -245,6 +245,27 @@ function walkFiles(root) {
 
 function modelCatalog() {
   const catalog = []
+  // 内置模型：扫描渲染器 models 目录（dist/live2d-pet/models），动态发现并合并进管理列表，
+  // id 与 live2d-pet.js builtInModels 的 id（目录名小写）保持一致，选中后可正常切换。
+  const builtInRoot = path.resolve(__dirname, '..', 'dist', 'live2d-pet', 'models')
+  if (fs.existsSync(builtInRoot)) {
+    for (const entry of fs.readdirSync(builtInRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      const modelRoot = path.join(builtInRoot, entry.name)
+      const modelFile = fs.readdirSync(modelRoot).find((f) => f.toLowerCase().endsWith('.model3.json'))
+      if (!modelFile) continue
+      catalog.push({
+        id: entry.name.toLowerCase(),
+        name: entry.name,
+        source: 'built_in',
+        modelUrl: `./models/${entry.name}/${modelFile}`,
+        importedAt: '',
+        renderOptimization: {},
+        sourceLabel: '内置官方模型',
+        capabilities: {},
+      })
+    }
+  }
   if (!fs.existsSync(MODELS_DIR)) return catalog
   for (const entry of fs.readdirSync(MODELS_DIR, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue
