@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/xiaozhi", tags=["xiaozhi"])
 
 XIAOZHI_UPSTREAM = os.getenv("MIO_XIAOZHI_UPSTREAM", "wss://api.tenclass.net/xiaozhi/v1/")
+XIAOZHI_OTA_URL = os.getenv("MIO_XIAOZHI_OTA_URL", "https://api.tenclass.net/xiaozhi/ota/")
 
 # 项目根 = 本文件 (backend/app/routes/) 向上 4 级；发布版解压到任意目录均可运行
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -1851,6 +1852,74 @@ async def xiaozhi_status() -> dict:
         "subscribers": len(_subscribers),
         "roles": list(_sub_roles.values()),
         "mcp_stats": dict(_MCP_STATS),
+    }
+
+
+@router.get("/activation")
+async def xiaozhi_activation() -> dict:
+    """查询设备在官方云的绑定/激活状态（调官方 OTA/info 接口，与 ESP32 固件同款）。
+
+    已绑定 → bound=true、无 activation.code（不需要验证码）；
+    未绑定 → bound=false、activation_code=6位验证码（去控制台"添加设备"输入绑定）。
+    另返回官方下发的 websocket 连接配置（url/token），供确认设备正式身份。"""
+    identity = _device_identity()
+    if identity is None:
+        return {"ok": False, "error": "未找到设备身份文件，请检查 xiaozhi_device.json"}
+    mac = identity["mac"]
+    client_id = identity.get("client_id", mac)
+    body = {
+        "version": 2,
+        "language": "zh-CN",
+        "flash_size": 0,
+        "minimum_free_heap_size": 0,
+        "mac_address": mac,
+        "uuid": client_id,
+        "chip_model_name": "windows",
+        "chip_info": {"model": 0, "cores": 1, "revision": 0, "features": 0},
+        "application": {
+            "name": "MaoPet",
+            "version": "1.0.0",
+            "compile_time": "2026-10-13T00:00:00Z",
+            "idf_version": "",
+            "elf_sha256": "",
+        },
+        "partition_table": [],
+        "ota": {"label": "factory"},
+        "board": {"type": "generic", "name": "windows", "version": "1.0"},
+    }
+    try:
+        req = urllib.request.Request(
+            XIAOZHI_OTA_URL,
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Client-Id": client_id,
+                "Device-Id": mac,
+                "User-Agent": "windows",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=20) as r:
+            raw = r.read().decode("utf-8", "replace")
+        data = json.loads(raw)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("查询官方 OTA/info 失败: %s", exc)
+        return {"ok": False, "error": f"查询官方服务器失败：{exc}"}
+    activation = data.get("activation") or {}
+    ws = data.get("websocket") or {}
+    fw = data.get("firmware") or {}
+    st = data.get("server_time") or {}
+    code = str(activation.get("code") or "").strip()
+    return {
+        "ok": True,
+        "bound": not bool(code),
+        "activation_code": code or None,
+        "activation_message": activation.get("message"),
+        "activation_timeout_ms": activation.get("timeout_ms"),
+        "websocket_url": ws.get("url"),
+        "websocket_token": ws.get("token"),
+        "firmware_version": fw.get("version"),
+        "server_time_ms": st.get("timestamp"),
     }
 
 
