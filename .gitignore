@@ -14,6 +14,8 @@
 # dist 下仅第三方构建产物 assets 不入库。
 **/dist/assets/
 **/dist/updates/
+# 本地库文件备份（保留在磁盘便于还原，不入库）
+*.bak-sound
 **/*.wav
 **/*.mp3
 **/*.flac
