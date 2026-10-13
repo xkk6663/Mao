@@ -314,6 +314,60 @@ _MCP_TOOLS_DEF: list[dict] = [
 ]
 
 _MCP_HANDLERS: dict[str, str] = {t["name"]: t["handler"] for t in _MCP_TOOLS_DEF}
+
+
+# ---- 本地工具意图兜底 ----
+# 官方免费 LLM 在同一会话内工具调用不稳定（第一次 tools/call 后不再调，答"没有工具"）。
+# 兜底方案：用户明确要求工具时，后端本地直接执行 handler → 结果文本注入官方 → 官方 TTS（官方音色）。
+# 规则保守匹配，避免闲聊误触发。
+def _match_local_tool_intent(text: str) -> tuple[str, dict] | None:
+    t = (text or "").strip()
+    if not t:
+        return None
+    # 视觉（看屏幕/看图片）：本地截屏 → 官方视觉 API → 文本注入
+    if any(k in t for k in (
+        "看看我的屏幕", "看看屏幕", "看看我屏幕", "看下我的屏幕", "看下屏幕",
+        "看看我的画面", "看看桌面", "看看我桌面", "看看我在做什么", "看我在做什么",
+        "看看我现在屏幕", "看看当前屏幕", "看看我的电脑屏幕",
+        "看看这张图", "看看这张图片", "看这张图", "看这张图片", "看看图片", "看看这个图片",
+    )):
+        return ("self.camera.explain", {})
+    # 剪贴板读
+    if ("剪贴板" in t and any(k in t for k in ("看", "读", "什么", "内容", "复制", "查"))) or "复制了什么" in t:
+        return ("self.clipboard.get", {})
+    # 时间/日期
+    if any(k in t for k in ("几点", "几号", "什么时间", "现在几点", "现在时间", "星期几", "今天几号")):
+        return ("self.clock.get_time", {})
+    # 系统状态
+    if any(k in t for k in ("CPU", "cpu", "内存", "卡不卡", "电脑状态", "系统状态", "运行多久")):
+        return ("self.system.get_info", {})
+    # 天气（需查询意图，避免"今天天气不错"误触发）
+    if any(k in t for k in ("冷不冷", "热不热", "会不会下雨", "有没有下雨", "什么天气", "天气怎么样")):
+        return ("self.weather.get", {})
+    if "天气" in t and any(k in t for k in ("查", "问", "今天", "现在", "外面", "预报", "多少度", "温度")):
+        return ("self.weather.get", {})
+    # 新闻
+    if ("新闻" in t and any(k in t for k in ("查", "看", "什么", "今天", "读", "讲"))) or "有什么大事" in t:
+        return ("self.news.get", {})
+    # 备忘读
+    if "你记得什么" in t or ("备忘" in t and any(k in t for k in ("看", "查", "什么", "记得"))):
+        return ("self.memo.get", {})
+    return None
+
+
+async def _run_local_tool_fallback(name: str, args: dict) -> str | None:
+    """本地直接执行工具 handler，返回结果文本（不依赖官方 LLM 调 tools/call）。"""
+    handler_name = _MCP_HANDLERS.get(name)
+    if not handler_name:
+        return None
+    handler = globals().get(handler_name)
+    if handler is None or not callable(handler):
+        return None
+    try:
+        return await handler(args)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("本地工具兜底 %s 执行失败: %s", name, exc)
+        return f"工具 {name} 执行失败：{exc}"
 _mcp_enabled: dict[str, bool] = {}  # name -> 用户开关（未记录的用 default_enabled）
 
 
@@ -1065,6 +1119,21 @@ async def xiaozhi_say(payload: XiaozhiSayRequest) -> dict:
     if not text:
         raise HTTPException(status_code=400, detail="文本不能为空")
     _chat_append("user", "text", text, tag="chat")
+    # 本地工具意图兜底（与 WS 对话入口一致）
+    hit = _match_local_tool_intent(text)
+    if hit and _mcp_tool_enabled(hit[0]):
+        name, args = hit
+        await _syslog(f"🔧 本地工具兜底：{name}（官方 LLM 工具调用不稳定，本地直接执行）")
+        if name == "self.camera.explain":
+            q = str(_prompt_cfg.get("observe_prompt") or "") or None
+            result = await _exec_screen_explain(q or "")
+            source = "vision"
+        else:
+            result = await _run_local_tool_fallback(name, args)
+            source = "tool"
+        if result:
+            await _inject_segments(result, source=source)
+            return {"ok": True, "text": text, "local_tool": name, "result": result[:80]}
     ok = await _inject_say(text)
     if not ok:
         raise HTTPException(status_code=409, detail="注入失败：小智连接不可用")
@@ -2287,6 +2356,22 @@ async def _relay_browser_message(ws: WebSocket, text: str) -> None:
                 if len(t) > 100:
                     t = t[:97] + "…"
                 _chat_append("user", "text", t, tag="chat")
+                # 本地工具意图兜底：官方免费 LLM 同会话内工具调用不稳定（第一次调用后不再调，
+                # 答"没有工具"），明确要求工具时本地直接执行 handler → 结果注入官方 → 官方 TTS。
+                hit = _match_local_tool_intent(t)
+                if hit and _mcp_tool_enabled(hit[0]):
+                    name, args = hit
+                    await _syslog(f"🔧 本地工具兜底：{name}（官方 LLM 工具调用不稳定，本地直接执行）")
+                    if name == "self.camera.explain":
+                        q = str(_prompt_cfg.get("observe_prompt") or "") or None
+                        result = await _exec_screen_explain(q or "")
+                        source = "vision"
+                    else:
+                        result = await _run_local_tool_fallback(name, args)
+                        source = "tool"
+                    if result:
+                        await _inject_segments(result, source=source)
+                        return
                 ok = await _inject_say(t)
                 if ok:
                     return
