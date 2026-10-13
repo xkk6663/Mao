@@ -1257,7 +1257,9 @@ async def _exec_screen_explain(question: str) -> str:
     再调官方视觉分析，返回识别文本（tools/result 回灌官方 LLM 用）。"""
     global _pending_vision, _last_vision_image
     image_base64 = None
-    q = question.strip() or "请详细描述这张图片里的内容。"
+    q = question.strip() or str(_prompt_cfg.get("observe_prompt") or _prompt_defaults["observe_prompt"])
+    if _prompt_cfg.get("force_60", True) and "字以内" not in q:
+        q = f"{q}（请用60字以内的简洁口语回答）"
     if _pending_vision:
         image_base64 = _pending_vision.get("image_base64")
         pending_q = str(_pending_vision.get("question") or "").strip()
