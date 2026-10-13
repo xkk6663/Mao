@@ -435,9 +435,9 @@
       const vh = Number(virtual.height) || window.innerHeight
       const marginX = Math.min(72, Math.max(32, vw * 0.08))
       const marginY = Math.min(96, Math.max(48, vh * 0.1))
-      // 顶部放开：允许半身出屏；底部以屏幕可见下限为准（防止掉出物理屏）
+      // 水平保留防丢失；上下完全放开（保存的位置原样恢复，不做回弹）
       posX = Math.min(Math.max(posX, virtual.x + marginX), virtual.x + vw - marginX)
-      posY = Math.min(Math.max(posY, virtual.y - Math.round(vh * 0.5)), virtual.y + visibleBottomLimit())
+      posY = posY
       model.x = posX - Number(virtual.x || 0) + target.width / 2
       model.y = posY - Number(virtual.y || 0) + target.height / 2
         + target.height * Number(settings.live2d_vertical_offset || 0)
@@ -469,14 +469,7 @@
     } else if (bounds.x > window.innerWidth - margin - minimumVisibleWidth) {
       dx = window.innerWidth - margin - minimumVisibleWidth - bounds.x
     }
-    // 顶部放开（允许半身出屏）；底部以屏幕可见下限为准，超出则拉回（防止掉出物理屏）
-    const halfH = Math.round(window.innerHeight * 0.5)
-    const bottom = visibleBottomLimit()
-    if (bounds.y + bounds.height < margin) {
-      dy = margin - bounds.y - bounds.height
-    } else if (bounds.y > bottom) {
-      dy = bottom - bounds.y
-    }
+    // 上下完全放开：不做任何回弹（用户要求自由拖拽）；只保留水平防丢失
     model.x += dx
     model.y += dy
   }
@@ -1936,11 +1929,9 @@
       const vh = Number(virtual.height) || window.innerHeight
       const marginX = Math.min(72, Math.max(32, vw * 0.08))
       const marginY = Math.min(96, Math.max(48, vh * 0.1))
-      // 顶部放开：允许半身出屏；底部以屏幕可见下限为准（拖到任务栏附近不回弹，但不会掉出物理屏）
-      const topLimit = virtual.y - Math.round(vh * 0.5)
-      const bottomLimit = virtual.y + visibleBottomLimit()
+      // 完全放开上下限位：不做回弹，位置原样保存（水平仍保留防丢失）
       const nextX = Math.round(Math.min(Math.max(interaction.positionX + dx, virtual.x + marginX), virtual.x + vw - marginX))
-      const nextY = Math.round(Math.min(Math.max(interaction.positionY + dy, topLimit), bottomLimit))
+      const nextY = Math.round(interaction.positionY + dy)
       settings.position_x = nextX
       settings.position_y = nextY
       request('/api/companion/position', {
