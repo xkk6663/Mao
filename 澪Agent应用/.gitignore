@@ -1,6 +1,7 @@
 node_modules/
 pnpm-lock.yaml
-dist/
+dist/assets/
+dist/updates/
 __pycache__/
 *.pyc
 *.log
