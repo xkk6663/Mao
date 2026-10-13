@@ -14,6 +14,7 @@
 
   // ---- 音频播放（48kHz 双声道 float32 planar，后端代理解码后的 PCM）----
   var audioCtx = null
+  var analyserNode = null
   var playQueue = []
   var playing = false
   var nextStartTime = 0
@@ -25,6 +26,14 @@
       if (AC) { try { audioCtx = new AC() } catch (e) { audioCtx = null } }
     }
     if (audioCtx && audioCtx.state === 'suspended') { try { audioCtx.resume() } catch (e) {} }
+    if (audioCtx && !analyserNode) {
+      try {
+        analyserNode = audioCtx.createAnalyser()
+        analyserNode.fftSize = 256
+        analyserNode.smoothingTimeConstant = 0.55
+        analyserNode.connect(audioCtx.destination)
+      } catch (e) { analyserNode = null }
+    }
     return audioCtx
   }
   function pump() {
@@ -34,7 +43,9 @@
       var buf = playQueue.shift()
       var src = audioCtx.createBufferSource()
       src.buffer = buf
-      src.connect(audioCtx.destination)
+      // 音频先过 AnalyserNode（供口型能量分析），再接输出
+      if (analyserNode) src.connect(analyserNode)
+      else src.connect(audioCtx.destination)
       var now = audioCtx.currentTime
       if (nextStartTime < now + 0.03) nextStartTime = now + 0.03
       src.start(nextStartTime)
@@ -87,6 +98,31 @@
     } catch (e) {}
   }
 
+  // ---- 真实口型：分析播放中的音频能量，高频派发 mio-xz-mouth（live2d-pet.js 设置 ParamMouthOpenY）----
+  var mouthTimer = null
+  var mouthData = null
+  function startMouthFeed() {
+    stopMouthFeed()
+    if (!analyserNode) return
+    mouthData = new Uint8Array(analyserNode.fftSize)
+    mouthTimer = window.setInterval(function () {
+      if (!analyserNode) { stopMouthFeed(); return }
+      analyserNode.getByteTimeDomainData(mouthData)
+      var sum = 0
+      for (var i = 0; i < mouthData.length; i++) {
+        var v = (mouthData[i] - 128) / 128
+        sum += v * v
+      }
+      var level = Math.min(1, Math.sqrt(sum / mouthData.length) * 5.2)
+      window.dispatchEvent(new CustomEvent('mio-xz-mouth', { detail: { level: level } }))
+    }, 80)
+  }
+  function stopMouthFeed() {
+    window.clearInterval(mouthTimer)
+    mouthTimer = null
+    try { window.dispatchEvent(new CustomEvent('mio-xz-mouth', { detail: { level: 0 } })) } catch (e) {}
+  }
+
   // ---- WebSocket（本地代理 → 小智官方云）----
   var ws = null
   var reconnectTimer = null
@@ -130,11 +166,13 @@
       case 'tts':
         if (j.state === 'start') {
           stopPlayback()
+          startMouthFeed()
           setSpeaking(true, 5000)
         } else if (j.state === 'sentence_start' && j.text) {
           showBubble(j.text)
           setSpeaking(true, Math.max(4000, j.text.length * 190))
         } else if (j.state === 'stop') {
+          stopMouthFeed()
           stopPlayback()
           setSpeaking(false)
           hideBubble()

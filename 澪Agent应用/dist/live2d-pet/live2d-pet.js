@@ -101,6 +101,8 @@
   let streamSpeechToken = 0
   let voiceLifecycleActive = false
   let mouthLevel = 0
+  let xzMouthAt = 0      // 最近一次外部口型事件时间（pet-xz-audio.js 音频能量分析）
+  let xzMouthLevel = -1  // 最近一次外部口型幅度 0-1
   let speechStartCount = 0
   let speechEndCount = 0
   let speechInterruptCount = 0
@@ -627,6 +629,7 @@
   }
 
   function emotionParameters(emotion) {
+    const em = String(emotion || '').toLowerCase()
     return {
       neutral: { mouth: 0, smile: 0, brow: 0, cheek: 0, angle: 0 },
       gentle: { mouth: 0.35, smile: 0.45, brow: 0.18, cheek: 0.12, angle: -2 },
@@ -634,7 +637,29 @@
       concerned: { mouth: -0.45, smile: 0, brow: -0.38, cheek: 0, angle: -5 },
       serious: { mouth: -0.25, smile: 0, brow: -0.2, cheek: 0, angle: 1 },
       shy: { mouth: 0.18, smile: 0.25, brow: -0.08, cheek: 0.85, angle: -7 },
-    }[emotion] || { mouth: 0, smile: 0, brow: 0, cheek: 0, angle: 0 }
+      // 小智官方 emotion 词表（llm.emotion 下发的值，官方文档 Emoji 对照表）
+      happy: { mouth: 0.82, smile: 0.95, brow: 0.35, cheek: 0.45, angle: 4 },
+      smile: { mouth: 0.35, smile: 0.6, brow: 0.18, cheek: 0.3, angle: 2 },
+      laughing: { mouth: 0.9, smile: 1, brow: 0.3, cheek: 0.5, angle: 6 },
+      funny: { mouth: 0.85, smile: 0.9, brow: 0.28, cheek: 0.48, angle: 5 },
+      sad: { mouth: -0.45, smile: 0, brow: -0.38, cheek: 0, angle: -5 },
+      angry: { mouth: -0.2, smile: 0, brow: -0.5, cheek: 0, angle: 0 },
+      crying: { mouth: -0.5, smile: 0, brow: -0.45, cheek: 0, angle: -6 },
+      loving: { mouth: 0.18, smile: 0.35, brow: -0.08, cheek: 0.85, angle: -4 },
+      embarrassed: { mouth: 0.18, smile: 0.25, brow: -0.08, cheek: 0.85, angle: -7 },
+      surprised: { mouth: 0.7, smile: 0.3, brow: 0.5, cheek: 0.15, angle: 0 },
+      shocked: { mouth: 0.9, smile: 0.2, brow: 0.6, cheek: 0.2, angle: 0 },
+      thinking: { mouth: -0.3, smile: 0, brow: -0.3, cheek: 0, angle: -3 },
+      winking: { mouth: 0.3, smile: 0.7, brow: 0.2, cheek: 0.35, angle: 3 },
+      cool: { mouth: 0.35, smile: 0.5, brow: 0.15, cheek: 0.2, angle: 1 },
+      relaxed: { mouth: 0.2, smile: 0.3, brow: 0.05, cheek: 0.15, angle: 0 },
+      delicious: { mouth: 0.5, smile: 0.6, brow: 0.2, cheek: 0.6, angle: 2 },
+      kissy: { mouth: 0.5, smile: 0.5, brow: -0.1, cheek: 0.9, angle: -3 },
+      confident: { mouth: 0.4, smile: 0.55, brow: 0.2, cheek: 0.2, angle: 1 },
+      sleepy: { mouth: -0.1, smile: 0.05, brow: -0.15, cheek: 0, angle: -2 },
+      silly: { mouth: 0.6, smile: 0.7, brow: 0.25, cheek: 0.5, angle: 5 },
+      confused: { mouth: -0.25, smile: 0, brow: -0.35, cheek: 0, angle: -4 },
+    }[em] || { mouth: 0, smile: 0, brow: 0, cheek: 0, angle: 0 }
   }
 
   function updateModelPerformance() {
@@ -690,7 +715,10 @@
     updateProceduralMotion()
 
     let nextMouth = 0
-    if (analyser && analyserData && ((currentAudio && !currentAudio.paused) || streamPlaybackActive)) {
+    if (Date.now() - xzMouthAt < 350 && xzMouthLevel >= 0) {
+      // 小智语音真实口型（pet-xz-audio.js 音频能量分析派发，优先于本地播放/伪随机）
+      nextMouth = xzMouthLevel
+    } else if (analyser && analyserData && ((currentAudio && !currentAudio.paused) || streamPlaybackActive)) {
       analyser.getByteTimeDomainData(analyserData)
       let sum = 0
       for (const value of analyserData) {
@@ -1961,6 +1989,10 @@
       markPetActivity()
       speakingUntil = Date.now() + Math.max(3000, Number(detail.durationMs) || 5000)
       currentActivity = 'speaking'
+      // 小智说话 → 播放 speaking 动作（有则动，无则保持待机）
+      const speakingMotion = semanticMotion('speaking')
+      const idleMotion = semanticMotion('idle')
+      if (speakingMotion && speakingMotion !== idleMotion) playMotion(speakingMotion)
     } else if (currentActivity === 'speaking') {
       speakingUntil = 0
       currentActivity = 'idle'
@@ -1970,6 +2002,11 @@
   window.addEventListener('mio-xz-emotion', (e) => {
     const emo = ((e && e.detail && e.detail.emotion) || '').toLowerCase()
     if (emo) { currentEmotion = emo; emotionUntil = Date.now() + 6000 }
+  })
+  // 小智语音真实口型：pet-xz-audio.js 音频能量分析高频派发 → 优先驱动 ParamMouthOpenY
+  window.addEventListener('mio-xz-mouth', (e) => {
+    const lv = Number((e && e.detail && e.detail.level) || 0)
+    if (lv >= 0) { xzMouthAt = Date.now(); xzMouthLevel = Math.min(1, lv) }
   })
   window.addEventListener('beforeunload', () => {
     stopSpeech('')
