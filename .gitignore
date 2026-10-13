@@ -29,7 +29,9 @@
 澪Agent应用/预览/
 
 # --- 本地模型与下载源 ---
-**/models/
+**/models/*
+!**/live2d-pet/models/
+!**/live2d-pet/models/**
 l2d_downloads/
 l2d_official_models/
 dist_backup_20261009/
