@@ -61,6 +61,10 @@
   let currentEmotion = 'neutral'
   let emotionUntil = 0
   let speakingUntil = 0
+  // 表情预览后自动恢复待机表情的定时器（防止预览表情卡住不回待机）
+  let expressionPreviewResetTimer = null
+  // 动作预览后恢复待机动作的定时器
+  let motionPreviewResetTimer = null
   let nextIdleMotionAt = Date.now() + 9000
   // 空闲降帧：长时间无交互/无说话时降低渲染帧率，节省 GPU/CPU（长挂机友好）
   let lastPetActivityAt = performance.now()
@@ -1581,10 +1585,27 @@
       } else if (message.type === 'chat_window_state') {
         if (!electronRuntime) window.mioDesktop?.setChatWindowOpen?.(Boolean(payload.open))
       } else if (message.type === 'motion_preview') {
-        playMotion(String(payload.group || ''), Number.isInteger(payload.index) ? payload.index : undefined)
+        // 用户主动预览动作：force 强制即时播放（绕过节流，避免连续点击/与待机动作撞车被吞）
+        playMotion(String(payload.group || ''), Number.isInteger(payload.index) ? payload.index : undefined, { force: true })
+        // 动作预览 8s 后恢复待机动作（当前无其他活动时），防止动作播完不回待机
+        window.clearTimeout(motionPreviewResetTimer)
+        motionPreviewResetTimer = window.setTimeout(() => {
+          if (!model || currentActivity !== 'idle') return
+          playMotion(semanticMotion('idle'), undefined, { force: true })
+        }, 8000)
       } else if (message.type === 'expression_preview') {
         if (payload.expression && model?.expression) {
-          Promise.resolve(model.expression(String(payload.expression))).catch(() => {})
+          const previewExpression = String(payload.expression)
+          Promise.resolve(model.expression(previewExpression)).catch(() => {})
+          // 预览表情 5.5s 后自动恢复当前情绪表情（小智联动/默认中性），防止表情卡住不回待机
+          window.clearTimeout(expressionPreviewResetTimer)
+          expressionPreviewResetTimer = window.setTimeout(() => {
+            if (!model?.expression) return
+            const restore = expressionForEmotion(currentEmotion)
+            if (restore && restore !== previewExpression) {
+              Promise.resolve(model.expression(restore)).catch(() => {})
+            }
+          }, 5500)
         }
       } else if (message.type === 'shutdown') {
         const bridge = await waitForBridge()
