@@ -82,25 +82,6 @@
         unassignedMotions: [],
       },
     },
-    natori: {
-      id: 'natori',
-      name: 'Natori（などり）',
-      url: './models/Natori/Natori.model3.json',
-      idleGroup: 'Idle',
-      tapGroup: 'TapBody',
-      source: 'built_in',
-      capabilities: {
-        motions: [{ name: 'Idle', count: 3 }, { name: 'TapBody', count: 5 }],
-        expressions: [], physics: true, pose: true,
-        lipSyncParameters: ['ParamMouthOpenY'], eyeBlinkParameters: ['ParamEyeLOpen', 'ParamEyeROpen'],
-        idleGroup: 'Idle', tapGroup: 'TapBody',
-        motionSlots: {
-          idle: 'Idle', touch: 'TapBody', think: 'Idle', speak: 'Idle', observe: 'Idle',
-          cheerful: 'TapBody', concerned: 'Idle', alert: 'TapBody', attention: 'Idle', shy: 'Idle',
-        },
-        unassignedMotions: [],
-      },
-    },
     ren: {
       id: 'ren',
       name: 'Ren（レン・フォスター）',
