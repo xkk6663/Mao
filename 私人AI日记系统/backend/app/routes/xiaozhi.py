@@ -104,6 +104,7 @@ _sub_roles: dict[WebSocket, str] = {}  # ws -> 'main'(桌宠本体，唯一音�
 _active_ws: WebSocket | None = None
 _vision: dict | None = None  # 小智官方云下发的视觉能力 {"url": str, "token": str}
 _tts_playing: bool = False  # 官方 TTS 是否正在播放（只在播放中才发 abort，避免无意义中断触发官方"播放被中断"问候）
+_MCP_STATS = {"initialize": 0, "tools_list": 0, "tools_call": 0, "send_ok": 0, "send_fail": 0}
 
 # ---- MCP 设备工具（官方协议：JSON-RPC 2.0 封装在 type=mcp 消息里）----
 # 小智官方云是 MCP client（调用设备工具），本端（桌宠后端）是 MCP server（注册/执行工具）。
@@ -1197,6 +1198,7 @@ async def _mcp_clock_get_time(args: dict) -> str:
 def _pwsh_sysinfo() -> str:
     """PowerShell 采集 CPU 负载/内存/运行时长/系统名（无 psutil 依赖）。"""
     ps = (
+        "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
         "$os=Get-CimInstance Win32_OperatingSystem;"
         "$cpu=(Get-CimInstance Win32_Processor|Measure-Object -Property LoadPercentage -Average).Average;"
         "$up=[int]($os.LastBootUpTime - [datetime]::Now).Duration().TotalHours;"
@@ -1205,7 +1207,8 @@ def _pwsh_sysinfo() -> str:
     )
     r = subprocess.run(
         ["pwsh.exe", "-NoProfile", "-NonInteractive", "-Command", ps],
-        capture_output=True, text=True, timeout=15, creationflags=0x08000000,  # CREATE_NO_WINDOW
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=15, creationflags=0x08000000,  # CREATE_NO_WINDOW
     )
     m = re.search(r"cpu=([\d.]+) mem_free=([\d.]+) mem_total=([\d.]+) hours=([\d.-]+) os=(.+)", r.stdout)
     if not m:
@@ -1345,7 +1348,8 @@ async def _mcp_clipboard_get(args: dict) -> str:
     try:
         r = await asyncio.to_thread(
             lambda: subprocess.run(
-                ["pwsh.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard -Raw"],
+                ["pwsh.exe", "-NoProfile", "-NonInteractive", "-Command",
+                 "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard -Raw"],
                 capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
                 creationflags=0x08000000,
             )
@@ -1498,7 +1502,7 @@ async def _mcp_web_search(args: dict) -> str:
     if not q:
         return "请提供搜索关键词"
     try:
-        url = f"https://www.bing.com/news/search?q={quote(q)}&format=rss"
+        url = f"https://www.bing.com/search?q={quote(q)}&format=rss&setlang=zh-hans"
         items = await asyncio.to_thread(_fetch_rss_items, url, 5)
         if not items:
             return f"没搜到关于「{q}」的新闻"
@@ -1567,14 +1571,17 @@ async def _handle_mcp_message(payload) -> dict | None:
         if not isinstance(params, dict):
             params = {}
         if method == "initialize":
+            _MCP_STATS["initialize"] += 1
             return _mcp_result(req_id, {
                 "protocolVersion": _MCP_PROTOCOL_VERSION,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": _MCP_SERVER_INFO,
             })
         if method == "tools/list":
+            _MCP_STATS["tools_list"] += 1
             return _mcp_result(req_id, {"tools": _mcp_enabled_tools(), "nextCursor": ""})
         if method == "tools/call":
+            _MCP_STATS["tools_call"] += 1
             name = str(params.get("name") or "")
             arguments = params.get("arguments") or {}
             if not isinstance(arguments, dict):
@@ -1623,7 +1630,9 @@ async def _send_mcp_response(conn, payload: dict | None) -> None:
             "payload": payload,
             "session_id": _session_id,
         }, ensure_ascii=False))
+        _MCP_STATS["send_ok"] += 1
     except Exception as exc:  # noqa: BLE001
+        _MCP_STATS["send_fail"] += 1
         logger.warning("发送 MCP 响应失败: %s", exc)
 
 
@@ -1833,6 +1842,7 @@ async def xiaozhi_status() -> dict:
         "session_id": _session_id,
         "subscribers": len(_subscribers),
         "roles": list(_sub_roles.values()),
+        "mcp_stats": dict(_MCP_STATS),
     }
 
 
