@@ -311,6 +311,24 @@ _MCP_TOOLS_DEF: list[dict] = [
         "default_enabled": False,
         "category": "系统",
     },
+    {
+        "name": "self.companion.switch_live2d_model",
+        "description": (
+            "切换桌宠的 Live2D 角色形象（随机换一个，或指定换成某个角色）。"
+            "当用户说\"换一个角色\"、\"换个角色\"、\"换角色\"、\"换个形象\"、\"换形象\"、"
+            "\"换个人物\"、\"换个模型\"、\"换一个模型\"、\"换模型\"、\"随机换角色\"、"
+            "\"换个皮肤\"、\"换皮肤\"、\"把桌宠换成 xxx\"、\"换成 xxx 角色\"时调用。"
+            "参数 model_id: 指定角色 ID 或名称（可选，缺省随机更换一个角色）。"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"model_id": {"type": "string", "description": "指定角色 ID 或名称，缺省随机更换"}},
+            "required": [],
+        },
+        "handler": "_mcp_companion_switch_model",
+        "default_enabled": True,
+        "category": "桌宠",
+    },
 ]
 
 _MCP_HANDLERS: dict[str, str] = {t["name"]: t["handler"] for t in _MCP_TOOLS_DEF}
@@ -352,6 +370,13 @@ def _match_local_tool_intent(text: str) -> tuple[str, dict] | None:
     # 备忘读
     if "你记得什么" in t or ("备忘" in t and any(k in t for k in ("看", "查", "什么", "记得"))):
         return ("self.memo.get", {})
+    # 桌宠换角色/换形象（保守匹配，避免闲聊误触发）
+    if any(k in t for k in (
+        "换一个角色", "换个角色", "换角色", "换个形象", "换形象",
+        "换个人物", "换个模型", "换一个模型", "换模型", "随机换角色",
+        "换个皮肤", "换皮肤", "换个样子", "换样子",
+    )):
+        return ("self.companion.switch_live2d_model", {})
     return None
 
 
@@ -1640,6 +1665,62 @@ async def _mcp_desktop_open_app(args: dict) -> str:
         return f"已为你打开{key}"
     except Exception as exc:  # noqa: BLE001
         return f"打开{key}失败：{exc}"
+
+
+async def _mcp_companion_switch_model(args: dict) -> str:
+    """self.companion.switch_live2d_model：随机或指定切换桌宠 Live2D 角色。
+
+    与小智对话链路打通：官方 LLM 调 tools/call 或本地意图兜底命中时执行，
+    切换后重启桌宠换装，返回结果文本由官方 LLM 组织回答 → 官方 TTS 播报。
+    """
+    from .. import companion_service
+
+    import random as _random
+
+    args = args if isinstance(args, dict) else {}
+    target = str(args.get("model_id") or "").strip()
+    try:
+        models = await asyncio.to_thread(companion_service.available_live2d_models)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("换角色：读取模型列表失败: %s", exc)
+        return "换角色失败：读取模型列表出错，请稍后再试"
+    models = models or []
+    if not models:
+        return "现在还没有可用的 Live2D 角色，请先在「桌宠→模型」里导入模型再换"
+    id2name = {
+        str(m.get("id")): (m.get("display_name") or m.get("name") or str(m.get("id")))
+        for m in models
+        if m.get("id")
+    }
+    ids = list(id2name.keys())
+    try:
+        current = str(companion_service.load_config().get("live2d_model_id") or "")
+    except Exception:  # noqa: BLE001
+        current = ""
+    if target:
+        if target in ids:
+            chosen = target
+        else:
+            hits = [mid for mid in ids if target in str(id2name.get(mid) or "")]
+            if not hits:
+                return f"没找到叫「{target}」的角色，现有角色：{'、'.join(id2name.values())}"
+            chosen = hits[0]
+    else:
+        pool = [m for m in ids if m != current] or ids
+        chosen = _random.choice(pool)
+    if chosen == current and len(ids) > 1:
+        others = [m for m in ids if m != current]
+        chosen = _random.choice(others)
+    try:
+        await asyncio.to_thread(companion_service.save_config, {"live2d_model_id": chosen})
+        await asyncio.to_thread(companion_service.restart_pet)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("换角色：切换模型失败: %s", exc)
+        return f"换角色失败：{exc}"
+    name = id2name.get(chosen, chosen)
+    if target and chosen != current:
+        return f"好的，已把桌宠换成「{name}」"
+    return f"好嘞，随机换一个角色～现在是「{name}」"
 
 
 def _mcp_result(req_id, result: dict) -> dict:
