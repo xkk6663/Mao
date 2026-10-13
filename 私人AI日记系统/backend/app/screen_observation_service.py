@@ -1789,38 +1789,6 @@ async def analyze_once(
         )
         if allow_direct_speech is not None:
             should_direct_speak = should_direct_speak and bool(allow_direct_speech)
-        if should_direct_speak and not pet_event_service.has_clients():
-            def mark_audio_started(tts_seconds: float) -> None:
-                with _state_lock:
-                    if _last_pipeline_timings.get("request_id") == request_id:
-                        _last_pipeline_timings["tts_first_audio_seconds"] = round(
-                            max(0.0, time.monotonic() - pipeline_started),
-                            3,
-                        )
-                        _last_pipeline_timings["tts_generation_seconds"] = round(
-                            max(0.0, float(tts_seconds)),
-                            3,
-                        )
-
-            with _state_lock:
-                _last_pipeline_timings["request_id"] = request_id
-                _last_pipeline_timings["tts_streaming"] = bool(config.get("voice_streaming_enabled", True))
-            companion_service.set_pet_activity(
-                "speaking",
-                emotion=decision.emotion,
-                source=message_source,
-                ttl_seconds=max(8, min(60, len(reply) / 3 + 10)),
-            )
-            companion_service.speak_text(
-                reply,
-                context=observation.summary,
-                emotion=decision.emotion,
-                streaming=True,
-                on_audio_started=mark_audio_started,
-                model_id=reaction_completion.model,
-                language=str(config.get("pet_speech_language") or "zh"),
-                source="screen",
-            )
         return True
     except Exception as exc:
         error_text = (

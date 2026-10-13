@@ -11,7 +11,6 @@ from ..config import load_runtime_settings, save_runtime_settings, settings, run
 from ..documents import load_manual_statuses
 from ..llm import config_status
 from ..mio_profile import load_mio_profile, save_mio_profile_from_settings
-from .onebot import active_websocket_count
 from ..web import templates
 from ..web_search_service import perform_web_lookup, should_use_web_lookup
 
@@ -229,30 +228,6 @@ async def settings_page(request: Request):
                 "memory_context_max_chars": settings.memory_context_max_chars,
                 "memory_context_messages_per_day": settings.memory_context_messages_per_day,
                 "day_boundary_hour": settings.day_boundary_hour,
-            },
-            "qq_status": {
-                "enabled": settings.qq_bot_enabled,
-                "token_set": bool(settings.qq_onebot_token),
-                "allowed_user_count": len(settings.qq_allowed_user_ids),
-                "allowed_group_count": len(settings.qq_allowed_group_ids),
-                "group_mention_required": settings.qq_group_mention_required,
-                "image_enabled": settings.qq_image_enabled,
-                "image_max_count": settings.qq_image_max_count,
-                "image_max_bytes": settings.qq_image_max_bytes,
-                "image_detail": settings.qq_image_detail,
-                "image_send_to_model": settings.qq_image_send_to_model,
-                "message_debounce_seconds": settings.qq_message_debounce_seconds,
-                "message_incomplete_debounce_seconds": settings.qq_message_incomplete_debounce_seconds,
-                "reply_initial_delay_seconds": settings.qq_reply_initial_delay_seconds,
-                "reply_delay_seconds": settings.qq_reply_delay_seconds,
-                "proactive_enabled": settings.qq_proactive_enabled,
-                "proactive_min_idle_minutes": settings.qq_proactive_min_idle_minutes,
-                "proactive_max_idle_minutes": settings.qq_proactive_max_idle_minutes,
-                "proactive_day_start_hour": settings.qq_proactive_day_start_hour,
-                "proactive_day_end_hour": settings.qq_proactive_day_end_hour,
-                "proactive_check_seconds": settings.qq_proactive_check_seconds,
-                "websocket_connections": active_websocket_count(),
-                "websocket_url": f"ws://127.0.0.1:{settings.app_port}/onebot/ws",
             },
             "manuals": load_manual_statuses(),
             "mio_profile": {

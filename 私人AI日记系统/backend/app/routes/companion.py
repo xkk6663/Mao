@@ -160,26 +160,11 @@ async def companion_websocket(websocket: WebSocket):
 
 class CompanionSettingsRequest(BaseModel):
     voice_enabled: bool = True
-    voice_startup_enabled: bool = False
-    voice_idle_timeout_seconds: int = Field(default=180, ge=0, le=1800)
-    voice_engine: str = Field(default="gpt_sovits", pattern="^(gpt_sovits|cloud)$")
-    local_voice_runtime: str = Field(default="genie", pattern="^(genie|gpt_sovits)$")
-    cloud_tts_api_key: str = Field(default="", max_length=2000)
-    cloud_tts_app_id: str = Field(default="", max_length=200)
-    cloud_tts_speaker: str = Field(default="zh_female_vv_uranus_bigtts", max_length=200)
-    cloud_tts_speech_rate: int = Field(default=0, ge=-50, le=100)
-    default_voice_profile_id: str = Field(default="mio", max_length=80)
-    voice_profiles: dict[str, dict[str, object]] = Field(default_factory=dict)
-    chat_model_id: str = Field(default="auto", max_length=200)
-    chat_reasoning_level: str = Field(default="auto", max_length=50)
-    pet_chat_model_id: str = Field(default="auto", max_length=200)
-    pet_chat_reasoning_level: str = Field(default="auto", max_length=50)
     pet_call_asr_engine: str = Field(
         default="auto",
         pattern="^(auto|whisper|sensevoice|paraformer)$",
     )
     pet_call_input_language: str = Field(default="zh", pattern="^(auto|zh|ja)$")
-    speech_translation_model_id: str = Field(default="deepseek-v4-flash", max_length=200)
     pet_call_silence_ms: int = Field(default=650, ge=350, le=1800)
     pet_call_voice_threshold: float = Field(default=0.018, ge=0.004, le=0.12)
     pet_call_min_speech_ms: int = Field(default=280, ge=150, le=1500)
@@ -187,18 +172,8 @@ class CompanionSettingsRequest(BaseModel):
     voice_volume: int = Field(default=85, ge=0, le=100)
     voice_streaming_enabled: bool = True
     pet_speech_language: str = Field(default="zh", pattern="^(zh|ja)$")
-    speak_proactive: bool = False
     speak_screen_observations: bool = True
     speak_game_observations: bool = True
-    qq_voice_mode: str = Field(default="adaptive", pattern="^(explicit|adaptive|always)$")
-    gpt_sovits_url: str = "http://127.0.0.1:9880"
-    gpt_sovits_ref_audio: str = ""
-    gpt_sovits_prompt_text: str = Field(default="", max_length=1000)
-    gpt_sovits_prompt_language: str = "ja"
-    gpt_sovits_text_language: str = "auto"
-    gpt_sovits_translate_to_japanese: bool = False
-    gpt_sovits_gpt_weights: str = ""
-    gpt_sovits_sovits_weights: str = ""
     screen_ai_enabled: bool = True
     screen_audio_enabled: bool = True
     screen_audio_model: str = Field(default="base", pattern="^(tiny|base|small)$")
@@ -232,20 +207,6 @@ class CompanionSettingsRequest(BaseModel):
     live2d_expression_slots: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
-class StartupGreetingSettingsRequest(BaseModel):
-    enabled: bool = True
-
-
-class QqStartupSettingsRequest(BaseModel):
-    enabled: bool = False
-
-
-class CompanionChatSettingsRequest(BaseModel):
-    model_id: str = Field(default="auto", max_length=200)
-    reasoning_level: str = Field(default="auto", max_length=50)
-    voice_language: str | None = Field(default=None, pattern="^(auto|zh|ja)$")
-
-
 class AvatarRequest(BaseModel):
     data_url: str
 
@@ -261,20 +222,6 @@ class Live2DModelImportRequest(BaseModel):
 
 class Live2DPreviewRequest(BaseModel):
     data_url: str
-
-
-class VoiceReferenceRequest(BaseModel):
-    name: str = "参考音频.wav"
-    data_url: str
-    profile_id: str = Field(default="", max_length=80)
-
-
-class SpeechRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=4000)
-    context: str = Field(default="", max_length=1000)
-    emotion: str = Field(default="", pattern="^(|neutral|gentle|cheerful|concerned|serious|shy)$")
-    model_id: str = Field(default="", max_length=200)
-    language: str = Field(default="", pattern="^(|zh|ja)$")
 
 
 class CompanionChatImageRequest(BaseModel):
@@ -373,8 +320,6 @@ def _status_payload() -> dict[str, object]:
         "system_audio": system_audio_service.status(),
         "window": window_status,
         "game": window_status,
-        "voice_training": companion_service.voice_training_status(),
-        "voice_runtime": companion_service.voice_runtime_status(),
         "call": call_runtime_status(),
         "window_topology": window_topology_service.snapshot(),
     }
@@ -585,12 +530,13 @@ def _start_pet_with_screen_observation() -> bool:
     return bool(companion_service.load_config().get("voice_enabled", True))
 
 
-def _start_companion_runtime() -> tuple[dict[str, object], bool, bool]:
+def _start_companion_runtime() -> tuple[dict[str, object], bool]:
     was_running = companion_service.pet_running()
     companion_service.start_pet()
     should_wake = not was_running
-    should_warm = _start_pet_with_screen_observation() if should_wake else False
-    return _status_payload(), should_wake, should_warm
+    if should_wake:
+        _start_pet_with_screen_observation()
+    return _status_payload(), should_wake
 
 
 def _stop_companion_runtime() -> None:
@@ -604,8 +550,8 @@ def _stop_companion_runtime() -> None:
 def _restart_companion_runtime() -> tuple[dict[str, object], bool]:
     _stop_companion_runtime()
     companion_service.start_pet()
-    should_warm = _start_pet_with_screen_observation()
-    return _status_payload(), should_warm
+    _start_pet_with_screen_observation()
+    return _status_payload(), True
 
 
 def _apply_companion_settings(changes: dict[str, object]) -> None:
@@ -705,14 +651,12 @@ def _is_recent_playback_echo(transcript: str, reference: str) -> tuple[bool, flo
 @router.post("/start")
 async def companion_start(background_tasks: BackgroundTasks):
     try:
-        status, should_wake, should_warm = await asyncio.to_thread(_start_companion_runtime)
+        status, should_wake = await asyncio.to_thread(_start_companion_runtime)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"桌宠启动失败：{exc}") from exc
     except (ValueError, RuntimeError) as exc:
         await asyncio.to_thread(companion_service.stop_pet)
         raise HTTPException(status_code=500, detail=f"桌宠启动后无法观察屏幕：{exc}") from exc
-    if should_warm:
-        background_tasks.add_task(companion_service.warm_voice_runtime_async)
     if should_wake:
         background_tasks.add_task(_wake_pet_from_screen)
     return status
@@ -728,14 +672,12 @@ async def companion_stop():
 @router.post("/restart")
 async def companion_restart(background_tasks: BackgroundTasks):
     try:
-        status, should_warm = await asyncio.to_thread(_restart_companion_runtime)
+        status, _ = await asyncio.to_thread(_restart_companion_runtime)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"桌宠重启失败：{exc}") from exc
     except (ValueError, RuntimeError) as exc:
         await asyncio.to_thread(companion_service.stop_pet)
         raise HTTPException(status_code=500, detail=f"桌宠重启后无法观察屏幕：{exc}") from exc
-    if should_warm:
-        background_tasks.add_task(companion_service.warm_voice_runtime_async)
     background_tasks.add_task(_wake_pet_from_screen)
     return status
 
@@ -752,11 +694,6 @@ async def companion_settings(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if changes.get("screen_vision_route") == "cloud":
         await asyncio.to_thread(local_vision_service.unload_model)
-    if background_tasks is not None and changes.get("pet_speech_language") in {"zh", "ja"}:
-        background_tasks.add_task(
-            companion_service.warm_voice_language_async,
-            str(changes["pet_speech_language"]),
-        )
     return await asyncio.to_thread(_status_payload)
 
 
@@ -1003,68 +940,7 @@ def _preview_diag_log(tag: str, data) -> None:
 
 @router.post("/app-ready")
 async def companion_app_ready():
-    return {"ok": True, "released": companion_service.signal_frontend_ready()}
-
-
-@router.get("/startup-greeting")
-async def startup_greeting_settings():
-    saved = await asyncio.to_thread(companion_service.load_config)
-    return {"enabled": bool(saved.get("startup_greeting_enabled", True))}
-
-
-@router.patch("/startup-greeting")
-async def update_startup_greeting_settings(payload: StartupGreetingSettingsRequest):
-    saved = await asyncio.to_thread(
-        companion_service.save_config,
-        {"startup_greeting_enabled": payload.enabled},
-    )
-    return {"enabled": bool(saved["startup_greeting_enabled"])}
-
-
-@router.get("/qq-startup")
-async def qq_startup_settings():
-    saved = await asyncio.to_thread(companion_service.load_config)
-    return {"enabled": bool(saved.get("qq_startup_enabled", False))}
-
-
-@router.patch("/qq-startup")
-async def update_qq_startup_settings(payload: QqStartupSettingsRequest):
-    saved = await asyncio.to_thread(companion_service.save_config, {"qq_startup_enabled": payload.enabled})
-    return {"enabled": bool(saved["qq_startup_enabled"])}
-
-
-@router.get("/chat-settings")
-async def get_companion_chat_settings():
-    saved = await asyncio.to_thread(companion_service.load_config)
-    return {
-        "model_id": saved["chat_model_id"],
-        "reasoning_level": saved["chat_reasoning_level"],
-        "voice_language": saved["gpt_sovits_text_language"],
-    }
-
-
-@router.patch("/chat-settings")
-async def companion_chat_settings(
-    payload: CompanionChatSettingsRequest,
-    background_tasks: BackgroundTasks = None,
-):
-    changes = {
-        "chat_model_id": payload.model_id,
-        "chat_reasoning_level": payload.reasoning_level,
-    }
-    if payload.voice_language is not None:
-        changes["gpt_sovits_text_language"] = payload.voice_language
-    saved = await asyncio.to_thread(companion_service.save_config, changes)
-    if background_tasks is not None and payload.voice_language in {"zh", "ja"}:
-        background_tasks.add_task(
-            companion_service.warm_voice_language_async,
-            payload.voice_language,
-        )
-    return {
-        "model_id": saved["chat_model_id"],
-        "reasoning_level": saved["chat_reasoning_level"],
-        "voice_language": saved["gpt_sovits_text_language"],
-    }
+    return {"ok": True, "released": False}
 
 
 @router.get("/avatar")
@@ -1101,22 +977,6 @@ async def companion_sprite_sheet_save(payload: SpriteSheetRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return await asyncio.to_thread(_status_payload)
-
-
-@router.post("/voice/speak")
-async def companion_voice_speak(payload: SpeechRequest):
-    try:
-        spoken = await asyncio.to_thread(
-            companion_service.speak_text,
-            payload.text,
-            context=payload.context,
-            emotion=payload.emotion or None,
-            model_id=payload.model_id,
-            language=payload.language,
-        )
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"Mio 的语音启动失败：{exc}") from exc
-    return {"spoken": spoken}
 
 
 @router.post("/chat")
@@ -1171,15 +1031,6 @@ async def companion_chat(payload: CompanionChatRequest):
         db.fail_chat_request(claim.client_request_id, http_status=400, error=detail)
         raise HTTPException(status_code=400, detail=detail)
     config = companion_service.load_config()
-    if (
-        config.get("voice_enabled", True)
-        and config.get("local_voice_runtime") == companion_service.GENIE_VOICE_RUNTIME
-    ):
-        # Hide a reclaimed Genie's first real ONNX inference behind the model
-        # response time. The discarded warmup WAV never enters playback.
-        companion_service.warm_voice_language_async(
-            str(config.get("pet_speech_language") or "zh")
-        )
     routing_history = list(
         db.get_recent_messages(limit=12, conversation_id=conversation_id)
     )
@@ -1310,24 +1161,12 @@ async def companion_chat(payload: CompanionChatRequest):
             source="desktop_pet",
             ttl_seconds=max(15, min(90, len(speech_text) / 3 + 12)),
         )
-        spoken = await asyncio.to_thread(
-            companion_service.speak_text,
-            speech_text,
-            context=message,
-            emotion=speech_emotion,
-            wait=False,
-            model_id=result.model_id or selected_model,
-            language=str(companion_service.load_config().get("pet_speech_language") or "zh"),
-        )
         companion_service.set_pet_activity(
             "responding",
-            emotion=speech_emotion if spoken else "concerned",
+            emotion=speech_emotion,
             source="desktop_pet",
             ttl_seconds=5,
         )
-        if not spoken:
-            voice_status = await asyncio.to_thread(companion_service.voice_runtime_status)
-            voice_error = str(voice_status.get("last_error") or "语音没有完成播放")
     elif voice_delegated:
         speech_text = "\n".join(result.replies)
         speech_emotion = getattr(result, "speech_emotion", "") or companion_service.infer_speech_emotion(
@@ -1433,8 +1272,6 @@ async def companion_call_start():
             await _release_call_resources(call_session_id)
         raise HTTPException(status_code=503, detail=f"语音识别启动失败：{reason}")
     call_config = await asyncio.to_thread(companion_service.load_config)
-    if call_config.get("voice_enabled", True):
-        companion_service.warm_voice_runtime_async()
     if not call_session_service.manager.mark_listening(call_session_id):
         raise HTTPException(status_code=409, detail="电话会话在接通前已被替换。")
     return {
@@ -1759,177 +1596,7 @@ async def companion_chat_history(limit: int = Query(default=120, ge=1, le=500)):
     }
 
 
-@router.post("/voice/test")
-async def companion_voice_test():
-    config = await asyncio.to_thread(companion_service.load_config)
-    profile_id = str(config.get("default_voice_profile_id") or "mio")
-    profile = (config.get("voice_profiles") or {}).get(profile_id) or {}
-    profile_name = str(profile.get("name") or "当前角色")
-    language = str(config.get("pet_speech_language") or "zh")
-    test_text = (
-        "こんにちは。日本語の音声を確認しています。聞こえますか？"
-        if language == "ja"
-        else f"你好，我是{profile_name}。这样听得清楚吗？"
-    )
-    try:
-        spoken = await asyncio.to_thread(
-            companion_service.speak_text,
-            test_text,
-            wait=True,
-            language=language,
-        )
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"语音测试失败：{exc}") from exc
-    if not spoken:
-        error = str(companion_service.voice_runtime_status().get("last_error") or "没有完成播放")
-        raise HTTPException(status_code=500, detail=f"语音测试失败：{error}")
-    return {"spoken": spoken}
 
-
-@router.post("/voice/reference")
-async def companion_voice_reference(payload: VoiceReferenceRequest):
-    try:
-        await asyncio.to_thread(
-            companion_service.save_voice_reference_data_url,
-            payload.data_url,
-            payload.name,
-            profile_id=payload.profile_id,
-        )
-    except (ValueError, OSError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return await asyncio.to_thread(_status_payload)
-
-
-class VoiceProfileExportRequest(BaseModel):
-    profile_id: str = Field(default="", max_length=80)
-
-
-@router.post("/voice/profiles/export")
-async def companion_voice_profile_export(payload: VoiceProfileExportRequest):
-    profile_id = str(payload.profile_id or "").strip()
-    if not profile_id:
-        raise HTTPException(status_code=400, detail="缺少音色 ID。")
-    try:
-        content = await asyncio.to_thread(companion_service.export_voice_package, profile_id)
-    except (ValueError, OSError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "-", profile_id).strip("-") or "voice"
-    return Response(
-        content=content,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": (
-                f"attachment; filename=\"voice-package-{safe_name}.zip\"; "
-                f"filename*=UTF-8''{quote(f'音色包-{profile_id}.zip')}"
-            )
-        },
-    )
-
-
-@router.post("/voice/profiles/import-package")
-async def companion_voice_profile_import(request: Request):
-    temporary_path: Path | None = None
-    try:
-        settings.data_dir.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            suffix=".mio-voice.zip",
-            prefix="voice-import-",
-            dir=settings.data_dir,
-            delete=False,
-        ) as temporary:
-            temporary_path = Path(temporary.name)
-            async for chunk in request.stream():
-                if chunk:
-                    temporary.write(chunk)
-        await asyncio.to_thread(companion_service.import_voice_package_file, temporary_path)
-    except (ValueError, OSError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
-    return await asyncio.to_thread(_status_payload)
-
-
-@router.post("/voice/runtime/{action}")
-async def companion_voice_runtime(action: str):
-    actions = {
-        "start": companion_service.start_voice_service,
-        "stop": companion_service.stop_voice_service,
-        "restart": companion_service.restart_voice_service,
-        "warmup": companion_service.warm_voice_runtime,
-    }
-    selected = actions.get(action)
-    if selected is None:
-        raise HTTPException(status_code=404, detail="不支持的音色服务操作。")
-    try:
-        return await asyncio.to_thread(selected)
-    except (ValueError, FileNotFoundError, OSError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/voice/audio")
-async def companion_voice_audio(payload: SpeechRequest):
-    emotion = payload.emotion or str(
-        companion_service.speech_emotion_info(payload.text, payload.context)["id"]
-    )
-    try:
-        content = await asyncio.to_thread(
-            companion_service.synthesize_speech_wav,
-            payload.text,
-            context=payload.context,
-            emotion=emotion,
-            model_id=payload.model_id,
-            language=payload.language,
-        )
-    except (ValueError, OSError, subprocess.SubprocessError) as exc:
-        raise HTTPException(status_code=500, detail=f"角色语音生成失败：{exc}") from exc
-    return Response(
-        content=content,
-        media_type="audio/wav",
-        headers={
-            "Cache-Control": "no-store",
-            "Content-Disposition": "inline",
-            "X-Mio-Emotion": emotion,
-        },
-    )
-
-
-@router.post("/voice/stream")
-async def companion_voice_stream(payload: SpeechRequest):
-    emotion = payload.emotion or str(
-        companion_service.speech_emotion_info(payload.text, payload.context)["id"]
-    )
-    if not companion_service.clean_speech_text(payload.text):
-        raise HTTPException(status_code=400, detail="这条消息没有可朗读的正文。")
-    return StreamingResponse(
-        companion_service.iter_speech_wav_stream(
-            payload.text,
-            context=payload.context,
-            emotion=emotion,
-            model_id=payload.model_id,
-            language=payload.language,
-        ),
-        media_type="audio/wav",
-        headers={
-            "Cache-Control": "no-store",
-            "Content-Disposition": "inline",
-            "X-Mio-Emotion": emotion,
-            "X-Mio-Streaming": "1",
-        },
-    )
-
-
-
-@router.post("/voice/training/{action}")
-async def companion_voice_training(action: str):
-    try:
-        return await asyncio.to_thread(companion_service.launch_voice_training, action)
-    except (ValueError, FileNotFoundError, OSError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.patch("/position")
 async def companion_position(payload: CompanionPositionRequest):
     await asyncio.to_thread(companion_service.save_pet_position, payload.x, payload.y)
     return await asyncio.to_thread(_status_payload)

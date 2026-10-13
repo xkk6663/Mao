@@ -13,7 +13,6 @@ from .model_runtime import operation
 from .config import settings
 from .llm import call_chat_completion
 from .prompts import build_monthly_review_messages
-from .routes.onebot import send_private_message
 
 
 logger = logging.getLogger(__name__)

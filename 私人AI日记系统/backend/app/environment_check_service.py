@@ -19,7 +19,6 @@ from urllib.parse import urlparse
 
 from .config import settings
 from .model_registry import list_model_profiles
-from .napcat_service import _incomplete_napcat_shells, _napcat_launchers
 from .ollama_model_files import manifest_complete as _ollama_manifest_complete
 
 
@@ -184,108 +183,7 @@ def _find_dirs_named(roots: list[Path], patterns: tuple[str, ...], max_depth: in
     return unique
 
 
-VOICE_API_MARKERS = ("api_v2.py", "api.py")
-VOICE_CONFIG_MARKERS = (
-    Path("GPT_SoVITS/configs/tts_infer.yaml"),
-    Path("GPT_SoVITS/configs/tts_infer_v2.yaml"),
-)
 WHISPER_REQUIRED_FILES = ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt")
-
-
-def _voice_models_ready(engine_root: Path) -> bool:
-    pretrained = engine_root / "GPT_SoVITS" / "pretrained_models"
-    if not pretrained.is_dir():
-        return False
-    try:
-        files = [path for path in pretrained.rglob("*") if path.is_file() and path.stat().st_size > 0]
-    except OSError:
-        return False
-    relative_names = [str(path.relative_to(pretrained)).replace("\\", "/").lower() for path in files]
-    has_hubert = any("hubert" in name and name.endswith((".bin", ".pt", ".pth")) for name in relative_names)
-    has_bert = any(
-        ("roberta" in name or "bert" in name) and name.endswith((".bin", ".pt", ".pth"))
-        for name in relative_names
-    )
-    has_gpt = any(name.endswith(".ckpt") for name in relative_names)
-    has_sovits = any(name.endswith(".pth") for name in relative_names)
-    return has_hubert and has_bert and has_gpt and has_sovits
-
-
-def _voice_layout(root: Path) -> dict[str, object] | None:
-    """识别 GPT-SoVITS 常见版本布局，不把入口文件名锁死在 api_v2.py。"""
-    candidates = (root, root / "GPT-SoVITS", root / "GPT_SoVITS")
-    for engine_root in candidates:
-        api = next((engine_root / name for name in VOICE_API_MARKERS if (engine_root / name).is_file()), None)
-        if api is None:
-            continue
-        python_candidates = (
-            root / ".voice-env" / "Scripts" / "python.exe",
-            root.parent / ".voice-env" / "Scripts" / "python.exe",
-            engine_root / ".voice-env" / "Scripts" / "python.exe",
-            engine_root / "runtime" / "python.exe",
-            engine_root / "runtime" / "python_embeded" / "python.exe",
-            engine_root / "runtime" / "python" / "python.exe",
-            engine_root / "runtime" / "python310" / "python.exe",
-            engine_root / "runtime" / "python312" / "python.exe",
-            engine_root / "python" / "python.exe",
-            engine_root / "python_embeded" / "python.exe",
-            engine_root / "venv" / "Scripts" / "python.exe",
-        )
-        config = next(
-            (engine_root / marker for marker in VOICE_CONFIG_MARKERS if (engine_root / marker).is_file()),
-            None,
-        )
-        launcher_ready = any(
-            (engine_root / name).is_file()
-            for name in ("go-api.bat", "go-api.ps1", "go-webui.bat", "go-webui.ps1")
-        )
-        runtime_ready = any(path.is_file() for path in python_candidates) or launcher_ready
-        models_ready = _voice_models_ready(engine_root)
-        runnable = runtime_ready and config is not None and models_ready
-        missing: list[str] = []
-        if not runtime_ready:
-            missing.append("Python 运行环境或启动器")
-        if config is None:
-            missing.append("推理配置")
-        if not models_ready:
-            missing.append("基础模型权重")
-        return {
-            "root": engine_root,
-            "api": api,
-            "layout": "新版 api_v2.py" if api.name == "api_v2.py" else "兼容旧版 api.py",
-            "runnable": runnable,
-            "runtime_ready": runtime_ready,
-            "models_ready": models_ready,
-            "missing": missing,
-        }
-    return None
-
-
-@lru_cache(maxsize=1)
-def _find_voice_roots() -> list[Path]:
-    """探测 GPT-SoVITS / 音色训练 常见位置（磁盘根 + 用户目录，浅扫 3 层）。"""
-    roots = _scan_roots()
-    candidates = []
-    for path in _find_dirs_named(roots, ("音色训练", "gpt-sovits", "gpt_sovits"), max_depth=3):
-        candidates.append(path)
-        if (path / "GPT-SoVITS").is_dir():
-            candidates.append(path / "GPT-SoVITS")
-    if settings.voice_training_dir not in candidates:
-        candidates.append(settings.voice_training_dir)
-    if settings.voice_training_dir / "GPT-SoVITS" not in candidates:
-        candidates.append(settings.voice_training_dir / "GPT-SoVITS")
-    valid: list[Path] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        layout = _voice_layout(candidate)
-        if layout is None:
-            continue
-        engine_root = Path(layout["root"])
-        key = str(engine_root.resolve()).casefold()
-        if key not in seen:
-            seen.add(key)
-            valid.append(engine_root)
-    return valid
 
 
 def _whisper_model_directory(root: Path) -> Path | None:
@@ -344,10 +242,6 @@ def _whisper_runtime_layout(root: Path) -> dict[str, object]:
 @lru_cache(maxsize=1)
 def whisper_runtime_candidates() -> tuple[dict[str, object], ...]:
     candidates: list[Path] = [settings.voice_training_dir]
-    for path in _find_voice_roots():
-        candidates.append(path)
-        if path.name.casefold() in {"gpt-sovits", "gpt_sovits"}:
-            candidates.append(path.parent)
     search_patterns = (
         "音色训练",
         "voice-training",
@@ -402,49 +296,6 @@ def find_whisper_runtime() -> dict[str, object] | None:
     return next((layout for layout in whisper_runtime_candidates() if layout["ready"]), None)
 
 
-@lru_cache(maxsize=1)
-def _find_napcat_roots() -> list[Path]:
-    """探测 NapCat 常见位置（磁盘根 + 用户目录，浅扫 3 层）。"""
-    roots = _scan_roots()
-    candidates = list(_find_dirs_named(roots, ("napcat",), max_depth=3))
-    if settings.napcat_dir not in candidates:
-        candidates.append(settings.napcat_dir)
-    return candidates
-
-
-def _find_ready_napcat_root(roots: list[Path]) -> Path | None:
-    return next((root for root in roots if root.is_dir() and _napcat_launchers(root)), None)
-
-
-def _configured_napcat_environment(roots: list[Path]) -> tuple[bool, Path | None, str]:
-    """Report readiness for the path Mio will actually launch.
-
-    A complete shell elsewhere on disk is useful diagnostic evidence, but it
-    must not make the dependency center green while ``settings.napcat_dir``
-    still points at an incomplete legacy shell.
-    """
-    configured = settings.napcat_dir
-    if configured.is_dir() and _napcat_launchers(configured):
-        return True, configured, f"已检测到 NapCat：{configured}"
-
-    configured_key = str(configured.resolve()).casefold()
-    alternate = _find_ready_napcat_root(
-        [
-            root
-            for root in roots
-            if str(root.resolve()).casefold() != configured_key
-        ]
-    )
-    if _incomplete_napcat_shells(configured):
-        detail = f"当前 NapCat 目录缺少新版 Shell 文件，需要修复：{configured}"
-    elif configured.is_dir():
-        detail = f"当前 NapCat 目录没有完整可启动的 Shell：{configured}"
-    else:
-        detail = f"当前 NapCat 安装目录尚不存在：{configured}"
-    if alternate is not None:
-        detail += f"；另在 {alternate} 发现完整 Shell，但 Mio 当前不会从那里启动"
-    return False, alternate, detail
-
 
 @lru_cache(maxsize=1)
 def _find_ollama_executables() -> list[Path]:
@@ -483,59 +334,11 @@ def _find_ollama_executables() -> list[Path]:
     return exes
 
 
-def _configured_voice_service_url() -> str:
-    try:
-        from .companion_service import load_config
-
-        return str(load_config().get("gpt_sovits_url") or "").strip().rstrip("/")
-    except (OSError, TypeError, ValueError):
-        return ""
-
-
-@lru_cache(maxsize=8)
-def _probe_voice_service(base_url: str) -> tuple[bool, str]:
-    """只探测本机 GPT-SoVITS API，避免把任意远端地址纳入环境检查。"""
-    parsed = urlparse(base_url)
-    host = str(parsed.hostname or "").lower()
-    if parsed.scheme != "http" or host not in {"127.0.0.1", "localhost", "::1"}:
-        return False, ""
-    connection: http.client.HTTPConnection | None = None
-    try:
-        connection = http.client.HTTPConnection(host, parsed.port or 80, timeout=0.8)
-        prefix = parsed.path.rstrip("/")
-        connection.request("GET", f"{prefix}/openapi.json" or "/openapi.json")
-        response = connection.getresponse()
-        body = response.read(1024 * 1024)
-        if response.status != 200:
-            return False, ""
-        payload = json.loads(body.decode("utf-8"))
-        paths = payload.get("paths") if isinstance(payload, dict) else {}
-        path_names = {str(name).lower() for name in paths} if isinstance(paths, dict) else set()
-        signature = any(
-            name in path_names
-            for name in ("/tts", "/set_gpt_weights", "/set_sovits_weights", "/control")
-        )
-        info = payload.get("info") if isinstance(payload, dict) else {}
-        title = str(info.get("title") or "") if isinstance(info, dict) else ""
-        if not signature and "gpt" not in title.lower() and "sovits" not in title.lower():
-            return False, ""
-        version = str(info.get("version") or "").strip() if isinstance(info, dict) else ""
-        version_hint = f"，版本 {version}" if version else ""
-        return True, f"本地 GPT-SoVITS 服务可访问：{base_url}{version_hint}"
-    except (OSError, ValueError, json.JSONDecodeError, UnicodeDecodeError, http.client.HTTPException):
-        return False, ""
-    finally:
-        if connection is not None:
-            connection.close()
-
 
 def refresh_detection_cache() -> None:
     """清除安装位置和服务探测缓存，供重新检查与安装完成后调用。"""
-    _find_voice_roots.cache_clear()
-    _find_napcat_roots.cache_clear()
     _find_ollama_executables.cache_clear()
     whisper_runtime_candidates.cache_clear()
-    _probe_voice_service.cache_clear()
     _gpu_info.cache_clear()
 
 
@@ -771,41 +574,6 @@ def _optional_checks(system: dict[str, object]) -> list[dict[str, object]]:
     local_vision_state = str(local_vision["status"])
     local_recommendation = str(local_vision["detail"])
 
-    # —— 本地语音：优先探测 Genie ONNX，兼容旧 GPT-SoVITS ——
-    voice_roots = _find_voice_roots()
-    voice_ready = False
-    voice_hint = "Genie ONNX 本地音色尚未检测到"
-    try:
-        from . import genie_tts_service
-
-        genie_status = genie_tts_service.runtime_status()
-    except (ImportError, OSError, ValueError):
-        genie_status = {"ready": False, "missing": ["Genie 环境检测失败"], "runtime_dir": ""}
-    if genie_status["ready"]:
-        voice_ready = True
-        voice_hint = f"Genie ONNX CPU 已就绪：{genie_status['runtime_dir']}"
-    else:
-        for root in voice_roots:
-            layout = _voice_layout(root)
-            if layout is None:
-                continue
-            layout_hint = str(layout["layout"])
-            engine_root = Path(layout["root"])
-            if bool(layout["runnable"]):
-                voice_ready = True
-                voice_hint = f"检测到旧 GPT-SoVITS（{layout_hint}）：{engine_root}；建议安装 Genie ONNX"
-                break
-            missing = "、".join(str(item) for item in layout.get("missing", [])) or "必要文件"
-            voice_hint = f"检测到旧 GPT-SoVITS（{layout_hint}），但缺少{missing}：{engine_root}"
-        service_ready, service_hint = _probe_voice_service(_configured_voice_service_url())
-        if service_ready:
-            voice_ready = True
-            voice_hint = service_hint + "；当前仍是旧运行时"
-
-    # —— QQ 通道：自动探测 NapCat ——
-    napcat_roots = _find_napcat_roots()
-    napcat_ready, napcat_found, napcat_detail = _configured_napcat_environment(napcat_roots)
-
     live2d_index = settings.agent_frontend_dir / "live2d-pet/index.html"
     live2d_model = settings.agent_frontend_dir / "live2d-pet/models/hiyori/Hiyori.model3.json"
     live2d_ready = live2d_index.is_file() and live2d_model.is_file()
@@ -858,20 +626,6 @@ def _optional_checks(system: dict[str, object]) -> list[dict[str, object]]:
             local_vision_state,
             f"Qwen2.5-VL 3B：{local_recommendation}",
             action="在环境与模型中心安装、启动或验证" if local_vision_state != "available" else "",
-        ),
-        _item(
-            "voice",
-            "Mio 的本地语音",
-            "available" if voice_ready else "unconfigured",
-            voice_hint,
-            action="稍后在语音设置中配置" if not voice_ready else "",
-        ),
-        _item(
-            "qq",
-            "QQ 通道",
-            "configured" if napcat_ready else ("degraded" if napcat_found else "unconfigured"),
-            napcat_detail,
-            action="在 QQ 设置中安装并修复当前目录" if not napcat_ready else "",
         ),
         _item(
             "live2d",

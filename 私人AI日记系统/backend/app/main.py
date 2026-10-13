@@ -28,21 +28,16 @@ from .companion_action_service import backfill_explicit_structured_memories
 from .documents import load_manuals
 from .local_security import LocalControlMiddleware, SecureAttachmentFiles
 from .routes import (
-    agent,
-    autonomy,
     backup,
     chat,
     companion,
     creation,
     day,
-    dependencies,
     diary,
     memory,
     monthly,
     onboarding,
-    onebot,
     privacy,
-    realtime,
     review,
     settings as settings_routes,
     stats,
@@ -57,7 +52,6 @@ logger = logging.getLogger(__name__)
 # 后台任务：仅保留桌宠/小智链路所需（原版 QQ/日记/备份/周月报/费用对账等任务已随功能阉割移除）
 BACKGROUND_TASK_FACTORIES = {
     "runtime_diagnostics_task": runtime_diagnostics.monitor_loop,
-    "voice_startup_task": companion_service.start_voice_on_app_startup,
     "screen_observation_task": screen_observation_service.observation_loop,
     "pet_event_task": pet_event_service.event_loop,
 }
@@ -120,7 +114,6 @@ async def _stop_background_tasks(app: FastAPI, *, exclude: set[str] | None = Non
 async def app_lifespan(app: FastAPI):
     app.state.runtime_event_loop = asyncio.get_running_loop()
     maintenance_service.reset_runtime_state()
-    companion_service.reset_frontend_ready()
     initialize_runtime()
     agent_task_service.recover_interrupted()
     await creation_service.resume_active_jobs()
@@ -136,7 +129,6 @@ async def app_lifespan(app: FastAPI):
             await model_runtime.cancel_operations(reason="maintenance")
             await creation_service.shutdown()
             await _stop_background_tasks(app, exclude={"runtime_diagnostics_task"})
-            await onebot.disconnect_all_connections(reason="Mio 正在执行数据维护")
             await asyncio.to_thread(maintenance_service.wait_for_quiescence, 30)
             return maintenance_service.status()
         except BaseException:
@@ -167,10 +159,6 @@ async def app_lifespan(app: FastAPI):
         await model_runtime.cancel_operations(reason="shutdown")
         await _stop_background_tasks(app)
         await creation_service.shutdown()
-        try:
-            await onebot.disconnect_all_connections(reason="Mio 后端正在关闭")
-        except Exception:
-            logger.exception("关闭后端时断开 QQ 连接失败")
         try:
             companion_service.shutdown()
         except Exception:
@@ -239,20 +227,15 @@ def create_app() -> FastAPI:
         name="agent-files",
     )
     app.include_router(chat.router)
-    app.include_router(agent.router)
-    app.include_router(autonomy.router)
     app.include_router(backup.router)
     app.include_router(companion.router)
     app.include_router(creation.router)
-    app.include_router(dependencies.router)
     app.include_router(diary.router)
     app.include_router(day.router)
     app.include_router(memory.router)
     app.include_router(monthly.router)
     app.include_router(onboarding.router)
-    app.include_router(onebot.router)
     app.include_router(privacy.router)
-    app.include_router(realtime.router)
     app.include_router(review.router)
     app.include_router(settings_routes.router)
     app.include_router(stats.router)

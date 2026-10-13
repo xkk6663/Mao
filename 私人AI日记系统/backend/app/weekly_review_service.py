@@ -12,7 +12,6 @@ from .model_runtime import operation, OperationStopped
 from .config import settings
 from .llm import call_chat_completion
 from .prompts import build_weekly_review_messages
-from .routes.onebot import send_private_message
 
 
 logger = logging.getLogger(__name__)

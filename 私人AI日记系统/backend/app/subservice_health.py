@@ -38,15 +38,13 @@ def _service(
 def snapshot() -> dict[str, Any]:
     """Collect a passive, non-network health snapshot for isolated runtimes."""
     from . import companion_service, local_vision_service, screen_observation_service, system_audio_service
-    from .routes import companion, onebot
+    from .routes import companion
 
     call = companion.call_runtime_status()
     audio = dict(call["asr"])
-    tts = companion_service.voice_runtime_health()
     vision = local_vision_service.passive_status()
     observation = screen_observation_service.runtime_health_status()
     capture = dict(observation["capture"])
-    qq = onebot.runtime_health_status()
 
     audio_running = bool(audio.get("running"))
     audio_ready = bool(audio.get("ready"))
@@ -64,20 +62,6 @@ def snapshot() -> dict[str, Any]:
 
     call_active = bool(call.get("active"))
     call_state = "ready" if call_active and audio_ready else "degraded" if call_active else "stopped"
-
-    tts_running = bool(tts.get("managed_running") or tts.get("observed_running") is True)
-    tts_desired = bool(tts.get("desired_running"))
-    tts_warmup = str(tts.get("warmup_state") or "idle")
-    tts_error = str(tts.get("last_error") or tts.get("warmup_error") or "")
-    tts_state = (
-        "ready"
-        if tts_running and not tts_error
-        else "starting"
-        if tts_warmup in {"scheduled", "running"}
-        else "failed"
-        if tts_error or tts_desired
-        else "unknown"
-    )
 
     capture_running = bool(capture.get("running"))
     capture_desired = bool(capture.get("desired_running"))
@@ -138,10 +122,6 @@ def snapshot() -> dict[str, Any]:
         else "idle"
     )
 
-    qq_enabled = bool(qq.get("enabled"))
-    qq_connections = int(qq.get("websocket_connections") or 0)
-    qq_state = "ready" if qq_connections else "offline" if qq_enabled else "disabled"
-
     services = {
         "phone": _service(
             "phone",
@@ -166,16 +146,6 @@ def snapshot() -> dict[str, Any]:
                 "model": str(audio.get("model") or ""),
                 "quality_requests": dict(audio.get("quality_requests") or {}),
             },
-        ),
-        "tts": _service(
-            "tts",
-            tts_state,
-            enabled=tts_desired,
-            running=tts_running,
-            ready=tts_state == "ready",
-            last_error=tts_error,
-            recovery_scope="gpt_sovits_process",
-            details=tts,
         ),
         "screen_capture": _service(
             "screen_capture",
@@ -221,15 +191,6 @@ def snapshot() -> dict[str, Any]:
             recovery_scope="ollama_process",
             details=vision,
         ),
-        "qq": _service(
-            "qq",
-            qq_state,
-            enabled=qq_enabled,
-            running=qq_connections > 0,
-            ready=qq_connections > 0,
-            recovery_scope="napcat_onebot_connection",
-            details=qq,
-        ),
     }
     degraded = [
         service_id
@@ -273,7 +234,7 @@ def recover_failed(health: dict[str, Any] | None = None) -> dict[str, Any]:
     fused: list[str] = []
     now = time.monotonic()
 
-    for service_id in ("asr_system_audio", "tts", "local_vision", "screen_capture"):
+    for service_id in ("asr_system_audio", "local_vision", "screen_capture"):
         item = services.get(service_id)
         if not isinstance(item, dict) or item.get("state") != "failed" or not item.get("enabled"):
             continue
@@ -284,8 +245,6 @@ def recover_failed(health: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
             if service_id == "asr_system_audio":
                 system_audio_service.start(companion_service.load_config())
-            elif service_id == "tts":
-                companion_service.restart_voice_service()
             elif service_id == "local_vision":
                 local_vision_service.restart_server()
             else:

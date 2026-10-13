@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from . import autonomy_service, companion_service, db, screen_observation_service, system_audio_service
+from . import companion_service, db, screen_observation_service, system_audio_service
 from .config import load_runtime_settings, save_runtime_settings, settings
 
 
@@ -27,11 +27,9 @@ RUNTIME_SENSITIVE_KEYS = (
 PAUSE_ACTION_LABELS = {
     "runtime_settings": "关闭联网、QQ 与自动任务设置",
     "companion_settings": "关闭屏幕、系统声音与主动语音设置",
-    "autonomy_policy": "暂停自主行为",
     "screen_capture": "停止屏幕捕获",
     "screen_session": "结束屏幕观察会话",
     "system_audio": "停止系统声音监听",
-    "qq_connections": "断开 QQ 连接与处理中任务",
     "model_operations": "停止在途自动生成和回写",
     "agent_tasks": "停止 Agent 任务",
     "monthly_generation": "停止月记生成",
@@ -43,7 +41,6 @@ COMPANION_SENSITIVE_KEYS = (
     "screen_audio_enabled",
     "speak_screen_observations",
     "speak_game_observations",
-    "speak_proactive",
 )
 
 
@@ -75,7 +72,6 @@ def _disable_sensitive_settings() -> list[str]:
     for action, callback in (
         ("runtime_settings", lambda: save_runtime_settings({key: False for key in RUNTIME_SENSITIVE_KEYS})),
         ("companion_settings", lambda: companion_service.save_config({key: False for key in COMPANION_SENSITIVE_KEYS})),
-        ("autonomy_policy", lambda: autonomy_service.update_policy({"paused": True})),
     ):
         try:
             callback()
@@ -220,7 +216,6 @@ async def pause_sensitive_capabilities() -> dict[str, Any]:
             await callback()
         except Exception as exc:
             failures.append({"action": action, "label": PAUSE_ACTION_LABELS[action], "error": str(exc)[:500]})
-    from .routes.onebot import disconnect_all_connections
 
     disconnected_connections = 0
     try:
