@@ -82,5 +82,7 @@ orig_*.txt
 # 运行数据（保留在磁盘，不参与 git 跟踪）
 xiaozhi_chat_history.json
 status.json
+# 本机 MCP 工具开关状态（用户自己的配置，不进远程仓库）
+xiaozhi_mcp_tools.json
 
 \.Bin/

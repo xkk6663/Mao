@@ -12,17 +12,22 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ctypes
 import io
 import json
 import logging
 import os
+import re
+import subprocess
 import tempfile
 import struct
 import time
 import uuid
 import urllib.request
 import wave
+import xml.etree.ElementTree as ET
 from pathlib import Path
+from urllib.parse import quote
 
 import av
 import numpy as np
@@ -105,9 +110,19 @@ _tts_playing: bool = False  # 官方 TTS 是否正在播放（只在播放中才
 # 官方云在 hello 后发 MCP initialize（含 capabilities.vision{url,token}），随后可发 tools/list / tools/call。
 # 视觉识别正确姿势（对齐官方 esp_xiaozhi 组件）：识别文本作为 tools/result 回灌官方 LLM，
 # 由官方 LLM 组织回答 → 官方 TTS 合成音频 → 官方音色语音。
-_MCP_SERVER_INFO = {"name": "mao-desktop-pet", "version": "2.1.0"}
+_MCP_SERVER_INFO = {"name": "mao-desktop-pet", "version": "2.5.0"}
 _MCP_PROTOCOL_VERSION = "2025-03-26"
-_MCP_TOOLS = [
+
+# ================= MCP 工具注册表（配置驱动，可在管理页按需开关） =================
+# 每个工具：name / description(提示 LLM 何时调用) / inputSchema / handler(异步函数名) /
+#           default_enabled(默认开关) / category(管理页分组) / config(工具级配置项)
+_MCP_TOOLS_FILE = (
+    Path(os.getenv("MIO_XIAOZHI_MCP_TOOLS_FILE", "").strip())
+    if os.getenv("MIO_XIAOZHI_MCP_TOOLS_FILE", "").strip()
+    else (_PROJECT_ROOT / "xiaozhi_mcp_tools.json")
+)
+
+_MCP_TOOLS_DEF: list[dict] = [
     {
         "name": "self.camera.explain",
         "description": (
@@ -127,8 +142,223 @@ _MCP_TOOLS = [
             },
             "required": [],
         },
-    }
+        "handler": "_exec_screen_explain",
+        "default_enabled": True,
+        "category": "视觉",
+    },
+    {
+        "name": "self.clock.get_time",
+        "description": "获取当前日期、星期和准确时间。用户问\"现在几点\"、\"今天几号\"、\"星期几\"、\"什么时间\"时调用。无参数。",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+        "handler": "_mcp_clock_get_time",
+        "default_enabled": True,
+        "category": "基础",
+    },
+    {
+        "name": "self.system.get_info",
+        "description": "获取电脑系统状态：CPU 负载、内存占用、系统运行时长、操作系统名称。用户问\"电脑卡不卡\"、\"内存够不够\"、\"电脑状态\"、\"系统运行多久了\"时调用。无参数。",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+        "handler": "_mcp_system_get_info",
+        "default_enabled": True,
+        "category": "基础",
+    },
+    {
+        "name": "self.weather.get",
+        "description": "查询城市实时天气：温度、体感、天气现象、湿度、风速。用户问\"今天天气怎么样\"、\"外面冷不冷\"、\"会不会下雨\"、\"广州天气\"时调用。参数 city: 城市名（可选，缺省用配置的默认城市）。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"city": {"type": "string", "description": "城市名，如\"广州\""}},
+            "required": [],
+        },
+        "handler": "_mcp_weather_get",
+        "default_enabled": True,
+        "category": "资讯",
+        "config": {"weather_city": "广州"},
+    },
+    {
+        "name": "self.news.get",
+        "description": "获取最新新闻头条（社会/科技/财经，来自中国新闻网 RSS）。用户说\"有什么新闻\"、\"看看新闻\"、\"今天有什么大事\"、\"读新闻给我听\"时调用。无参数。",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+        "handler": "_mcp_news_get",
+        "default_enabled": False,
+        "category": "资讯",
+    },
+    {
+        "name": "self.music.play",
+        "description": "播放本地音乐文件（扫描 xiaozhi_music 目录下的 mp3/wav）。用户说\"放首歌\"、\"放音乐\"、\"播放 xxx\"、\"来点音乐\"时调用。参数 keyword: 想听的歌名/关键词（可选，缺省随机播放）。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"keyword": {"type": "string", "description": "歌名或关键词，缺省随机"}},
+            "required": [],
+        },
+        "handler": "_mcp_music_play",
+        "default_enabled": False,
+        "category": "娱乐",
+    },
+    {
+        "name": "self.music.stop",
+        "description": "停止当前播放的本地音乐。用户说\"停歌\"、\"别放了\"、\"停止播放\"时调用。无参数。",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+        "handler": "_mcp_music_stop",
+        "default_enabled": False,
+        "category": "娱乐",
+    },
+    {
+        "name": "self.clipboard.get",
+        "description": "读取电脑剪贴板当前文本内容。用户问\"剪贴板里是什么\"、\"我复制了什么\"时调用。无参数。",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+        "handler": "_mcp_clipboard_get",
+        "default_enabled": False,
+        "category": "系统",
+    },
+    {
+        "name": "self.clipboard.set",
+        "description": "把一段文本写入电脑剪贴板。用户说\"复制 xxx\"、\"帮我复制\"、\"放到剪贴板\"时调用。参数 text: 要写入剪贴板的文本。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"text": {"type": "string", "description": "要写入剪贴板的文本"}},
+            "required": ["text"],
+        },
+        "handler": "_mcp_clipboard_set",
+        "default_enabled": False,
+        "category": "系统",
+    },
+    {
+        "name": "self.memo.set",
+        "description": "记录一条备忘到本地（键值形式，可存提醒事项/待办/小知识）。用户说\"记住 xxx\"、\"记一下\"、\"提醒我 xxx\"、\"存个备忘\"时调用。参数 key: 备忘名称（可选）；text: 备忘内容。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "备忘名称，如\"会议时间\"（可选，缺省自动编号）"},
+                "text": {"type": "string", "description": "要记住的内容"},
+            },
+            "required": ["text"],
+        },
+        "handler": "_mcp_memo_set",
+        "default_enabled": False,
+        "category": "效率",
+    },
+    {
+        "name": "self.memo.get",
+        "description": "列出本地所有备忘。用户问\"你记得什么\"、\"我的备忘\"、\"之前让我记住什么\"时调用。无参数。",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+        "handler": "_mcp_memo_get",
+        "default_enabled": False,
+        "category": "效率",
+    },
+    {
+        "name": "self.memo.delete",
+        "description": "删除一条本地备忘。用户说\"删掉备忘 xxx\"时调用。参数 key: 要删除的备忘名称。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"key": {"type": "string", "description": "要删除的备忘名称"}},
+            "required": ["key"],
+        },
+        "handler": "_mcp_memo_delete",
+        "default_enabled": False,
+        "category": "效率",
+    },
+    {
+        "name": "self.timer.set",
+        "description": "设定一个倒计时提醒，时间到后桌宠会主动说话提醒你。用户说\"X 分钟后提醒我 xxx\"、\"设个计时器\"、\"帮我计时\"时调用。参数 minutes: 倒计时分钟数；message: 提醒内容（可选）。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "minutes": {"type": "integer", "description": "倒计时分钟数"},
+                "message": {"type": "string", "description": "到点提醒的内容"},
+            },
+            "required": ["minutes"],
+        },
+        "handler": "_mcp_timer_set",
+        "default_enabled": False,
+        "category": "效率",
+    },
+    {
+        "name": "self.timer.cancel",
+        "description": "取消所有/指定的倒计时提醒。用户说\"取消提醒\"、\"别提醒了\"时调用。参数 key: 提醒编号（可选，缺省取消全部）。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"key": {"type": "string", "description": "提醒编号，缺省取消全部"}},
+            "required": [],
+        },
+        "handler": "_mcp_timer_cancel",
+        "default_enabled": False,
+        "category": "效率",
+    },
+    {
+        "name": "self.web.search",
+        "description": "联网搜索最新新闻/资讯（Bing 新闻 RSS，免费）。用户问\"搜索 xxx\"、\"查一下 xxx 的最新消息\"、\"网上怎么说\"、\"金价/股价/热点\"时调用。参数 query: 搜索关键词。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "搜索关键词"}},
+            "required": ["query"],
+        },
+        "handler": "_mcp_web_search",
+        "default_enabled": False,
+        "category": "资讯",
+    },
+    {
+        "name": "self.desktop.open_app",
+        "description": "打开电脑上的常用应用（白名单：浏览器/记事本/计算器/文件管理器/画图/任务管理器/终端）。用户说\"打开浏览器\"、\"打开记事本\"、\"帮我打开计算器\"时调用。参数 app: 应用名（浏览器/记事本/计算器/文件管理器/画图/任务管理器/终端）。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"app": {"type": "string", "description": "应用名，如\"浏览器\"\"记事本\"\"计算器\"\"文件管理器\"\"画图\"\"任务管理器\"\"终端\""}},
+            "required": ["app"],
+        },
+        "handler": "_mcp_desktop_open_app",
+        "default_enabled": False,
+        "category": "系统",
+    },
 ]
+
+_MCP_HANDLERS: dict[str, str] = {t["name"]: t["handler"] for t in _MCP_TOOLS_DEF}
+_mcp_enabled: dict[str, bool] = {}  # name -> 用户开关（未记录的用 default_enabled）
+
+
+def _load_mcp_tools_cfg() -> None:
+    global _mcp_enabled
+    try:
+        if _MCP_TOOLS_FILE.exists():
+            data = json.loads(_MCP_TOOLS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and isinstance(data.get("enabled"), dict):
+                _mcp_enabled = {str(k): bool(v) for k, v in data["enabled"].items()}
+    except Exception:  # noqa: BLE001
+        logger.warning("读取 MCP 工具配置失败，使用默认开关", exc_info=True)
+
+
+_load_mcp_tools_cfg()
+
+
+def _save_mcp_tools_cfg() -> None:
+    try:
+        _MCP_TOOLS_FILE.write_text(
+            json.dumps({"enabled": _mcp_enabled}, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("保存 MCP 工具配置失败", exc_info=True)
+
+
+def _mcp_tool_enabled(name: str) -> bool:
+    if name in _mcp_enabled:
+        return bool(_mcp_enabled[name])
+    for t in _MCP_TOOLS_DEF:
+        if t["name"] == name:
+            return bool(t.get("default_enabled", False))
+    return False
+
+
+def _mcp_enabled_tools() -> list[dict]:
+    """tools/list 只返回已开启的工具（管理页开关生效）。"""
+    return [t for t in _MCP_TOOLS_DEF if _mcp_tool_enabled(t["name"])]
+
+
+def _mcp_tool_public(name: str) -> dict | None:
+    for t in _MCP_TOOLS_DEF:
+        if t["name"] == name:
+            return {k: t[k] for k in ("name", "description", "inputSchema")}
+    return None
+
+
 # 用户手动触发（截图提问/立即观察/聊天发图）后待工具回调使用的截图：
 # {"image_base64": str|None(缺省则工具回调时现截全屏), "question": str(用户配置的识别提示词)}
 _pending_vision: dict | None = None
@@ -955,6 +1185,368 @@ def _mcp_error(req_id, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
 
 
+# ================= 本地免费 MCP 工具实现（全部本机能力/免费公开源） =================
+
+async def _mcp_clock_get_time(args: dict) -> str:
+    """self.clock.get_time：当前日期/星期/时间（本机，零成本）。"""
+    now = time.localtime()
+    week = "一二三四五六日"[now.tm_wday]
+    return f"现在是{now.tm_year}年{now.tm_mon}月{now.tm_mday}日，星期{week}，{now.tm_hour:02d}:{now.tm_min:02d}"
+
+
+def _pwsh_sysinfo() -> str:
+    """PowerShell 采集 CPU 负载/内存/运行时长/系统名（无 psutil 依赖）。"""
+    ps = (
+        "$os=Get-CimInstance Win32_OperatingSystem;"
+        "$cpu=(Get-CimInstance Win32_Processor|Measure-Object -Property LoadPercentage -Average).Average;"
+        "$up=[int]($os.LastBootUpTime - [datetime]::Now).Duration().TotalHours;"
+        "Write-Output (\"cpu=$([math]::Round($cpu,0)) mem_free={0} mem_total={1} hours={2} os={3}\" -f "
+        "[math]::Round($os.FreePhysicalMemory/1MB,0), [math]::Round($os.TotalVisibleMemorySize/1MB,0), $up, $os.Caption)"
+    )
+    r = subprocess.run(
+        ["pwsh.exe", "-NoProfile", "-NonInteractive", "-Command", ps],
+        capture_output=True, text=True, timeout=15, creationflags=0x08000000,  # CREATE_NO_WINDOW
+    )
+    m = re.search(r"cpu=([\d.]+) mem_free=([\d.]+) mem_total=([\d.]+) hours=([\d.-]+) os=(.+)", r.stdout)
+    if not m:
+        return f"系统状态：无法读取（{r.stdout.strip()[:60] or r.stderr.strip()[:60]}）"
+    cpu, mem_free, mem_total, hours, os_name = m.groups()
+    mem_used = round(float(mem_total) - float(mem_free), 1)
+    mem_pct = round(mem_used / float(mem_total) * 100, 0) if float(mem_total) else 0
+    return (
+        f"CPU负载{cpu}%；内存已用{mem_used}GB/共{mem_total}GB（占用{mem_pct:.0f}%）；"
+        f"系统已运行{hours}小时；操作系统{os_name}"
+    )
+
+
+async def _mcp_system_get_info(args: dict) -> str:
+    """self.system.get_info：CPU/内存/运行时长/系统名（本机）。"""
+    try:
+        return await asyncio.to_thread(_pwsh_sysinfo)
+    except Exception as exc:  # noqa: BLE001
+        return f"系统状态读取失败：{exc}"
+
+
+async def _mcp_weather_get(args: dict) -> str:
+    """self.weather.get：实时天气（wttr.in 免费无 key）。"""
+    city = str(args.get("city") or "").strip()
+    if not city:
+        city = "广州"  # 默认城市
+    try:
+        url = f"https://wttr.in/{quote(city)}?format=j1&lang=zh"
+        req = urllib.request.Request(url, headers={"User-Agent": "MaoPet/2.5"})
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        cur = (data.get("current_condition") or [{}])[0]
+        desc = (cur.get("weatherDesc") or [{}])[0].get("value", "未知")
+        temp = cur.get("temp_C", "?")
+        feels = cur.get("FeelsLikeC", temp)
+        hum = cur.get("humidity", "?")
+        wind = cur.get("windspeedKmph", "?")
+        return f"{city}当前天气：{desc}，气温{temp}°C（体感{feels}°C），湿度{hum}%，风速{wind}公里/小时"
+    except Exception as exc:  # noqa: BLE001
+        return f"天气查询失败：{exc}（可稍后再试）"
+
+
+def _fetch_rss_items(url: str, limit: int = 5) -> list[dict]:
+    req = urllib.request.Request(url, headers={"User-Agent": "MaoPet/2.5"})
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        root = ET.fromstring(resp.read())
+    items = []
+    for item in root.iter("item"):
+        t = (item.findtext("title") or "").strip()
+        d = (item.findtext("description") or "").strip()
+        if t:
+            items.append({"title": t, "desc": d})
+        if len(items) >= limit:
+            break
+    return items
+
+
+async def _mcp_news_get(args: dict) -> str:
+    """self.news.get：最新新闻（中国新闻网 RSS，免费）。"""
+    try:
+        items = await asyncio.to_thread(_fetch_rss_items, "https://www.chinanews.com.cn/rss/society.xml", 5)
+        if not items:
+            return "新闻获取失败：暂无内容"
+        lines = [f"{i+1}. {it['title']}" for i, it in enumerate(items)]
+        return "最新新闻：\n" + "\n".join(lines)
+    except Exception as exc:  # noqa: BLE001
+        return f"新闻获取失败：{exc}"
+
+
+# ---- 本地音乐播放（winmm MCI，纯 ctypes，零依赖） ----
+_MUSIC_DIR = _PROJECT_ROOT / "xiaozhi_music"
+_MCI_ALIAS = "mao_music"
+_mci_error: str = ""
+
+
+def _mci(cmd: str) -> bool:
+    global _mci_error
+    try:
+        buf = ctypes.create_unicode_buffer(256)
+        rc = ctypes.windll.winmm.mciSendStringW(cmd, buf, 256, 0)
+        if rc != 0:
+            _mci_error = buf.value or f"错误码{rc}"
+            return False
+        return True
+    except Exception as exc:  # noqa: BLE001
+        _mci_error = str(exc)
+        return False
+
+
+def _music_files() -> list[str]:
+    if not _MUSIC_DIR.exists():
+        return []
+    exts = (".mp3", ".wav", ".m4a")
+    return sorted(str(p) for p in _MUSIC_DIR.rglob("*") if p.suffix.lower() in exts)
+
+
+def _mci_play_path(path: str) -> str:
+    _mci(f'close {_MCI_ALIAS}')
+    # mpegvideo 可播 mp3/m4a；wav 用 waveaudio
+    kind = "mpegvideo" if path.lower().endswith((".mp3", ".m4a")) else "waveaudio"
+    if not _mci(f'open "{path}" type {kind} alias {_MCI_ALIAS}'):
+        return f"打开音乐失败：{_mci_error}"
+    if not _mci(f"play {_MCI_ALIAS}"):
+        return f"播放失败：{_mci_error}"
+    return "ok"
+
+
+async def _mcp_music_play(args: dict) -> str:
+    """self.music.play：播放 xiaozhi_music 目录下的音乐（keyword 匹配/随机）。"""
+    files = await asyncio.to_thread(_music_files)
+    if not files:
+        return "没有找到音乐：请把 mp3/wav 文件放到项目目录的 xiaozhi_music 文件夹里"
+    kw = str(args.get("keyword") or "").strip().lower()
+    matched = [f for f in files if kw and kw in Path(f).stem.lower()]
+    if kw and not matched:
+        return f"没找到包含「{kw}」的音乐，可试试这些：{', '.join(Path(f).stem for f in files[:3])}"
+    target = (matched or files)[0]
+    r = await asyncio.to_thread(_mci_play_path, target)
+    if r != "ok":
+        return r
+    return f"正在播放：{Path(target).stem}"
+
+
+async def _mcp_music_stop(args: dict) -> str:
+    """self.music.stop：停止当前音乐。"""
+    try:
+        await asyncio.to_thread(_mci, f"stop {_MCI_ALIAS}")
+        await asyncio.to_thread(_mci, f"close {_MCI_ALIAS}")
+        return "音乐已停止"
+    except Exception as exc:  # noqa: BLE001
+        return f"停止音乐失败：{exc}"
+
+
+# ---- 剪贴板读写（PowerShell 子进程） ----
+async def _mcp_clipboard_get(args: dict) -> str:
+    """self.clipboard.get：读取剪贴板文本。"""
+    try:
+        r = await asyncio.to_thread(
+            lambda: subprocess.run(
+                ["pwsh.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard -Raw"],
+                capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
+                creationflags=0x08000000,
+            )
+        )
+        text = (r.stdout or "").strip()
+        return f"剪贴板内容是：{text}" if text else "剪贴板是空的"
+    except Exception as exc:  # noqa: BLE001
+        return f"读取剪贴板失败：{exc}"
+
+
+async def _mcp_clipboard_set(args: dict) -> str:
+    """self.clipboard.set：写入剪贴板。"""
+    text = str(args.get("text") or "").strip()
+    if not text:
+        return "没有要写入剪贴板的文本"
+    try:
+        # Set-Clipboard 对特殊字符用单引号转义
+        safe = text.replace("'", "''")
+        await asyncio.to_thread(
+            lambda: subprocess.run(
+                ["pwsh.exe", "-NoProfile", "-NonInteractive", "-Command", f"Set-Clipboard -Value '{safe}'"],
+                capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
+                creationflags=0x08000000,
+            )
+        )
+        return f"已复制到剪贴板：{text[:40]}"
+    except Exception as exc:  # noqa: BLE001
+        return f"写入剪贴板失败：{exc}"
+
+
+# ---- 本地记事（JSON 持久化） ----
+_MEMO_FILE = _PROJECT_ROOT / "xiaozhi_memo.json"
+
+
+def _load_memos() -> dict:
+    try:
+        if _MEMO_FILE.exists():
+            data = json.loads(_MEMO_FILE.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+def _save_memos(memos: dict) -> None:
+    try:
+        _MEMO_FILE.write_text(json.dumps(memos, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _mcp_memo_set(args: dict) -> str:
+    """self.memo.set：记录一条备忘。"""
+    text = str(args.get("text") or "").strip()
+    if not text:
+        return "没有要记的内容"
+    key = str(args.get("key") or "").strip() or f"备忘{int(time.time())}"
+    memos = await asyncio.to_thread(_load_memos)
+    memos[key] = {"text": text, "ts": time.strftime("%Y-%m-%d %H:%M")}
+    await asyncio.to_thread(_save_memos, memos)
+    return f"记住了「{key}」：{text[:40]}"
+
+
+async def _mcp_memo_get(args: dict) -> str:
+    """self.memo.get：列出全部备忘。"""
+    memos = await asyncio.to_thread(_load_memos)
+    if not memos:
+        return "目前没有备忘"
+    lines = [f"{k}：{v.get('text') if isinstance(v, dict) else v}" for k, v in memos.items()]
+    return "你的备忘：\n" + "\n".join(lines)
+
+
+async def _mcp_memo_delete(args: dict) -> str:
+    """self.memo.delete：删除一条备忘。"""
+    key = str(args.get("key") or "").strip()
+    if not key:
+        return "请指定要删除的备忘名称"
+    memos = await asyncio.to_thread(_load_memos)
+    if key in memos:
+        del memos[key]
+        await asyncio.to_thread(_save_memos, memos)
+        return f"已删除备忘「{key}」"
+    return f"没有找到备忘「{key}」"
+
+
+# ---- 倒计时提醒（到点桌宠主动说话） ----
+_timers: dict[str, asyncio.Task] = {}
+
+
+async def _timer_fire(key: str, message: str) -> None:
+    """提醒触发：优先注入官方（官方音色说话+气泡+历史），连接不可用时广播气泡兜底。"""
+    try:
+        await _syslog(f"⏰ 提醒「{key}」触发，正在告知…")
+        ok = await _inject_say(message, source="timer")
+        if ok:
+            return
+        # 注入失败：气泡兜底
+        await _broadcast_observe_bubble(message)
+        _chat_append("pet", "text", message, tag="timer")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("定时提醒触发失败: %s", exc)
+        try:
+            await _broadcast_observe_bubble(message)
+            _chat_append("pet", "text", message, tag="timer")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def _mcp_timer_set(args: dict) -> str:
+    """self.timer.set：设定倒计时提醒。"""
+    try:
+        minutes = max(1, int(args.get("minutes") or 1))
+    except (TypeError, ValueError):
+        return "minutes 参数必须是分钟数"
+    message = str(args.get("message") or "").strip() or "时间到啦"
+    key = f"timer{int(time.time())}"
+    task = asyncio.create_task(_timer_schedule(key, minutes, message))
+    _timers[key] = task
+    return f"好的，{minutes} 分钟后我会提醒你：{message[:40]}"
+
+
+async def _timer_schedule(key: str, minutes: int, message: str) -> None:
+    await asyncio.sleep(minutes * 60)
+    try:
+        await _timer_fire(key, message)
+    finally:
+        _timers.pop(key, None)
+
+
+async def _mcp_timer_cancel(args: dict) -> str:
+    """self.timer.cancel：取消提醒。"""
+    key = str(args.get("key") or "").strip()
+    if not key:
+        n = len(_timers)
+        for k, t in list(_timers.items()):
+            t.cancel()
+        _timers.clear()
+        return f"已取消全部 {n} 个提醒" if n else "当前没有待触发的提醒"
+    t = _timers.pop(key, None)
+    if t:
+        t.cancel()
+        return f"已取消提醒「{key}」"
+    return f"没有找到提醒「{key}」"
+
+
+# ---- 联网搜索（Bing 新闻 RSS，免费无 key） ----
+async def _mcp_web_search(args: dict) -> str:
+    """self.web.search：Bing 新闻 RSS 搜索。"""
+    q = str(args.get("query") or "").strip()
+    if not q:
+        return "请提供搜索关键词"
+    try:
+        url = f"https://www.bing.com/news/search?q={quote(q)}&format=rss"
+        items = await asyncio.to_thread(_fetch_rss_items, url, 5)
+        if not items:
+            return f"没搜到关于「{q}」的新闻"
+        lines = [f"{i+1}. {it['title']}" for i, it in enumerate(items)]
+        return f"关于「{q}」的最新消息：\n" + "\n".join(lines)
+    except Exception as exc:  # noqa: BLE001
+        return f"搜索失败：{exc}"
+
+
+# ---- 打开白名单应用 ----
+_OPEN_APP_MAP = {
+    "浏览器": "https://www.baidu.com",
+    "记事本": "notepad.exe",
+    "计算器": "calc.exe",
+    "文件管理器": "explorer.exe",
+    "画图": "mspaint.exe",
+    "任务管理器": "taskmgr.exe",
+    "终端": "wt.exe",
+}
+
+
+async def _mcp_desktop_open_app(args: dict) -> str:
+    """self.desktop.open_app：打开白名单应用（防 LLM 乱开程序）。"""
+    app = str(args.get("app") or "").strip()
+    if not app:
+        return "请指定要打开的应用：浏览器/记事本/计算器/文件管理器/画图/任务管理器/终端"
+    target = None
+    for key, cmd in _OPEN_APP_MAP.items():
+        if app == key or key in app or app in key:
+            target = (key, cmd)
+            break
+    if not target:
+        return f"我不支持打开「{app}」，只能打开：{', '.join(_OPEN_APP_MAP.keys())}"
+    key, cmd = target
+    try:
+        if cmd.startswith("http"):
+            await asyncio.to_thread(os.startfile, cmd)
+        else:
+            await asyncio.to_thread(
+                lambda: subprocess.Popen(
+                    cmd, creationflags=0x08000000, close_fds=True
+                )
+            )
+        return f"已为你打开{key}"
+    except Exception as exc:  # noqa: BLE001
+        return f"打开{key}失败：{exc}"
+
+
 def _mcp_result(req_id, result: dict) -> dict:
     return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
@@ -981,28 +1573,38 @@ async def _handle_mcp_message(payload) -> dict | None:
                 "serverInfo": _MCP_SERVER_INFO,
             })
         if method == "tools/list":
-            return _mcp_result(req_id, {"tools": _MCP_TOOLS, "nextCursor": ""})
+            return _mcp_result(req_id, {"tools": _mcp_enabled_tools(), "nextCursor": ""})
         if method == "tools/call":
             name = str(params.get("name") or "")
             arguments = params.get("arguments") or {}
             if not isinstance(arguments, dict):
                 arguments = {}
-            if name == "self.camera.explain":
-                try:
-                    question = str(arguments.get("question") or "")
-                    text = await _exec_screen_explain(question)
-                    return _mcp_result(req_id, {
-                        "content": [{"type": "text", "text": text}],
-                        "isError": False,
-                    })
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("MCP 工具 self.camera.explain 执行失败: %s", exc)
-                    await _syslog(f"⚠️ 视觉工具执行失败：{str(exc)[:80]}")  # 诊断：区分"没调工具"与"调了但失败"
-                    return _mcp_result(req_id, {
-                        "content": [{"type": "text", "text": f"截图/图片识别失败：{exc}"}],
-                        "isError": True,
-                    })
-            return _mcp_error(req_id, -32601, f"Unknown tool: {name}")
+            # 开关控制：关掉的工具对云端 LLM 不可见、不可调
+            if not _mcp_tool_enabled(name):
+                return _mcp_result(req_id, {
+                    "content": [{"type": "text", "text": f"工具 {name} 未启用（可在 MIO 管理页的「小智工具」中打开）"}],
+                    "isError": True,
+                })
+            handler_name = _MCP_HANDLERS.get(name)
+            if not handler_name:
+                return _mcp_error(req_id, -32601, f"Unknown tool: {name}")
+            handler = globals().get(handler_name)
+            if handler is None or not callable(handler):
+                logger.warning("MCP 工具 %s 的实现函数 %s 不存在", name, handler_name)
+                return _mcp_error(req_id, -32601, f"Tool implementation missing: {name}")
+            try:
+                text = await handler(arguments)
+                return _mcp_result(req_id, {
+                    "content": [{"type": "text", "text": str(text)}],
+                    "isError": False,
+                })
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("MCP 工具 %s 执行失败: %s", name, exc)
+                await _syslog(f"⚠️ MCP 工具 {name} 执行失败：{str(exc)[:80]}")
+                return _mcp_result(req_id, {
+                    "content": [{"type": "text", "text": f"工具 {name} 执行失败：{exc}"}],
+                    "isError": True,
+                })
         # 其他方法（notifications 等）：不回响应
         logger.info("MCP 消息 method=%s（无需响应）", method)
         return None
@@ -1129,6 +1731,42 @@ class PromptsRequest(BaseModel):
     image_prompt: str | None = None
     observe_prompt: str | None = None
     force_60: bool | None = None
+
+
+class MCPToolsRequest(BaseModel):
+    enabled: dict[str, bool] | None = None  # {工具名: 开关}
+
+
+@router.get("/mcp-tools")
+async def xiaozhi_mcp_tools_get() -> dict:
+    """返回全部 MCP 工具的注册信息 + 当前开关状态（管理页「小智工具」用）。"""
+    tools = []
+    for t in _MCP_TOOLS_DEF:
+        tools.append({
+            "name": t["name"],
+            "description": t["description"],
+            "category": t.get("category", "其他"),
+            "enabled": _mcp_tool_enabled(t["name"]),
+            "default_enabled": bool(t.get("default_enabled", False)),
+        })
+    return {"ok": True, "tools": tools}
+
+
+@router.put("/mcp-tools")
+async def xiaozhi_mcp_tools_put(payload: MCPToolsRequest) -> dict:
+    """实时开关 MCP 工具（持久化；tools/list 在下次官方会话初始化时生效）。"""
+    if not payload.enabled:
+        raise HTTPException(status_code=400, detail="enabled 不能为空")
+    valid = {t["name"] for t in _MCP_TOOLS_DEF}
+    for name, val in payload.enabled.items():
+        if name not in valid:
+            raise HTTPException(status_code=400, detail=f"未知工具: {name}")
+        _mcp_enabled[name] = bool(val)
+    _save_mcp_tools_cfg()
+    return {
+        "ok": True,
+        "enabled": {t["name"]: _mcp_tool_enabled(t["name"]) for t in _MCP_TOOLS_DEF},
+    }
 
 
 @router.get("/prompts")
