@@ -2676,6 +2676,18 @@
           updateAgentBadgePosition(true)
         }
       })
+      // 兜底：若窗口稳定事件早于本脚本注册而丢失，10 秒后仍用最终坐标系显示模型
+      setTimeout(() => {
+        if (!windowStable) {
+          windowStable = true
+          if (model) {
+            model.visible = true
+            fitModel()
+            updateAgentBadgePosition(true)
+          }
+          loading.hidden = true
+        }
+      }, 10000)
       connectSocket()
     }
     await pollStatus()
