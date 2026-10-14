@@ -53,16 +53,22 @@
   不必等下一个 DSH 事件；否则会停在 idle 直到 DSH 动一下。
 
 ### 验证（可复现）
-- **自检 119/119 通过** `python -m app.dsh_adapter_selftest`：phase 映射全覆盖（含优先级
+- **自检 122/122 通过** `python -m app.dsh_adapter_selftest`：phase 映射全覆盖（含优先级
   冲突组合）、单事件映射、边车真实日志解码、**真实事件回放**（夹具由
   `app.dsh_fixture_build` 从真实会话日志脱敏抽取，84 步回放无异常且 phase 全合法）、
   **可达性断言**（枚举事实网格，断言 `phase_for_facts` 恰好产出 `DSH_FACT_PHASES` 10 个，
   且 `paused`/`heartbeat` 不由 facts 产出）、总线集成、**前端契约**（解析 `live2d-pet.js`
-  内嵌的 `PHASE_LABELS`/`WORK_PHASES`，断言 12 个 phase 都有中文标签且工作态口径一致）。
+  内嵌的 `PHASE_LABELS`/`WORK_PHASES`，断言 12 个 phase 都有中文标签且工作态口径一致；
+  已用变异测试证明该断言非空过）。
 - **端到端** `python -m app.dsh_adapter_e2e`：轮询总线观测 DSH `online` 110/110 采样、
   全程 `active=True` 且 `active_agent_id=dsh`，`state` 带真实 `tool/turn/step/session`。
+- **WS 链路** `python -m app.dsh_ws_check`：确认 DSH 的 `agent_phase` 确实经桌宠消费的
+  `/api/companion/ws` 推送（25s 窗口 8~12 条，与 HTTP 快照 `active_agent_id=dsh` 一致）。
 - **边界行为实测**：停用 → `active=False` 且身体让给小智；重新启用 → 立即恢复工作 phase；
-  杀掉边车进程 → 14s 内自动重启并恢复 online。
+  杀掉边车进程 → 14s 内自动重启并恢复 online；结构性损坏日志 → 去重报错并隔离，不再刷屏。
+- **事件覆盖缺口分析** `python -m app.dsh_gap_analysis`：对照真实事件类型与折叠逻辑，
+  列出未处理类型（当前 18 种、169 条，均为协议元数据/子会话/标题等无关类型）。
+  此工具先报出"planning 不可达"，从而暴露并修掉了 `todo_write → planning` 的接线缺失。
 - **排障接口**：新增 `GET /api/companion/agents/{id}/inspect`（`phase`/`bus_enabled`/
   `sidecar_alive`/`dsh_process_running`/`facts`/`phases`/`fact_phases`/`config_path`）。
 

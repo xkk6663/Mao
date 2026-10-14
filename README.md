@@ -448,17 +448,26 @@ DSH 会话日志(.jsonl.zstd)
 
 | DSH 真实事件 | phase | 说明 |
 |---|---|---|
-| `turn/start` | `planning` | 轮次开始 |
-| `todo_write` / `create_goal` / `update_goal` 工具 | `planning` | 规划类工具 |
+| `turn/start`；`todo_write` / `create_goal` / `update_goal`；`todo/write`；`goal/change` | `planning` | 规划意图（`plan_intent` 事实；无工具在跑时生效） |
 | `step/start`；`llm/retry` / `llm/retry-started` | `thinking` | 步骤推进 / LLM 重试 |
-| `tool/call`（调用未返回） | `executing_tool` | `active_tools > 0` |
+| `tool/call`（调用未返回） | `executing_tool` | `active_tools > 0`；**优先于 planning**（与总线 `PHASE_PRIORITY` 一致） |
 | `assistant/message` 且为**纯文字**（无 `tool-call` 块） | `streaming` | 正文输出 |
 | `ask_user_question` 工具在跑 | `waiting_input` | 等待用户作答 |
 | `approval/asked` → 未 `approval/decided` | `awaiting_approval` | 等待审批（本机已观测真实配对） |
 | `turn/end` 且 `reason.kind == "completed"` | `complete` | 单轮完成 |
+| `turn/end` 且 `reason.kind == "blocked"` | `waiting_input` | 提示词被 hook 拦下，等用户换输入 |
 | `tool/result` 的 `message.isError === true`；`turn/end` 的 `error`/`max-tokens`/`interrupted` | `error` | 失败当下（不粘轮） |
 | DSH 进程退出但日志仍在（连接中断分支） | `paused` | 连接中断待恢复 |
 | DSH 在线且当前无工作 | `idle` | 待机 |
+
+> **`turn/end` 完整词汇**（`TurnEndReasonMap`）：`completed` / `aborted` / `blocked` /
+> `error` / `max-tokens` / `interrupted` / `forked`。未列出的新值一律落到 `idle`
+> （该 map 可被下游 merge 扩展，不能让桌宠挂在工作态）。
+
+> **并发工具调用是真实的**：本机日志实测 `tool/call` 与 `tool/result` 存在 19 组
+> "同时 ≥2 个在飞"（最多 3 个并发），所以 `tool/result` **不一定**紧跟自己的
+> `tool/call`。适配器用**计数器**（`active_tools`，每个 result 递减）而非"配对"，
+> 因此并发下语义天然正确——这也是为什么不要改成按位置配对。
 
 > **12 个 phase 的"注册"与"可达路径"是两件事**（自检里有对应断言，别把二者混为一谈）：
 > `DSH_PHASES` 注册 12 个；其中 **10 个由实时事件（facts）产出**（`DSH_FACT_PHASES`）：
@@ -513,8 +522,10 @@ DSH 会话日志(.jsonl.zstd)
 **自检与验证**（backend 目录下）：
 
 ```powershell
-.venv\Scripts\python.exe -m app.dsh_adapter_selftest   # 119 项：映射/解码/回放/可达性/总线/前端契约
+.venv\Scripts\python.exe -m app.dsh_adapter_selftest   # 122 项：映射/解码/回放/可达性/总线/前端契约
 .venv\Scripts\python.exe -m app.dsh_adapter_e2e 60     # 端到端：轮询总线看 phase 实时变化
+.venv\Scripts\python.exe -m app.dsh_ws_check 30        # 桌宠消费的那条 WS 通道
+.venv\Scripts\python.exe -m app.dsh_gap_analysis       # 事件覆盖缺口（DSH 升级后跑一次）
 .venv\Scripts\python.exe -m app.dsh_fixture_build      # 从真实日志重建回放夹具（脱敏）
 ```
 
