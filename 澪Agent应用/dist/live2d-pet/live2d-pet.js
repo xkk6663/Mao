@@ -373,6 +373,10 @@
         petFpsDowngraded = true
       }
     }, undefined, -40)
+    // Agent 徽标跟随模型头顶（角色移动/点头时同步）
+    app.ticker.add(() => {
+      updateAgentBadgePosition()
+    }, undefined, -30)
   }
 
   function modelDefinition(modelId) {
@@ -1030,7 +1034,7 @@
     if (badge) return badge
     badge = document.createElement('div')
     badge.id = 'agent-badge'
-    badge.style.cssText = 'position:fixed;left:50%;top:10px;transform:translateX(-50%);' +
+    badge.style.cssText = 'position:fixed;left:0;top:0;' +
       'background:rgba(16,24,32,.72);color:#fff;font:11px/1.4 "Microsoft YaHei",sans-serif;' +
       'padding:2px 10px;border-radius:10px;pointer-events:none;z-index:9999;' +
       'opacity:0;transition:opacity .25s;white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis;'
@@ -1038,10 +1042,41 @@
     return badge
   }
 
+  let lastAgentBadgePos = null
+
+  // 徽标锚定在模型头顶上方居中，随角色移动/点头同步（模型不可用时保持上次位置）
+  function updateAgentBadgePosition() {
+    const badge = document.getElementById('agent-badge')
+    if (!badge || !model) return
+    let bounds = null
+    try { bounds = model.getBounds() } catch (_) {}
+    const valid = bounds && bounds.width > 0 && bounds.height > 0
+    if (!valid) {
+      if (!lastAgentBadgePos) return
+    } else {
+      const rect = badge.getBoundingClientRect()
+      const margin = 6
+      const badgeW = Math.max(rect.width, 30)
+      const badgeH = Math.max(rect.height, 18)
+      const left = Math.max(
+        margin,
+        Math.min(window.innerWidth - badgeW - margin, bounds.x + bounds.width / 2 - badgeW / 2),
+      )
+      const top = Math.max(
+        margin,
+        Math.min(window.innerHeight - badgeH - margin, bounds.y - badgeH - 4),
+      )
+      lastAgentBadgePos = { left: Math.round(left), top: Math.round(top) }
+    }
+    badge.style.left = `${lastAgentBadgePos.left}px`
+    badge.style.top = `${lastAgentBadgePos.top}px`
+  }
+
   function setAgentBadge(text, visible = true) {
     const badge = ensureAgentBadge()
     badge.textContent = text
     badge.style.opacity = visible ? '1' : '0'
+    if (visible) updateAgentBadgePosition()
   }
 
   function applyAgentPhase(payload) {
