@@ -15,8 +15,8 @@ from . import db
 
 
 DESKTOP_PET_CONVERSATION_ID = "desktop_pet"
-POLL_INTERVAL_SECONDS = 0.25
-FOREGROUND_INTERVAL_SECONDS = 0.75
+POLL_INTERVAL_SECONDS = 2.0
+FOREGROUND_INTERVAL_SECONDS = 5.0
 SPEECH_SOURCE_PRIORITIES: dict[str, int] = {
     "desktop_pet": 100,
     "desktop_pet_call": 105,

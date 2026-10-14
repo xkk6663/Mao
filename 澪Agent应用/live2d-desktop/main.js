@@ -811,6 +811,9 @@ function createWindow() {
   mainWindow.webContents.on('did-fail-load', (_event, code, description) => {
     log('window.load_failed', `${code} ${description}`)
   })
+  mainWindow.webContents.on('console-message', (_event, level, message) => {
+    if (level >= 2) log('renderer.console', `[level=${level}] ${String(message).slice(0, 400)}`)
+  })
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     log('renderer.gone', `${details.reason} ${details.exitCode}`)
     if (quitting) return

@@ -2040,7 +2040,9 @@ async def observation_loop() -> None:
         except Exception as exc:
             with _state_lock:
                 _last_error = str(exc)
-        await asyncio.sleep(1.0)
+        # 外循环 5s：analyze_once 内部另有 screen_analysis_interval_seconds(默认5s) 节流，
+        # 1s 轮询只是空转烧 CPU；手动 force 调用不受影响
+        await asyncio.sleep(5.0)
 
 
 def set_capture_only(enabled: bool) -> None:

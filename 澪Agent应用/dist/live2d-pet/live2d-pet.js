@@ -82,25 +82,6 @@
         unassignedMotions: [],
       },
     },
-    ren: {
-      id: 'ren',
-      name: 'Ren（レン・フォスター）',
-      url: './models/Ren/Ren.model3.json',
-      idleGroup: 'Idle',
-      tapGroup: 'TapBody',
-      source: 'built_in',
-      capabilities: {
-        motions: [{ name: 'Idle', count: 1 }, { name: 'TapBody', count: 2 }],
-        expressions: [], physics: true, pose: false,
-        lipSyncParameters: ['ParamMouthOpenY'], eyeBlinkParameters: ['ParamEyeLOpen', 'ParamEyeROpen'],
-        idleGroup: 'Idle', tapGroup: 'TapBody',
-        motionSlots: {
-          idle: 'Idle', touch: 'TapBody', think: 'Idle', speak: 'Idle', observe: 'Idle',
-          cheerful: 'TapBody', concerned: 'Idle', alert: 'TapBody', attention: 'Idle', shy: 'Idle',
-        },
-        unassignedMotions: [],
-      },
-    },
     rice: {
       id: 'rice',
       name: 'Rice（ライス）',
@@ -384,11 +365,11 @@
     })
     app.stage.sortableChildren = true
     app.ticker.add(updateModelPerformance, undefined, -50)
-    // 空闲降帧巡检：连续 30 秒无交互/无说话 → 降到 12fps；有活动立即恢复
+    // 空闲降帧巡检：连续 8 秒无交互/无说话 → 降到 9fps；有活动立即恢复
     app.ticker.add(() => {
       if (currentActivity !== 'idle') { markPetActivity(); return }
-      if (!petFpsDowngraded && performance.now() - lastPetActivityAt > 30000) {
-        app.ticker.maxFPS = 12
+      if (!petFpsDowngraded && performance.now() - lastPetActivityAt > 8000) {
+        app.ticker.maxFPS = 9
         petFpsDowngraded = true
       }
     }, undefined, -40)
@@ -1963,7 +1944,8 @@
   }
 
   window.addEventListener('mousemove', (event) => {
-    markPetActivity()
+    // 鼠标移动不标记为"活动"：否则空闲降帧（30s→12fps）永不触发，
+    // 用户操作电脑时桌宠会一直 60fps 渲染大画布，拖慢整机
     if (model && settings.live2d_follow_cursor && !cursorFocusFrame) {
       const { clientX, clientY } = event
       cursorFocusFrame = window.requestAnimationFrame(() => {
