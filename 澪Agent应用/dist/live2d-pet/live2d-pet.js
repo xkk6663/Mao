@@ -134,6 +134,7 @@
   const activityIndicator = document.getElementById('activity-indicator')
   const speechBubbleButton = contextMenu.querySelector('[data-action="speech-bubble"]')
   const speechLanguageButton = contextMenu.querySelector('[data-action="screenshot-ask"]')
+  const agentBadgeButton = contextMenu.querySelector('[data-action="agent-badge"]')
   const speechBubble = document.getElementById('speech-bubble')
   const speechBubbleText = document.getElementById('speech-bubble-text')
   const modelSelect = document.getElementById('model-select')
@@ -1029,31 +1030,71 @@
     waiting_input: 'listening',
   }
 
+  // 徽标开关（菜单可切换，localStorage 持久化）：默认开，仅在状态变化时短暂显示
+  const agentBadgeEnabled = () => localStorage.getItem('mio_agent_badge_enabled') !== '0'
+
   function ensureAgentBadge() {
     let badge = document.getElementById('agent-badge')
     if (badge) return badge
     badge = document.createElement('div')
     badge.id = 'agent-badge'
-    badge.style.cssText = 'position:fixed;left:0;top:0;' +
+    badge.style.cssText = 'position:fixed;left:0;top:0;cursor:grab;user-select:none;' +
       'background:rgba(16,24,32,.72);color:#fff;font:11px/1.4 "Microsoft YaHei",sans-serif;' +
-      'padding:2px 10px;border-radius:10px;pointer-events:none;z-index:9999;' +
+      'padding:2px 10px;border-radius:10px;z-index:9999;' +
       'opacity:0;transition:opacity .25s;white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis;'
     document.body.appendChild(badge)
+    // 拖动：解锁状态下可任意移动；双击恢复"跟随桌宠头顶"
+    badge.addEventListener('pointerdown', (e) => {
+      if (clickThroughLocked() || !agentBadgeEnabled()) return
+      e.preventDefault()
+      e.stopPropagation()
+      const rect = badge.getBoundingClientRect()
+      const offX = e.clientX - rect.left
+      const offY = e.clientY - rect.top
+      const move = (ev) => {
+        badge.style.left = `${Math.max(0, Math.min(window.innerWidth - rect.width, ev.clientX - offX))}px`
+        badge.style.top = `${Math.max(0, Math.min(window.innerHeight - rect.height, ev.clientY - offY))}px`
+      }
+      const up = (ev) => {
+        window.removeEventListener('pointermove', move)
+        window.removeEventListener('pointerup', up)
+        const r = badge.getBoundingClientRect()
+        localStorage.setItem('mio_agent_badge_manual_pos', JSON.stringify({ left: Math.round(r.left), top: Math.round(r.top) }))
+        badge.style.cursor = 'grab'
+      }
+      badge.style.cursor = 'grabbing'
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', up)
+    })
+    badge.addEventListener('dblclick', () => {
+      // 双击恢复跟随桌宠头顶
+      localStorage.removeItem('mio_agent_badge_manual_pos')
+      updateAgentBadgePosition()
+    })
     return badge
   }
 
   let lastAgentBadgePos = null
+  let agentBadgeHideTimer = null
 
-  // 徽标锚定在模型头顶上方居中，随角色移动/点头同步（模型不可用时保持上次位置）
+  // 徽标定位：手动拖动位置优先；否则锚定模型头顶上方居中。锁定时不可交互。
   function updateAgentBadgePosition() {
     const badge = document.getElementById('agent-badge')
     if (!badge || !model) return
+    // 锁定桌宠时徽标不可交互（跟随头顶仅展示）；解锁后可拖动
+    badge.style.pointerEvents = clickThroughLocked() ? 'none' : 'auto'
+    if (!agentBadgeEnabled() || badge.style.opacity === '0') return
+    let manual = null
+    try {
+      const saved = localStorage.getItem('mio_agent_badge_manual_pos')
+      if (saved) manual = JSON.parse(saved)
+    } catch (_) {}
     let bounds = null
     try { bounds = model.getBounds() } catch (_) {}
     const valid = bounds && bounds.width > 0 && bounds.height > 0
-    if (!valid) {
-      if (!lastAgentBadgePos) return
-    } else {
+    if (manual && typeof manual.left === 'number' && typeof manual.top === 'number') {
+      lastAgentBadgePos = { left: manual.left, top: manual.top }
+    } else if (valid) {
       const rect = badge.getBoundingClientRect()
       const margin = 6
       const badgeW = Math.max(rect.width, 30)
@@ -1067,16 +1108,33 @@
         Math.min(window.innerHeight - badgeH - margin, bounds.y - badgeH - 4),
       )
       lastAgentBadgePos = { left: Math.round(left), top: Math.round(top) }
+    } else if (!lastAgentBadgePos) {
+      return
     }
     badge.style.left = `${lastAgentBadgePos.left}px`
     badge.style.top = `${lastAgentBadgePos.top}px`
   }
 
   function setAgentBadge(text, visible = true) {
+    window.clearTimeout(agentBadgeHideTimer)
+    agentBadgeHideTimer = null
+    window.__lastAgentBadgeText = text
+    if (!agentBadgeEnabled()) {
+      const badge = document.getElementById('agent-badge')
+      if (badge) badge.style.opacity = '0'
+      return
+    }
     const badge = ensureAgentBadge()
     badge.textContent = text
     badge.style.opacity = visible ? '1' : '0'
-    if (visible) updateAgentBadgePosition()
+    if (visible) {
+      updateAgentBadgePosition()
+      // 状态变化后短暂展示，自动淡出（不常驻不闪烁）
+      agentBadgeHideTimer = window.setTimeout(() => {
+        const b = document.getElementById('agent-badge')
+        if (b) b.style.opacity = '0'
+      }, 4000)
+    }
   }
 
   function applyAgentPhase(payload) {
@@ -1116,6 +1174,7 @@
     }
   }
 
+  let lastBadgeSnapshotKey = ''
   async function fetchAgentsSnapshot() {
     try {
       const snapshot = await request('/api/companion/agents')
@@ -1123,7 +1182,12 @@
       const active = snapshot.active_agent
       if (active) {
         const phase = String(active.phase || 'idle')
-        setAgentBadge(`${active.name || active.agent_id} · ${PHASE_LABELS[phase] || phase}`)
+        // 仅在活跃 agent 或 phase 真变化时才亮徽标（轮询不重复闪烁）
+        const key = `${active.agent_id}|${phase}|${active.status || ''}`
+        if (key !== lastBadgeSnapshotKey) {
+          lastBadgeSnapshotKey = key
+          setAgentBadge(`${active.name || active.agent_id} · ${PHASE_LABELS[phase] || phase}`)
+        }
         const activity = PHASE_TO_ACTIVITY[phase]
         if (activity && phase !== 'heartbeat') {
           currentActivity = activity
@@ -1131,9 +1195,6 @@
           activityIndicator.className = `activity-indicator ${activity}`
           activityIndicator.classList.toggle('active', activity !== 'idle')
         }
-      }
-      if (agents.some((agent) => agent.status === 'offline')) {
-        setAgentBadge('离线', false)
       }
     } catch (_) {}
   }
@@ -1954,6 +2015,9 @@
     if (speechLanguageButton) {
       speechLanguageButton.textContent = '截图提问'
     }
+    if (agentBadgeButton) {
+      agentBadgeButton.textContent = agentBadgeEnabled() ? '隐藏状态徽标' : '显示状态徽标'
+    }
   }
 
   let lastBubblePos = null
@@ -2256,6 +2320,19 @@
       updateContextMenuLabels()
       if (enabled && voiceLifecycleActive) showSpeechBubble(activeSpeechText)
       else if (!enabled) hideSpeechBubble()
+    }
+    if (action === 'agent-badge') {
+      // 显示/隐藏 Agent 状态徽标（localStorage 持久化；切换时立即生效）
+      const nowEnabled = !agentBadgeEnabled()
+      localStorage.setItem('mio_agent_badge_enabled', nowEnabled ? '1' : '0')
+      updateContextMenuLabels()
+      if (!nowEnabled) {
+        const b = document.getElementById('agent-badge')
+        if (b) b.style.opacity = '0'
+      } else {
+        const active = window.__lastAgentBadgeText
+        if (active) setAgentBadge(active)
+      }
     }
     if (action === 'agent') await bridge.open_agent()
     if (action === 'close') await bridge.close_pet()
