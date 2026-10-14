@@ -546,14 +546,16 @@ class Follower {
     try {
       raw = fs.readFileSync(cand.logPath)
     } catch (e) {
-      emit({ kind: 'error', message: `read failed: ${e.message}`, log: cand.logPath })
+      emitErrorOnce(`read failed: ${e.message} @ ${cand.logPath}`)
       return false
     }
     let decoded
     try {
       decoded = decodeWholeLog(raw)
     } catch (e) {
-      emit({ kind: 'error', message: `decode failed: ${e.message}`, log: cand.logPath })
+      // 结构性坏日志（帧头非法等）：隔离它，别再反复附着刷屏
+      quarantined.add(cand.logPath)
+      emitErrorOnce(`decode failed: ${e.message} @ ${cand.logPath}（已隔离该日志，跳过）`)
       return false
     }
 
@@ -567,6 +569,8 @@ class Follower {
     this.facts = foldEvents(decoded.events)
     this.replayed = decoded.events.length
     this.attached = true
+    // 附着期间出现过的解码错误：用于识别"这个日志本身是坏的"
+    this.sawDecodeError = false
 
     emit({
       kind: 'ready',
@@ -607,7 +611,7 @@ class Follower {
       chunk = Buffer.alloc(len)
       fs.readSync(fd, chunk, 0, len, this.offset)
     } catch (e) {
-      emit({ kind: 'error', message: `tail read failed: ${e.message}` })
+      emitErrorOnce(`tail read failed: ${e.message} @ ${this.logPath}`)
       return
     } finally {
       if (fd !== undefined) {
@@ -624,8 +628,11 @@ class Follower {
       frames = scanned.frames
       tornStart = scanned.tornStart
     } catch (e) {
-      emit({ kind: 'error', message: `frame scan failed: ${e.message}` })
+      // 帧头非法 = 日志结构性损坏：隔离并停止跟随（主循环会改附其它会话）
+      quarantined.add(this.logPath)
+      emitErrorOnce(`frame scan failed: ${e.message} @ ${this.logPath}（已隔离该日志，跳过）`)
       this.pending = Buffer.alloc(0)
+      this.attached = false
       return
     }
 
@@ -634,7 +641,7 @@ class Follower {
       try {
         text += decodeFrame(buf.subarray(f.start, f.end))
       } catch (e) {
-        emit({ kind: 'error', message: `frame decode failed at ${f.start}: ${e.message}` })
+        emitErrorOnce(`frame decode failed at ${f.start}: ${e.message} @ ${this.logPath}`)
       }
     }
     this.pending = tornStart === undefined ? Buffer.alloc(0) : Buffer.from(buf.subarray(tornStart))
@@ -674,10 +681,24 @@ class Follower {
 const follower = new Follower()
 let lastOfflineKey = ''
 let pingAt = 0
+// 错误消息去重：同一个错误串只发一次，避免坏日志每轮刷屏
+const emittedErrors = new Set()
+// 已被判定为"坏日志"的路径：不再反复附着（否则每 8 轮重试一次刷屏）
+const quarantined = new Set()
+
+/** 去重发射 error（同消息只报一次；返回是否为首次）。 */
+function emitErrorOnce(message) {
+  const key = String(message).slice(0, 200)
+  if (emittedErrors.has(key)) return false
+  emittedErrors.add(key)
+  if (emittedErrors.size > 200) emittedErrors.clear() // 防无限增长
+  emit({ kind: 'error', message: key })
+  return true
+}
 
 /** 选目标会话（带迟滞）：避免频繁切换，但工作区/主会话更优时立即切换。 */
 function pickTarget() {
-  const cands = listCandidates()
+  const cands = listCandidates().filter((c) => !quarantined.has(c.logPath))
   if (!cands.length) return null
   if (!follower.attached) return cands[0]
   const current = cands.find((c) => c.logPath === follower.logPath)
@@ -722,10 +743,18 @@ function runOnce() {
   try {
     raw = fs.readFileSync(target.logPath)
   } catch (e) {
-    emit({ kind: 'error', message: `read failed: ${e.message}` })
+    emit({ kind: 'error', message: `read failed: ${e.message} @ ${target.logPath}` })
     return
   }
-  const decoded = decodeWholeLog(raw)
+  let decoded
+  try {
+    decoded = decodeWholeLog(raw)
+  } catch (e) {
+    // 结构性坏日志：报错但**不**写 exits 码非零之外的状态，保持 --once 可被探测调用
+    emit({ kind: 'error', message: `decode failed: ${e.message} @ ${target.logPath}` })
+    emit({ kind: 'offline', reason: 'active session log is corrupt', log: target.logPath })
+    return
+  }
   const facts = foldEvents(decoded.events)
   emit({
     kind: 'ready',
