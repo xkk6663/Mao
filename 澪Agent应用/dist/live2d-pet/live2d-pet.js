@@ -1137,14 +1137,21 @@
     }
   }
 
+  // 只展示"工作中"的细分状态；连接/断连/待机/完成等不打扰
+  const WORK_PHASES = new Set([
+    'voice', 'thinking', 'planning', 'executing_tool', 'streaming', 'waiting_input', 'awaiting_approval',
+  ])
+
   function applyAgentPhase(payload) {
     if (!payload) return
     const phase = String(payload.phase || 'idle')
     const agentName = String(payload.agent_name || payload.agent_id || 'Agent')
     const active = Boolean(payload.active)
     const label = PHASE_LABELS[phase] || phase
-    if (active) {
+    if (active && WORK_PHASES.has(phase)) {
       setAgentBadge(`${agentName} · ${label}`)
+    }
+    if (active) {
       activityIndicator.title = `${agentName} · ${label}`
     }
     const activity = PHASE_TO_ACTIVITY[phase]
@@ -1162,16 +1169,12 @@
   }
 
   function applyAgentStatus(payload) {
+    // 连接/断连/在线等状态变化不显示徽标（避免重连闪烁），仅保留状态位供后续使用
     if (!payload) return
     const agentName = String(payload.agent_name || payload.agent_id || 'Agent')
     const status = String(payload.status || 'offline')
-    if (status === 'offline') {
-      setAgentBadge(`${agentName} · 离线`, true)
-    } else if (status === 'connecting') {
-      setAgentBadge(`${agentName} · 连接中…`, true)
-    } else if (status === 'online') {
-      setAgentBadge(`${agentName} · 在线`, true)
-    }
+    const label = { offline: '离线', connecting: '连接中', online: '在线' }[status] || status
+    if (payload.active) activityIndicator.title = `${agentName} · ${label}`
   }
 
   let lastBadgeSnapshotKey = ''
@@ -1182,11 +1185,13 @@
       const active = snapshot.active_agent
       if (active) {
         const phase = String(active.phase || 'idle')
-        // 仅在活跃 agent 或 phase 真变化时才亮徽标（轮询不重复闪烁）
-        const key = `${active.agent_id}|${phase}|${active.status || ''}`
-        if (key !== lastBadgeSnapshotKey) {
-          lastBadgeSnapshotKey = key
-          setAgentBadge(`${active.name || active.agent_id} · ${PHASE_LABELS[phase] || phase}`)
+        // 仅工作细分状态且真变化时才亮徽标（轮询不重复闪烁；连接/断连/待机不显示）
+        if (WORK_PHASES.has(phase)) {
+          const key = `${active.agent_id}|${phase}`
+          if (key !== lastBadgeSnapshotKey) {
+            lastBadgeSnapshotKey = key
+            setAgentBadge(`${active.name || active.agent_id} · ${PHASE_LABELS[phase] || phase}`)
+          }
         }
         const activity = PHASE_TO_ACTIVITY[phase]
         if (activity && phase !== 'heartbeat') {
