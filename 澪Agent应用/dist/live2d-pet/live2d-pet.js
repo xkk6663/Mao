@@ -1038,75 +1038,28 @@
     if (badge) return badge
     badge = document.createElement('div')
     badge.id = 'agent-badge'
-    badge.style.cssText = 'position:fixed;left:0;top:0;cursor:grab;user-select:none;' +
+    badge.style.cssText = 'position:fixed;left:0;top:0;pointer-events:none;user-select:none;' +
       'background:rgba(16,24,32,.72);color:#fff;font:11px/1.4 "Microsoft YaHei",sans-serif;' +
       'padding:2px 10px;border-radius:10px;z-index:9999;' +
       'opacity:0;transition:opacity .25s;white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis;'
     document.body.appendChild(badge)
-    // 拖动：解锁状态下可任意移动并记住位置；拖动期间暂停每帧跟随，防止被拉回
-    badge.addEventListener('pointerdown', (e) => {
-      if (clickThroughLocked() || !agentBadgeEnabled()) return
-      e.preventDefault()
-      e.stopPropagation()
-      badgeDragging = true
-      // 拖动期间保持可见，不被自动隐藏打断
-      window.clearTimeout(agentBadgeHideTimer)
-      const rect = badge.getBoundingClientRect()
-      const offX = e.clientX - rect.left
-      const offY = e.clientY - rect.top
-      const move = (ev) => {
-        badge.style.left = `${Math.max(0, Math.min(window.innerWidth - rect.width, ev.clientX - offX))}px`
-        badge.style.top = `${Math.max(0, Math.min(window.innerHeight - rect.height, ev.clientY - offY))}px`
-      }
-      const up = (ev) => {
-        badgeDragging = false
-        window.removeEventListener('pointermove', move)
-        window.removeEventListener('pointerup', up)
-        const r = badge.getBoundingClientRect()
-        localStorage.setItem('mio_agent_badge_manual_pos', JSON.stringify({ left: Math.round(r.left), top: Math.round(r.top) }))
-        badge.style.cursor = 'grab'
-        // 拖动结束重新计时自动隐藏
-        window.clearTimeout(agentBadgeHideTimer)
-        agentBadgeHideTimer = window.setTimeout(() => {
-          const b = document.getElementById('agent-badge')
-          if (b) b.style.opacity = '0'
-        }, 4000)
-      }
-      badge.style.cursor = 'grabbing'
-      window.addEventListener('pointermove', move)
-      window.addEventListener('pointerup', up)
-    })
-    badge.addEventListener('dblclick', () => {
-      // 双击恢复跟随桌宠头顶
-      localStorage.removeItem('mio_agent_badge_manual_pos')
-      updateAgentBadgePosition()
-    })
     return badge
   }
 
   let lastAgentBadgePos = null
   let agentBadgeHideTimer = null
-  let badgeDragging = false
 
-  // 徽标定位：手动拖动位置优先；否则锚定模型头顶上方居中。锁定时不可交互。
+  // 徽标锚定在模型头顶上方居中，随角色移动/点头同步（模型不可用时保持上次位置）
   function updateAgentBadgePosition() {
     const badge = document.getElementById('agent-badge')
     if (!badge || !model) return
-    // 锁定桌宠时徽标不可交互（跟随头顶仅展示）；解锁后可拖动
-    badge.style.pointerEvents = clickThroughLocked() ? 'none' : 'auto'
-    // 拖动期间不参与每帧定位，避免把徽标拉回旧位置
-    if (badgeDragging || !agentBadgeEnabled() || badge.style.opacity === '0') return
-    let manual = null
-    try {
-      const saved = localStorage.getItem('mio_agent_badge_manual_pos')
-      if (saved) manual = JSON.parse(saved)
-    } catch (_) {}
+    if (!agentBadgeEnabled() || badge.style.opacity === '0') return
     let bounds = null
     try { bounds = model.getBounds() } catch (_) {}
     const valid = bounds && bounds.width > 0 && bounds.height > 0
-    if (manual && typeof manual.left === 'number' && typeof manual.top === 'number') {
-      lastAgentBadgePos = { left: manual.left, top: manual.top }
-    } else if (valid) {
+    if (!valid) {
+      if (!lastAgentBadgePos) return
+    } else {
       const rect = badge.getBoundingClientRect()
       const margin = 6
       const badgeW = Math.max(rect.width, 30)
@@ -1120,8 +1073,6 @@
         Math.min(window.innerHeight - badgeH - margin, bounds.y - badgeH - 4),
       )
       lastAgentBadgePos = { left: Math.round(left), top: Math.round(top) }
-    } else if (!lastAgentBadgePos) {
-      return
     }
     badge.style.left = `${lastAgentBadgePos.left}px`
     badge.style.top = `${lastAgentBadgePos.top}px`
