@@ -811,7 +811,8 @@ def _xz_status(status: str, *, error: str | None = None) -> None:
 
 
 def _sapi_tts_wav(text: str) -> bytes:
-    """Windows SAPI 本地 TTS → 16kHz 16bit mono WAV（零依赖，无需下载）"""
+    """Windows SAPI 本地 TTS → 16kHz 16bit mono WAV（零依赖，无需下载）
+    注：本机 SAPI 引擎若损坏（0x80045040），请走 _edge_tts_wav；本函数保留作 fallback。"""
     import comtypes.client
     import comtypes.gen.SpeechLib as SL
     sp = comtypes.client.CreateObject("SAPI.SpVoice")
@@ -835,6 +836,34 @@ def _sapi_tts_wav(text: str) -> bytes:
         return f.read()
 
 
+async def _edge_tts_wav(text: str, voice: str = "zh-CN-XiaoxiaoNeural") -> bytes:
+    """edge-tts（微软在线免费 TTS）→ 16kHz 16bit mono WAV。
+
+    替换损坏的 Windows SAPI 引擎（0x80045040）；音色默认晓晓，比 SAPI 的
+    Huihui 更自然。mp3 由 PyAV 解码并重采样为 16k mono，与 SAPI 输出格式完全一致，
+    所有下游（本地播放广播 / 官方 ASR 注入）无需改动。"""
+    import edge_tts
+    mp3_tmp = os.path.join(tempfile.gettempdir(), "mio_tts_tmp.mp3")
+    com = edge_tts.Communicate(str(text)[:300], voice)
+    await com.save(mp3_tmp)
+    container = av.open(mp3_tmp)
+    stream = container.streams.audio[0]
+    resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
+    chunks = []
+    for frame in container.decode(stream):
+        for f in resampler.resample(frame):
+            chunks.append(bytes(f.planes[0]))
+    container.close()
+    pcm16 = b"".join(chunks)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(pcm16)
+    return buf.getvalue()
+
+
 async def _speak_local(text: str, source: str = "vision") -> bool:
     """本地 TTS 合成 → 广播 48kHz 单声道 float32 PCM（桌宠播放+口型）。
     不依赖官方云 ASR：图片分析/屏幕观察的分析文本走本地播放——稳定、长文本完整播放、
@@ -842,7 +871,7 @@ async def _speak_local(text: str, source: str = "vision") -> bool:
     if not text:
         return False
     try:
-        wav = await asyncio.to_thread(_sapi_tts_wav, str(text)[:200])
+        wav = await _edge_tts_wav(str(text)[:200])
         with wave.open(io.BytesIO(wav), "rb") as w:
             sr = w.getframerate()
             ch = w.getnchannels()
@@ -922,7 +951,8 @@ async def _send_audio_stream(conn, text: str) -> list[bytes] | None:
     让 VAD 判定语音结束并立即触发 ASR。
     """
     try:
-        voice = await asyncio.to_thread(_wav_to_opus_frames, _sapi_tts_wav(text))
+        wav = await _edge_tts_wav(text)
+        voice = await asyncio.to_thread(_wav_to_opus_frames, wav)
         # 模拟真实麦克风语音段：前导静音(0.5s) → 语音 → 尾部静音(1s)，
         # 让官方云 VAD 检测到完整"语音开始→结束"边界才触发 ASR
         head = await asyncio.to_thread(_silence_opus_frames, 0.5)
