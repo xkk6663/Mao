@@ -2219,6 +2219,7 @@
     root.classList.remove('dragging')
     const bridge = await waitForBridge()
     await bridge.end_drag()
+    updateMousePassThrough(true)
     if (electronRuntime && wasDragged) {
       const virtual = desktopState.bounds || { x: 0, y: 0 }
       const vw = Number(virtual.width) || window.innerWidth

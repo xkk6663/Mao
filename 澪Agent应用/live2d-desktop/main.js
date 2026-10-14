@@ -455,7 +455,7 @@ function applyMainWindowMousePolicy() {
     && pt.x >= wb.x + modelBounds.x && pt.x <= wb.x + modelBounds.x + modelBounds.width
     && pt.y >= wb.y + modelBounds.y && pt.y <= wb.y + modelBounds.y + modelBounds.height
   const inWindow = pt.x >= wb.x && pt.x <= wb.x + wb.width && pt.y >= wb.y && pt.y <= wb.y + wb.height
-  if (inModel || (uiOpen && inWindow)) {
+  if (inModel || rendererInteractive || (uiOpen && inWindow)) {
     mainWindow.setIgnoreMouseEvents(false)
   } else {
     mainWindow.setIgnoreMouseEvents(true)
