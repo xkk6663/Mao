@@ -23,16 +23,15 @@ const {
 } = require('./model-discovery')
 
 const API_BASE = String(process.env.MIO_PET_API_BASE || 'http://127.0.0.1:8000').replace(/\/$/, '')
-const defaultStateRoot = fs.existsSync('D:/')
-  ? 'D:/Mio数据'
-  : path.join(process.env.LOCALAPPDATA || process.env.USERPROFILE || '.', 'MioAgent')
+// 数据目录默认落在项目根 pet-data（ASCII 路径，避开受控目录 MioAgent 的写入限制）
+const defaultStateRoot = path.join(__dirname, '..', '..', 'pet-data')
 const STATE_DIR = path.resolve(process.env.MIO_PET_STATE_DIR || path.join(defaultStateRoot, 'Live2D桌宠'))
 const MODELS_DIR = path.join(STATE_DIR, 'models')
 const STATE_PATH = path.join(STATE_DIR, 'runtime.json')
 const LOG_PATH = path.join(STATE_DIR, 'desktop-pet.log')
 const INSTANCE_DIR = process.env.MIO_PET_ALLOW_PARALLEL === '1'
   ? path.join(STATE_DIR, 'instance')
-  : path.resolve(process.env.MIO_PET_INSTANCE_DIR || path.join(path.dirname(STATE_DIR), 'Live2D桌宠进程'))
+  : path.resolve(process.env.MIO_PET_INSTANCE_DIR || path.join(path.dirname(STATE_DIR), 'pet-instance'))
 
 app.setName('MioLive2D桌宠')
 app.setAppUserModelId('local.mio.live2d.desktop')
@@ -61,6 +60,9 @@ let desiredAlwaysOnTop = true
 let clickThroughLocked = false
 let rendererInteractive = false
 let chatWindowOpen = false
+let modelBounds = null
+let uiOpen = false
+let mousePolicyTimer = null
 let topmostWatchdog = null
 let lockControlAnchor = null
 let parentWatchdog = null
@@ -441,7 +443,23 @@ function applyMainWindowMousePolicy() {
     mainWindow.setIgnoreMouseEvents(true)
     return
   }
-  mainWindow.setIgnoreMouseEvents(clickThroughLocked || !rendererInteractive, { forward: true })
+  if (clickThroughLocked) {
+    mainWindow.setIgnoreMouseEvents(true)
+    return
+  }
+  // 不再依赖渲染层鼠标事件转发（--no-sandbox 下 forward 不可靠）：
+  // 主进程轮询鼠标位置——在模型区域内或 UI 打开且鼠标在窗口内时可交互，否则穿透。
+  const pt = screen.getCursorScreenPoint()
+  const wb = mainWindow.getBounds()
+  const inModel = modelBounds
+    && pt.x >= wb.x + modelBounds.x && pt.x <= wb.x + modelBounds.x + modelBounds.width
+    && pt.y >= wb.y + modelBounds.y && pt.y <= wb.y + modelBounds.y + modelBounds.height
+  const inWindow = pt.x >= wb.x && pt.x <= wb.x + wb.width && pt.y >= wb.y && pt.y <= wb.y + wb.height
+  if (inModel || (uiOpen && inWindow)) {
+    mainWindow.setIgnoreMouseEvents(false)
+  } else {
+    mainWindow.setIgnoreMouseEvents(true)
+  }
 }
 
 function setMouseInteractive(interactive) {
@@ -722,7 +740,7 @@ function setClickThroughLocked(enabled, notifyRenderer = false) {
 
 // ---- 副屏虚拟边界（DIP 与物理像素换算，修正跨屏坐标） ----
 const SYSTEM_PS = 'pwsh.exe'
-const PHYS_BOUNDS_SCRIPT = 'C:\\Users\\xiao1\\Mio\\phys_bounds.ps1'
+const PHYS_BOUNDS_SCRIPT = path.join(__dirname, '..', '..', 'phys_bounds.ps1')
 
 function applyMainWindowVirtualBounds() {
   if (!mainWindow || mainWindow.isDestroyed()) return
@@ -792,6 +810,13 @@ function createWindow() {
   try { mainWindow.webContents.session.setCacheSizeLimit(0) } catch (_e) {}
   mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron&v=20261012-vision-v3`)
   log('window.load', `${API_BASE}/agent-app/live2d-pet/index.html`)
+  // 主进程轮询鼠标位置驱动穿透/交互（不依赖渲染层 forward 转发）
+  if (!mousePolicyTimer) {
+    mousePolicyTimer = setInterval(() => {
+      if (quitting || !mainWindow || mainWindow.isDestroyed()) return
+      applyMainWindowMousePolicy()
+    }, 120)
+  }
   // 启动后多次尝试修正跨屏虚拟边界（等渲染完成）
   ;[1200, 3200, 8000, 15000].forEach((ms) => setTimeout(applyMainWindowVirtualBounds, ms))
   mainWindow.once('ready-to-show', () => restoreWindowVisibility())
@@ -810,6 +835,9 @@ function createWindow() {
   })
   mainWindow.webContents.on('did-fail-load', (_event, code, description) => {
     log('window.load_failed', `${code} ${description}`)
+  })
+  mainWindow.webContents.on('preload-error', (_event, preloadPath, error) => {
+    log('preload.error', `${preloadPath} ${error?.message || error}`)
   })
   mainWindow.webContents.on('console-message', (_event, level, message) => {
     if (level >= 2) log('renderer.console', `[level=${level}] ${String(message).slice(0, 400)}`)
@@ -857,6 +885,17 @@ function registerIpc() {
     clickThroughLocked,
   }))
   ipcMain.on('mio-desktop:set-interactive', (_event, interactive) => setMouseInteractive(Boolean(interactive)))
+  ipcMain.on('mio-desktop:model-bounds', (_event, bounds) => {
+    modelBounds = bounds && Number.isFinite(bounds?.x) ? {
+      x: Number(bounds.x),
+      y: Number(bounds.y),
+      width: Number(bounds.width),
+      height: Number(bounds.height),
+    } : null
+  })
+  ipcMain.on('mio-desktop:ui-open', (_event, open) => {
+    uiOpen = Boolean(open)
+  })
   ipcMain.on('mio-desktop:set-click-through-locked', (_event, enabled) => {
     setClickThroughLocked(Boolean(enabled), false)
   })

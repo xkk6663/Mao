@@ -378,6 +378,11 @@
     app.ticker.add(() => {
       updateAgentBadgePosition()
     }, undefined, -30)
+    // 上报模型区域/UI 状态给主进程（穿透策略）
+    app.ticker.add(() => {
+      reportModelBounds()
+      reportUiOpen()
+    }, undefined, -25)
   }
 
   function modelDefinition(modelId) {
@@ -548,6 +553,7 @@
     if (settings.live2d_keep_visible) clampModelToViewport()
     updateSpeechBubblePosition()
     updateLockControlAnchor()
+    reportModelBounds()
   }
 
   // 底部可见下限：以屏幕高度（DIP）为准，而不是窗口高度——
@@ -2092,6 +2098,7 @@
     dragged = false
     root.classList.remove('dragging')
     updateContextMenuLabels()
+    reportUiOpen()
     if (electronRuntime) window.mioDesktop.setClickThroughLocked(locked)
     if (persist) {
       try { await persistCompanionSetting('live2d_click_through_locked', locked) } catch (_) {}
@@ -2104,6 +2111,29 @@
     if (!electronRuntime || interactiveState === interactive) return
     interactiveState = interactive
     window.mioDesktop.setInteractive(interactive)
+  }
+
+  // 主进程轮询鼠标位置驱动穿透/交互：上报模型可交互区域与 UI 打开状态（节流）
+  let lastModelBoundsReport = 0
+  function reportModelBounds() {
+    if (!electronRuntime || !window.mioDesktop || !window.mioDesktop.setModelBounds) return
+    const now = performance.now()
+    if (now - lastModelBoundsReport < 100) return
+    lastModelBoundsReport = now
+    try {
+      if (!model || !model.visible) return
+      const b = model.getBounds()
+      if (!b || b.width <= 0 || b.height <= 0) return
+      window.mioDesktop.setModelBounds({ x: b.x, y: b.y, width: b.width, height: b.height })
+    } catch (_) {}
+  }
+  let lastUiOpenReport = null
+  function reportUiOpen() {
+    if (!electronRuntime || !window.mioDesktop || !window.mioDesktop.setUiOpen) return
+    const open = !contextMenu.hidden || !sizePanel.hidden
+    if (open === lastUiOpenReport) return
+    lastUiOpenReport = open
+    window.mioDesktop.setUiOpen(open)
   }
 
   function updateMousePassThrough(force = false, event = null) {
@@ -2237,6 +2267,7 @@
     contextMenu.style.top = `${Math.max(4, Math.min(window.innerHeight - menuBounds.height - 4, event.clientY))}px`
     contextMenu.style.visibility = ''
     setInteractive(true)
+    reportUiOpen()
   })
 
   document.addEventListener('pointerdown', (event) => {
