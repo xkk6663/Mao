@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Mio Live2D renderer. The Electron process owns desktop behavior while
  * FastAPI remains the single owner of persona, memory, speech and vision.
  */
@@ -145,6 +145,9 @@
   let app = null
   let model = null
   let currentModelId = ''
+  // 模型自带"水印消除"表达式时，加载后自动应用并在每帧保持（大肥鱼等商用模型默认去水印）
+  let watermarkParamMap = null
+  let watermarkExpressionName = ''
   let modelDefinitions = { ...builtInModels }
   let desktopState = { bounds: { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight } }
   let desktopSelectedModelId = ''
@@ -495,6 +498,7 @@
       app.stage.addChild(model)
       currentModelId = definition.id
       lastAppliedExpressionEmotion = ''
+      applyWatermarkRemoval(definition)
       fitModel()
       nextIdleMotionAt = Date.now() + 3500
       loading.hidden = true
@@ -572,6 +576,38 @@
     try {
       model?.internalModel?.coreModel?.setParameterValueById(id, value, weight)
     } catch (_) {}
+  }
+
+  // 模型自带"水印消除"表达式时：解析其参数表并立即应用一次；之后由
+  // updateModelPerformance 每帧保持，避免表情/动作切换重置参数后水印复现。
+  async function applyWatermarkRemoval(definition) {
+    watermarkParamMap = null
+    watermarkExpressionName = ''
+    if (!definition || !model?.expression) return
+    const expressions = Array.isArray(definition.capabilities?.expressions)
+      ? definition.capabilities.expressions
+      : []
+    const entry = expressions.find((item) => /水印|watermark|去水印/i.test(String(item?.Name || '')))
+    if (!entry) return
+    try {
+      const fileUrl = new URL(String(entry.File), definition.url).toString()
+      const response = await fetch(fileUrl)
+      if (!response.ok) return
+      const payload = await response.json()
+      const params = Array.isArray(payload?.Parameters) ? payload.Parameters : []
+      const map = {}
+      for (const item of params) {
+        if (item && typeof item.Id === 'string' && item.Id) {
+          map[item.Id] = Number(item.Value ?? 0)
+        }
+      }
+      if (!Object.keys(map).length) return
+      watermarkParamMap = map
+      watermarkExpressionName = String(entry.Name || '')
+      Promise.resolve(model.expression(watermarkExpressionName)).catch(() => {})
+    } catch (error) {
+      console.debug('[MioLive2D] watermark expression load failed', error)
+    }
   }
 
   function addParameter(id, value, weight = 1) {
@@ -835,6 +871,12 @@
     mouthLevel += (nextMouth - mouthLevel) * (nextMouth > mouthLevel ? 0.36 : 0.16)
     maxMouthLevel = Math.max(maxMouthLevel, mouthLevel)
     setParameter('ParamMouthOpenY', mouthLevel)
+    // 保持水印消除参数：表情/动作切换会重置参数，这里每帧强制拉回（无水印模型时为空表，无开销）
+    if (watermarkParamMap) {
+      for (const paramId in watermarkParamMap) {
+        setParameter(paramId, watermarkParamMap[paramId])
+      }
+    }
   }
 
   function playMotion(group, index, { force = false } = {}) {
@@ -1044,28 +1086,75 @@
     if (badge) return badge
     badge = document.createElement('div')
     badge.id = 'agent-badge'
-    badge.style.cssText = 'position:fixed;left:0;top:0;pointer-events:none;user-select:none;' +
+    badge.style.cssText = 'position:fixed;left:0;top:0;cursor:grab;user-select:none;' +
       'background:rgba(16,24,32,.72);color:#fff;font:11px/1.4 "Microsoft YaHei",sans-serif;' +
       'padding:2px 10px;border-radius:10px;z-index:9999;' +
       'opacity:0;transition:opacity .25s;white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis;'
     document.body.appendChild(badge)
+    // 拖动：解锁状态下可任意移动并记住位置；拖动期间暂停每帧跟随，防止被拉回
+    badge.addEventListener('pointerdown', (e) => {
+      if (clickThroughLocked() || !agentBadgeEnabled()) return
+      e.preventDefault()
+      e.stopPropagation()
+      badgeDragging = true
+      // 拖动期间保持可见，不被自动隐藏打断
+      window.clearTimeout(agentBadgeHideTimer)
+      const rect = badge.getBoundingClientRect()
+      const offX = e.clientX - rect.left
+      const offY = e.clientY - rect.top
+      const move = (ev) => {
+        badge.style.left = `${Math.max(0, Math.min(window.innerWidth - rect.width, ev.clientX - offX))}px`
+        badge.style.top = `${Math.max(0, Math.min(window.innerHeight - rect.height, ev.clientY - offY))}px`
+      }
+      const up = (ev) => {
+        badgeDragging = false
+        window.removeEventListener('pointermove', move)
+        window.removeEventListener('pointerup', up)
+        const r = badge.getBoundingClientRect()
+        localStorage.setItem('mio_agent_badge_manual_pos', JSON.stringify({ left: Math.round(r.left), top: Math.round(r.top) }))
+        badge.style.cursor = 'grab'
+        // 拖动结束重新计时自动隐藏
+        window.clearTimeout(agentBadgeHideTimer)
+        agentBadgeHideTimer = window.setTimeout(() => {
+          const b = document.getElementById('agent-badge')
+          if (b) b.style.opacity = '0'
+        }, 4000)
+      }
+      badge.style.cursor = 'grabbing'
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', up)
+    })
+    badge.addEventListener('dblclick', () => {
+      // 双击恢复跟随桌宠头顶
+      localStorage.removeItem('mio_agent_badge_manual_pos')
+      updateAgentBadgePosition()
+    })
     return badge
   }
 
   let lastAgentBadgePos = null
   let agentBadgeHideTimer = null
+  let badgeDragging = false
 
-  // 徽标锚定在模型头顶上方居中，随角色移动/点头同步（模型不可用时保持上次位置）
+  // 徽标定位：手动拖动位置优先；否则锚定模型头顶上方居中。锁定时不可交互。
   function updateAgentBadgePosition() {
     const badge = document.getElementById('agent-badge')
     if (!badge || !model) return
-    if (!agentBadgeEnabled() || badge.style.opacity === '0') return
+    // 锁定桌宠时徽标不可交互（跟随头顶仅展示）；解锁后可拖动
+    badge.style.pointerEvents = clickThroughLocked() ? 'none' : 'auto'
+    // 拖动期间不参与每帧定位，避免把徽标拉回旧位置
+    if (badgeDragging || !agentBadgeEnabled() || badge.style.opacity === '0') return
+    let manual = null
+    try {
+      const saved = localStorage.getItem('mio_agent_badge_manual_pos')
+      if (saved) manual = JSON.parse(saved)
+    } catch (_) {}
     let bounds = null
     try { bounds = model.getBounds() } catch (_) {}
     const valid = bounds && bounds.width > 0 && bounds.height > 0
-    if (!valid) {
-      if (!lastAgentBadgePos) return
-    } else {
+    if (manual && typeof manual.left === 'number' && typeof manual.top === 'number') {
+      lastAgentBadgePos = { left: manual.left, top: manual.top }
+    } else if (valid) {
       const rect = badge.getBoundingClientRect()
       const margin = 6
       const badgeW = Math.max(rect.width, 30)
@@ -1079,6 +1168,8 @@
         Math.min(window.innerHeight - badgeH - margin, bounds.y - badgeH - 4),
       )
       lastAgentBadgePos = { left: Math.round(left), top: Math.round(top) }
+    } else if (!lastAgentBadgePos) {
+      return
     }
     badge.style.left = `${lastAgentBadgePos.left}px`
     badge.style.top = `${lastAgentBadgePos.top}px`
@@ -2098,7 +2189,6 @@
     dragged = false
     root.classList.remove('dragging')
     updateContextMenuLabels()
-    reportUiOpen()
     if (electronRuntime) window.mioDesktop.setClickThroughLocked(locked)
     if (persist) {
       try { await persistCompanionSetting('live2d_click_through_locked', locked) } catch (_) {}
@@ -2219,7 +2309,6 @@
     root.classList.remove('dragging')
     const bridge = await waitForBridge()
     await bridge.end_drag()
-    updateMousePassThrough(true)
     if (electronRuntime && wasDragged) {
       const virtual = desktopState.bounds || { x: 0, y: 0 }
       const vw = Number(virtual.width) || window.innerWidth
@@ -2263,12 +2352,12 @@
     contextMenu.style.visibility = 'hidden'
     contextMenu.style.left = '4px'
     contextMenu.style.top = '4px'
+    reportUiOpen()
     const menuBounds = contextMenu.getBoundingClientRect()
     contextMenu.style.left = `${Math.max(4, Math.min(window.innerWidth - menuBounds.width - 4, event.clientX))}px`
     contextMenu.style.top = `${Math.max(4, Math.min(window.innerHeight - menuBounds.height - 4, event.clientY))}px`
     contextMenu.style.visibility = ''
     setInteractive(true)
-    reportUiOpen()
   })
 
   document.addEventListener('pointerdown', (event) => {
