@@ -5,6 +5,32 @@
 
 ---
 
+## v3.1（2026-10-14）· 跨 Agent 桌宠迭代
+
+**主线**：桌宠定位升级为**跨 Agent 的"脸"**——后端统一状态总线 + 可插拔适配器（小智/DSH/Octop），桌宠只认标准 phase，即换即用无需重启。
+
+### 跨 Agent 统一状态总线（agent_bus_service.py）
+- **12 个标准 phase**：idle/planning/thinking/executing_tool/streaming/waiting_input/voice/complete/error/paused/awaiting_approval/heartbeat
+- **活跃聚焦调度**：按 phase 优先级决定"谁占据桌宠身体"（voice 最优先、idle 最低）；同 Agent 同 phase 300ms 节流；非活跃静默 8s 允许更高优先级抢占；`awaiting_approval` 借鉴 Paperclip 审批流
+- **心跳在线检测**：适配器定期上报，超 30s 判离线并广播快照
+- **启用状态持久化**：`agent_bus_config.json`（运行时生成，已 gitignore）
+
+### 适配器层（可插拔，原生协议全部隔离）
+- **小智插桩**（routes/xiaozhi.py）：`_xz_register/_xz_emit/_xz_status` 三 helper 全事件接入——hello→online+idle、goodbye→paused、MCP→executing_tool、STT→waiting_input、LLM→streaming、TTS→voice、TTS 结束→complete、断线→offline+paused；重连成功显式清除 error
+- **DSH 适配器**（dsh_adapter.py）：DeepSeek Harness 事件 → phase 映射（turn/step/tool/text/approval 状态机），配置即启用
+- **Octop 适配器**（octop_adapter.py）：TencentCloud Octop WS 事件 → phase 映射，配置即启用
+
+### 渲染端与前端
+- **phase → 表现映射**（live2d-pet.js）：PHASE_LABELS / PHASE_TO_ACTIVITY（speaking/responding/listening/idle）/ PHASE_MOTION_HINT（表情动作提示词）
+- **Agent 状态徽标**：工作细分状态（思考/执行工具/回复/说话等）在桌宠头顶短暂展示 4 秒自动淡出；**连接/断连不显示**（消除小智重连闪烁）；右键菜单可开关（localStorage `mio_agent_badge_enabled`）
+- **Agent 管理页**（agent-switch-inject.js）：导航项 + 状态卡片 + 能力标签 + 启用开关；停用 Agent 只显示"未启用"+配置引导
+- **agents API**：`GET /api/companion/agents`（总线快照）、`POST /api/companion/agents/{id}/enabled`（即换即用）
+
+### 接入新 Agent 的最小改动
+- 新建适配器文件（照 dsh_adapter 骨架）→ `main.py` 后台任务注册一行 → 项目根 `xx_config.json` + gitignore；前端零改动（详见 README 第六章「Agent 接入指南」）
+
+---
+
 ## v3.0（2026-10-13）· 设置与工具管理重构版
 
 **主线**：设置界面彻底重建（弃用原版 Mio 设置体系）+ 本地 MCP 工具集中管理 + 桌宠完全自由拖拽，发布版 v3.0。
