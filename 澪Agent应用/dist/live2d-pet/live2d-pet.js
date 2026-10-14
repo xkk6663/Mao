@@ -2647,12 +2647,20 @@
         await setClickThroughLocked(enabled, true)
       })
       // Electron 穿透模式下渲染层收不到 mousemove：主进程高频推送全局鼠标位置，
-      // 渲染层直接喂给 pixi-live2d 的视线聚焦（focus 内部自带平滑，响应度由推送频率保证）
+      // 渲染层喂给 pixi-live2d 的视线聚焦。关键：把鼠标坐标压缩到模型周围区域再
+      // focus——否则全屏坐标会映射成大幅转头/点头，看起来像"多动症"。
       window.mioDesktop.onMouseMove((pos) => {
         if (!settings.live2d_follow_cursor || !model) return
         const x = Number(pos?.x)
         const y = Number(pos?.y)
-        if (Number.isFinite(x) && Number.isFinite(y)) model.focus(x, y)
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return
+        const cx = model.x + model.width / 2
+        const cy = model.y + model.height / 2
+        const rangeX = Math.max(320, model.width * 1.1)
+        const rangeY = Math.max(260, model.height * 1.3)
+        const fx = Math.max(cx - rangeX, Math.min(cx + rangeX, x))
+        const fy = Math.max(cy - rangeY, Math.min(cy + rangeY, y))
+        model.focus(fx, fy)
       })
       connectSocket()
     }
