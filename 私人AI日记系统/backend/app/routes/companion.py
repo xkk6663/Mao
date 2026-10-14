@@ -24,6 +24,7 @@ from .. import (
     call_session_service,
     companion_service,
     db,
+    dsh_adapter,
     local_vision_service,
     pet_event_service,
     route_observation_service,
@@ -445,6 +446,21 @@ async def companion_status():
 async def companion_agents():
     """跨 Agent 总线快照：全部 Agent 状态 + 当前活跃者。"""
     return agent_bus_service.snapshot()
+
+
+@router.get("/agents/{agent_id}/inspect")
+async def companion_agent_inspect(agent_id: str):
+    """单个 Agent 的诊断快照（脱离总线也能看内部细节）。
+
+    比 ``/agents`` 快照更深：对 DSH 会返回边车存活/错误、DSH 进程是否在跑、最近折叠出的
+    facts，以及本适配器注册的 phase 词汇。排障时先看这里。
+    """
+    if agent_id == dsh_adapter.AGENT_ID:
+        return dsh_adapter.inspect_current()
+    agent = agent_bus_service.get(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"未知的 agent: {agent_id}")
+    return agent.to_dict()
 
 
 class AgentEnableRequest(BaseModel):

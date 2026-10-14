@@ -93,11 +93,29 @@
 
 | 文件 | 用途 |
 |---|---|
-| `routes\companion.py` | 桌宠状态 / 截图 / 窗口拓扑 |
+| `routes\companion.py` | 桌宠状态 / 截图 / 窗口拓扑 / **Agent 总线接口**（`/agents`、`/agents/{id}/enabled`） |
 | `routes\agent.py` | 原版 agent 接口（**bootstrap/messages 仍被前端使用**，勿删） |
 | `app\desktop_pet_live2d.py` 等 | 桌宠/观察/屏幕服务 |
 
-### 3.3 历史文件
+### 3.3 跨 Agent 状态总线（v3.1+）
+
+| 文件 | 用途 |
+|---|---|
+| `app\agent_bus_service.py` | **统一总线**：12 phase 枚举、活跃聚焦调度、心跳在线检测、WS 广播 |
+| `app\dsh_adapter.py` | **DSH 适配器**：facts → phase 策略层；边车管理；`--once` 自检入口 `inspect_current()` |
+| `app\dsh_log_stream.mjs` | **DSH 边车**（Node，零依赖）：逐帧解 zstd 会话日志 → 折叠 facts → NDJSON |
+| `app\octop_adapter.py` | Octop 适配器（占位骨架，配置即启用） |
+| `app\dsh_adapter_selftest.py` | DSH 自检 104 项（映射/解码/真实回放/总线） |
+| `app\dsh_adapter_e2e.py` | DSH 端到端验证（轮询总线看 phase 实时变化） |
+| `app\dsh_fixture_build.py` | 从真实 DSH 日志重建回放夹具 `dsh_events_fixture.json` |
+| `私人AI日记系统\dsh_config.json` | DSH 接入配置（已 gitignore；`enabled` 为部署就绪开关） |
+| `私人AI日记系统\agent_bus_config.json` | 总线启用状态持久化（Agent 页开关；已 gitignore） |
+
+**DSH 事件源**（只读，别写）：
+`C:\Users\xiao1\.dsh\sessions\<cwd-slug>\<session-id>\session.v4.jsonl.zstd`
+——拼接式 zstd 帧的 JSONL，必须逐帧解（Node `zlib.zstdDecompressSync` 可用，Python venv 无 zstd 绑定）。
+
+### 3.4 历史文件
 
 - `C:\Users\xiao1\Mao\xiaozhi_chat_history.json`（会话历史持久化）
 - `C:\Users\xiao1\Mao\xiaozhi_device.json`（小智设备绑定）
@@ -115,6 +133,9 @@
 | 启动日志 | `start_mio.log` |
 | 副屏边界 | `C:\Users\xiao1\Mao\phys_bounds.ps1`（枚举真实显示器，勿移） |
 | 调试角标 | MIO 管理窗口左下角：🟢 输入区+按钮 OK / 🟡 缺按钮 / 🔴 没找到输入区 |
+| DSH 自检 | `cd 私人AI日记系统\backend` → `.venv\Scripts\python.exe -m app.dsh_adapter_selftest` |
+| DSH 端到端 | `.venv\Scripts\python.exe -m app.dsh_adapter_e2e 60`（轮询总线看 phase 变化） |
+| DSH 边车手测 | `node 私人AI日记系统\backend\app\dsh_log_stream.mjs --once`（打印当前会话与 facts） |
 
 ---
 

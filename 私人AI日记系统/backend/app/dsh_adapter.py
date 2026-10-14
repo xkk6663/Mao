@@ -1,22 +1,88 @@
-"""DSH（DeepSeek Harness）适配器：把 agent/* 事件翻译成统一 phase。
+"""DSH（DeepSeek Harness）适配器：把 DSH 实时工作状态翻译成统一 phase。
 
-DSH 是单 Agent 运行时（Node.js），事件模型为 agent/* 全量事件 + turn/step 状态机，
-外部宿主集成是一等公民（参考 deepseek-ai/deepseek-harness 仓库 docs/architecture.md）。
+接入方式（真实事件摄取，非占位框架）
+------------------------------------
+DSH 是 Electron + Node 的单 Agent 运行时。它的工作状态有两个可编程面：
 
-本适配器为"配置就绪 + 可插拔"框架：
-- 未部署/未配置时：注册进总线并标记 offline，错误信息说明如何启用；
-- 部署并填写配置后：后台循环检测连接 → 订阅事件 → 按下方映射表 emit phase；
-- 桌宠只认 phase，DSH 具体协议细节全部隔离在本文件。
+1. **会话事件日志（本适配器采用）**——DSH 把每个会话的完整事件流持久化为
+   拼接式 Zstandard 帧的 JSONL 文件::
 
-phase 映射（turn/step → 统一枚举）：
-  session/start      → idle
-  turn/start         → planning
-  step/start         → thinking
-  tool_call          → executing_tool
-  text/stream        → streaming
-  awaiting_approval  → awaiting_approval
-  turn/end           → complete
-  error              → error
+       <DSH_HOME>/sessions/<cwd-slug>/<session-id>/session.v4.jsonl.zstd
+
+   事件词汇是稳定的官方 ``SessionEvent`` 词汇（``turn/start``、``step/start``、
+   ``tool/call``、``tool/result``、``assistant/message``、``approval/asked``、
+   ``llm/retry``、``turn/end`` …），粒度最细，且**不需要 token/握手**。
+
+2. **Host Cordis 事件流**（``ws://127.0.0.1:<port>/api/remote.mux``，``$events``）
+   ——实时推送 ``api-session/status``、``api-session/error`` 等粗粒度事件，但需要
+   browser-session 凭据签名 cookie，且**不含 per-turn/step/tool 粒度**。
+
+本适配器走 (1)：由零依赖 Node 边车 ``dsh_log_stream.mjs`` 解码 zstd 帧并把事件
+折叠成**客观事实(facts)**，Python 侧只做 facts → phase 的策略映射。这样
+DSH 协议细节（帧格式、事件字段）全部隔离在边车里，总线与桌宠只认 phase。
+
+进程拓扑::
+
+    DSH 会话日志(.jsonl.zstd)
+        └─ node dsh_log_stream.mjs        （协议侧：解码 + 折叠 facts）
+              └─ NDJSON over stdout
+                    └─ dsh_adapter.py      （策略侧：facts → phase → 总线）
+                          └─ agent_bus_service → WS agent_phase → 桌宠
+
+phase 映射（facts → 12 个标准 phase 中 DSH 能显示的那些）
+--------------------------------------------------------
+DSH 原生能真实驱动的 phase（本适配器全部注册）：
+
+  ==================== ============================================
+  phase                触发条件
+  ==================== ============================================
+  ``planning``         轮次开始；或规划类工具（todo_write/create_goal）
+  ``thinking``         步骤开始；工具结果返回后继续推理；LLM 重试中
+  ``executing_tool``   工具调用进行中（``active_tools > 0``）
+  ``streaming``        助手产出正文文本（``assistant/message`` 含 text）
+  ``waiting_input``    等待用户交互（``ask_user_question`` 工具在跑）
+  ``awaiting_approval`` ``approval/asked`` 后尚未 ``approval/decided``
+  ``complete``         ``turn/end`` 且 ``reason.kind == "completed"``
+  ``error``            工具失败 / ``turn/end`` 异常结束 / ``llm/retry``
+  ``paused``           DSH 进程退出但日志仍在（连接中断）
+  ``idle``             DSH 在线且当前无工作
+  ``heartbeat``        保活（不改变桌宠动画）
+  ==================== ============================================
+
+**关于 ``voice``（前向兼容，非 DSH 原生）**：本版 DSH 没有任何 TTS/语音合成
+服务（asar 内无 tts 包；官方 README 明确 "no speech synthesis"），语音输入
+（STT）的转写结果只进输入框草稿，提交后与打字产生的 ``user/message`` 完全
+不可区分，因此**录音/播报状态在 DSH 侧不可观测**。本适配器仍保留 ``voice``
+phase 与 ``VOICE_TOOLS`` 映射：一旦部署了名为 ``speak``/``tts`` 的工具，
+桌宠即自动按"说话中"呈现，无需改代码。``capabilities.voice`` 如实报 False。
+
+**关于事件摄取通道（实测选型）**：DSH 有两个可编程面，均在本机实测过：
+
+  ===================================== ========== ==========================
+  通道                                  实测延迟   取舍
+  ===================================== ========== ==========================
+  会话日志 ``session.v4.jsonl.zstd``    p50 215ms  **本适配器采用**：无需鉴权、
+    （拼接 zstd 帧）                     p90 237ms  无需发现端口、DSH 重启不失效
+  Host WS ``/api/remote.mux``           p50 10ms   latency 更低且能拿到
+    → ``session/follow``                 p90 78ms   assistant-stream 增量，
+                                                    但需凭据 cookie 签名 + 端口发现
+                                                    （端口是临时分配的，未持久化）
+  ===================================== ========== ==========================
+
+两者都能拿到全部 12 个事件（实测同一段时间各 12 条、seq 完全一致）。状态类
+展示 215ms 已远优于 300ms 节流窗口与人眼感知，而日志通道在 DSH 重启/换端口/
+无 GUI 时都不失效，故取日志为主通道；WS 快通道留作后续可选加速项。
+
+配置（项目根 ``dsh_config.json``，已入 .gitignore）::
+
+    {
+      "enabled": true,
+      "sessions_root": "",          # 留空 = <DSH_HOME>/sessions
+      "workspace": "",              # 留空 = 本项目根（只跟随本项目会话）
+      "session_id": "",             # 留空 = 自动选活跃会话（优先主会话）
+      "node_path": "",              # 留空 = 自动探测 node
+      "poll_ms": 400
+    }
 """
 from __future__ import annotations
 
@@ -24,6 +90,10 @@ import asyncio
 import json
 import logging
 import os
+import shutil
+import subprocess
+import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -34,19 +104,117 @@ logger = logging.getLogger(__name__)
 AGENT_ID = "dsh"
 AGENT_NAME = "DSH"
 
-# DSH 官方 Web UI 默认端口 3080（部署后可改）
-DEFAULT_DSH_BASE_URL = os.environ.get("MAO_DSH_URL", "http://127.0.0.1:3080")
+# DSH 的 12 phase 中，DSH 原生事件能真实驱动的“工作细分状态”。
+# 桌宠徽标只展示这些 phase（与前端 WORK_PHASES 一致）。
+#
+# 逐项对应 DSH 真实事件（均经真实会话日志验证）：
+#   planning          ← turn/start；todo_write / create_goal / update_goal
+#   thinking          ← step/start；tool/result 之后继续推理；llm/retry(-started)
+#   executing_tool    ← tool/call（active_tools > 0，即调用尚未返回）
+#   streaming         ← assistant/message 且为**纯文字**（无 tool-call 块）
+#   waiting_input     ← ask_user_question 工具在跑（DSH 真实存在的工具，见 dsh-tool-ask-user）
+#   awaiting_approval ← approval/asked 后未 approval/decided（真实审批流，
+#                        本机日志已观测到 asked→decided 配对）
+#   voice             ← 仅当部署了 speak/tts 类工具时（DSH 本版无 TTS，见模块文档）
+DSH_WORK_PHASES: tuple[str, ...] = (
+    "planning",
+    "thinking",
+    "executing_tool",
+    "streaming",
+    "waiting_input",
+    "voice",
+    "awaiting_approval",
+)
+# 非工作态（不显示徽标，但仍驱动桌宠回到待机等基础动画）。
+DSH_IDLE_PHASES: tuple[str, ...] = ("idle", "complete", "error", "paused")
+# 本适配器在总线上的完整 phase 词汇（12 个）。
+#
+# 注意"注册"与"可达路径"是两件事，别混：
+#   - 10 个由 ``phase_for_facts`` 从实时事件产出（见 DSH_WORK_PHASES + idle/complete/error）；
+#   - ``paused`` 不走 facts——它由「DSH 进程还在但会话不可用」的连接中断分支直接 emit；
+#   - ``heartbeat`` 刻意**不**作为 phase emit：总线的 ``emit()`` 对 heartbeat 不广播
+#     agent_phase，且会把 agent.phase 写成 "heartbeat" 污染 Agent 页显示；保活一律走
+#     ``agent_bus_service.heartbeat()``（这正是它存在的意义）。
+DSH_PHASES: tuple[str, ...] = DSH_WORK_PHASES + DSH_IDLE_PHASES + ("heartbeat",)
+# 可由实时事件（facts）直接产出的 phase 集合。
+DSH_FACT_PHASES: tuple[str, ...] = DSH_WORK_PHASES + ("idle", "complete", "error")
+
+# 边车脚本（与本体同目录）
+SIDECAR_NAME = "dsh_log_stream.mjs"
+
+# DSH 进程名（用于在线/离线判定与 paused 上报）
+DSH_PROCESS_NAMES = ("DeepSeek Harness.exe", "dsh.exe")
+
+# 事件驱动的节流：phase 变化才上报；同一 phase 最长这么多久补一次事件
+REEMIT_MS = 2500
+# 边车静默超过该时长视为异常，重启边车
+SIDECAR_STALE_MS = 20_000
+# 读取超时（等待边车首行）
+STARTUP_TIMEOUT_S = 20.0
+
+
+# ---------------------------------------------------------------------------
+# 配置
+# ---------------------------------------------------------------------------
+def config_search_paths() -> list[Path]:
+    """``dsh_config.json`` 的候选位置（按优先级）。
+
+    本项目有两层"根"：``settings.project_root``（子项目 ``私人AI日记系统``，
+    与 ``agent_bus_config.json`` 同级）和 ``settings.workspace_root``（仓库根，
+    ``README.md`` / ``xiaozhi_device.json`` 所在）。两种叫法都有人用，故两处都找。
+    """
+    from .config import settings
+
+    paths: list[Path] = []
+    for base in (
+        getattr(settings, "project_root", None),
+        getattr(settings, "workspace_root", None),
+    ):
+        if base is None:
+            continue
+        cand = Path(base) / "dsh_config.json"
+        if cand not in paths:
+            paths.append(cand)
+    return paths
 
 
 def dsh_config_path() -> Path:
-    from .config import settings
-    return settings.project_root / "dsh_config.json"
+    """实际生效的配置文件路径：已存在的优先，否则返回首选写入位置。"""
+    paths = config_search_paths()
+    for p in paths:
+        try:
+            if p.exists():
+                return p
+        except OSError:
+            continue
+    return paths[0]
+
+
+def default_sessions_root() -> Path:
+    """DSH 会话根目录：DSH_HOME 或 ~/.dsh 下的 sessions/。"""
+    dsh_home = os.environ.get("DSH_HOME") or os.environ.get("MAO_DSH_HOME")
+    base = Path(dsh_home) if dsh_home else Path.home() / ".dsh"
+    return base / "sessions"
+
+
+def default_workspace() -> str:
+    """默认关注的工作区；留空 = 不限定，由边车选"最近活跃的主会话"。
+
+    桌宠反映的是"DSH 整体在干什么"，因此不硬绑某个目录更稳妥：DSH 只跑一个实例，
+    换工作区时会话目录随之变化，边车会自动跟到新的活跃主会话。
+    """
+    return ""
 
 
 def load_config() -> dict[str, Any]:
-    default = {
+    default: dict[str, Any] = {
         "enabled": False,
-        "base_url": DEFAULT_DSH_BASE_URL,
+        "sessions_root": "",
+        "workspace": "",
+        "session_id": "",
+        "node_path": "",
+        "poll_ms": 400,
+        "base_url": "",
         "api_key": "",
         "ws_url": "",
     }
@@ -61,67 +229,756 @@ def load_config() -> dict[str, Any]:
     return default
 
 
-def parse_dsh_event(event: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
-    """DSH 事件 → (phase, state)。事件字段以 DSH 仓库 docs/architecture.md 为准。"""
-    if not isinstance(event, dict):
-        return None
-    etype = str(event.get("type") or "").lower()
-    payload = event.get("payload")
-    if isinstance(payload, dict) and "turn" in etype:
-        return "planning", {"turn_id": str(payload.get("id") or "")[:40]}
-    if etype == "step/start":
-        return "thinking", {"step": str(payload.get("step") or "")[:40]}
-    if etype in {"tool/call", "tool/start"}:
-        return "executing_tool", {"tool": str(payload.get("name") or "")[:60]}
-    if etype in {"text/stream", "stream/start"}:
-        return "streaming", {"text": str(payload.get("text") or "")[:200]}
-    if etype in {"awaiting_approval", "approval/required"}:
-        return "awaiting_approval", {}
-    if etype in {"turn/end", "turn/complete"}:
-        return "complete", {}
-    if etype == "error":
-        return "error", {"message": str(payload or "")[:200]}
-    if etype in {"session/start", "session/ready"}:
-        return "idle", {}
+def resolve_node(config: dict[str, Any]) -> str | None:
+    """定位 node 可执行文件：配置 > PATH > DSH 自带 runtime > 常见安装位置。"""
+    configured = str(config.get("node_path") or "").strip()
+    if configured:
+        p = Path(configured)
+        return str(p) if p.exists() else None
+
+    found = shutil.which("node")
+    if found:
+        return found
+
+    candidates: list[Path] = []
+    dsh_home = os.environ.get("DSH_HOME") or str(Path.home() / ".dsh")
+    runtime_root = Path(dsh_home) / "dsh-runtimes"
+    if runtime_root.exists():
+        try:
+            for child in runtime_root.iterdir():
+                candidates.append(child / "dependencies" / "node" / "bin" / "node.exe")
+                candidates.append(child / "dependencies" / "node" / "node.exe")
+        except OSError:
+            pass
+    candidates.extend(
+        [
+            Path(r"C:\Program Files\nodejs\node.exe"),
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "nodejs" / "node.exe",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "nodejs" / "node.exe",
+        ]
+    )
+    for c in candidates:
+        try:
+            if c.is_file():
+                return str(c)
+        except OSError:
+            continue
     return None
 
 
-async def dsh_adapter_loop() -> None:
-    """DSH 适配器后台循环：注册、检测连接、订阅事件。
+# ---------------------------------------------------------------------------
+# DSH 进程检测（纯标准库 ctypes，零依赖）
+# ---------------------------------------------------------------------------
+def dsh_process_running() -> bool | None:
+    """DSH 桌面进程是否在运行。None = 无法判定（非 Windows 或 API 不可用）。"""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
 
-    部署步骤（启用后生效）：
-      1. 按 DSH 官方文档部署 deepseek-harness（npm install + 配置模型）；
-      2. 在项目根 dsh_config.json 填 base_url（默认 3080 端口）；
-      3. 在桌宠设置页启用 DSH（或把 dsh_config.json 的 enabled 置 true）。
-    """
-    agent_bus_service.register(
-        AGENT_ID,
-        AGENT_NAME,
-        "dsh_adapter",
-        capabilities={"voice": False, "text": True, "screen": False, "mcp": False, "observe": False},
-    )
-    last_status = ""
-    while True:
+        class PROCESSENTRY32W(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+                ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD),
+                ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", ctypes.c_long),
+                ("dwFlags", wintypes.DWORD),
+                ("szExeFile", wintypes.WCHAR * 260),
+            ]
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        k32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        k32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+        k32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+        invalid = ctypes.c_void_p(-1).value
+        snap = k32.CreateToolhelp32Snapshot(0x00000002, 0)
+        if snap == invalid:
+            return None
+        wanted = {n.lower() for n in DSH_PROCESS_NAMES}
         try:
-            config = load_config()
-            enabled = bool(config.get("enabled")) and bool(config.get("ws_url") or config.get("base_url"))
-            if not enabled:
-                agent_bus_service.set_status(
-                    AGENT_ID,
-                    "offline",
-                    error="DSH 未启用：按 dsh_config.json 配置 base_url/ws_url 并在设置页开启",
-                )
-            else:
-                # 已配置：心跳保持在线（实际事件订阅按 DSH 官方宿主集成协议接入，
-                # 连接后调用 agent_bus_service.emit(AGENT_ID, phase, ...) 即可驱动桌宠）
-                agent_bus_service.heartbeat(AGENT_ID)
-                if last_status != "online":
-                    agent_bus_service.set_status(AGENT_ID, "online")
-                    agent_bus_service.emit(AGENT_ID, "idle", state={"mode": "ready"})
-            last_status = "online" if enabled else "offline"
-        except asyncio.CancelledError:
-            raise
+            entry = PROCESSENTRY32W()
+            entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+            ok = k32.Process32FirstW(snap, ctypes.byref(entry))
+            while ok:
+                if str(entry.szExeFile).lower() in wanted:
+                    return True
+                ok = k32.Process32NextW(snap, ctypes.byref(entry))
+        finally:
+            k32.CloseHandle(snap)
+        return False
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# ---------------------------------------------------------------------------
+# facts → phase（策略层：DSH 客观事实 → 桌宠统一 phase）
+# ---------------------------------------------------------------------------
+def phase_for_facts(facts: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """把边车折叠出的事实映射为 (phase, state)。
+
+    ``state`` 是透传给桌宠的上下文（工具名、错误信息等），只放短字段。
+
+    判定顺序即优先级：审批 > 等待用户 > 语音 > 错误 > 工具 > 流式 > 思考。
+    """
+    if not isinstance(facts, dict):
+        return "idle", {}
+
+    def _i(key: str) -> int:
+        try:
+            return int(facts.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    tool = str(facts.get("last_tool") or "")
+    state: dict[str, Any] = {}
+    if tool:
+        state["tool"] = tool[:60]
+    if _i("tool_calls"):
+        state["tool_calls"] = _i("tool_calls")
+    if facts.get("turn") is not None:
+        state["turn"] = facts.get("turn")
+    if facts.get("step") is not None:
+        state["step"] = facts.get("step")
+    err = str(facts.get("last_error") or "")
+    if err:
+        state["error"] = err[:200]
+
+    in_turn = bool(facts.get("in_turn"))
+
+    # 1) 等待审批（桌宠表现：待确认）
+    if _i("approvals_pending") > 0:
+        return "awaiting_approval", state
+
+    # 2) 等待用户交互 —— 工具在跑但语义是“等用户”
+    if facts.get("awaiting_user"):
+        return "waiting_input", state
+
+    # 3) 语音播报
+    if facts.get("voice_active"):
+        return "voice", state
+
+    # 4) 错误：仅“最近一个事件本身是失败”时进入 error，避免失败态粘住整轮
+    if facts.get("last_event_failed"):
+        return "error", state
+    turn_reason = str(facts.get("turn_end_reason") or "")
+    if turn_reason in {"error", "max-tokens", "interrupted"}:
+        return "error", state
+
+    # 5) 轮次结束
+    if turn_reason == "completed":
+        return "complete", state
+    if turn_reason == "blocked":
+        # preStep 被 hook 拒绝 → 提示词被拦下，系统在等用户换一个输入。
+        # 与 DSH 官方桌宠投影一致（blocked → waiting），比归 idle 更准确。
+        return "waiting_input", state
+    if turn_reason in {"aborted", "forked"}:
+        # aborted：会话被停；forked：轮次延续到子会话。都不该让桌宠挂在工作态。
+        return "idle", state
+
+    # 6) 轮次内工作态
+    if in_turn:
+        if _i("active_tools") > 0:
+            return "executing_tool", state
+        # 「正在输出正文」= 最近一条 assistant/message 是**纯文字**（无 tool-call）。
+        # 实测真实日志：335/377 条 assistant/message 同时含 tool-call 块，所以
+        # 不能拿 has_text 当判据，否则会长期误报 streaming。
+        if facts.get("last_message_text_only"):
+            return "streaming", state
+        if facts.get("retrying"):
+            return "thinking", state
+        if facts.get("last_event") in {"turn/start"}:
+            return "planning", state
+        return "thinking", state
+
+    # 7) 轮次外：在线待机
+    return "idle", state
+
+
+def is_work_phase(phase: str) -> bool:
+    """是否为「工作中」细分状态（决定是否显示桌宠头顶徽标）。"""
+    return phase in DSH_WORK_PHASES
+
+
+# ---------------------------------------------------------------------------
+# 兼容旧接口：DSH 事件字典 → (phase, state)
+# ---------------------------------------------------------------------------
+def parse_dsh_event(event: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    """把单个 DSH 会话事件映射为 (phase, state)。
+
+    保留此函数用于**单事件**的粗粒度映射与测试；实时链路走 facts 折叠
+    （``phase_for_facts``），因为单事件无法表达“审批是否已结束”“工具是否还在跑”
+    这类跨事件的聚合语义。
+    """
+    if not isinstance(event, dict):
+        return None
+    etype = str(event.get("type") or "").lower()
+    payload = event.get("data") if isinstance(event.get("data"), dict) else {}
+    payload = payload or {}
+    if etype == "turn/start":
+        return "planning", {"turn": payload.get("turn")}
+    if etype == "turn/end":
+        reason = payload.get("reason") or {}
+        kind = str(reason.get("kind") or "") if isinstance(reason, dict) else ""
+        if kind == "completed":
+            return "complete", {}
+        if kind in {"error", "max-tokens", "interrupted"}:
+            return "error", {"reason": kind}
+        return "idle", {}
+    if etype == "step/start":
+        return "thinking", {"step": payload.get("step")}
+    if etype in {"tool/call", "tool/start"}:
+        name = str(payload.get("name") or "")
+        lname = name.lower()
+        if lname in {"ask_user_question", "ask_user", "askuserquestion"}:
+            return "waiting_input", {"tool": name[:60]}
+        if lname in {"todo_write", "create_goal", "update_goal"}:
+            return "planning", {"tool": name[:60]}
+        if lname in {"speak", "tts", "text_to_speech"}:
+            return "voice", {"tool": name[:60]}
+        return "executing_tool", {"tool": name[:60]}
+    if etype == "tool/result":
+        msg = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        if payload.get("error") is not None or msg.get("isError") is True:
+            return "error", {"tool_failed": True}
+        return "thinking", {}
+    if etype in {"text/stream", "stream/start"}:
+        return "streaming", {"text": str(payload.get("text") or "")[:200]}
+    if etype == "assistant/message":
+        content = (payload.get("message") or {}).get("content") or []
+        kinds = {str(c.get("type")) for c in content if isinstance(c, dict)}
+        if "text" in kinds:
+            return "streaming", {}
+        if "reasoning" in kinds:
+            return "thinking", {}
+        if "tool-call" in kinds:
+            return "executing_tool", {}
+        return None
+    if etype in {"approval/asked", "awaiting_approval", "approval/required"}:
+        return "awaiting_approval", {"tool": str(payload.get("toolName") or "")[:60]}
+    if etype == "approval/decided":
+        return None
+    if etype in {"llm/retry", "llm/retry-started"}:
+        return "error", {"retrying": True}
+    if etype == "user/message":
+        kind = str((payload.get("source") or {}).get("kind") or "")
+        return ("waiting_input" if kind == "voice" else "thinking"), {}
+    if etype in {"session/start", "session/ready"}:
+        return "idle", {}
+    if etype.startswith("error"):
+        return "error", {"message": str(payload)[:200]}
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 边车进程管理
+# ---------------------------------------------------------------------------
+class DshLogSidecar:
+    """管理 ``node dsh_log_stream.mjs`` 子进程，逐行产出 NDJSON 消息。
+
+    实现说明（跨平台踩坑记录）
+    -------------------------
+    Windows 上 ``asyncio.create_subprocess_exec`` 会用 **overlapped 命名管道**
+    建立 stdio；在受限/隐藏窗口环境下会直接 ``PermissionError: [WinError 5]``
+    （本机已实测复现）。而 ``subprocess.Popen`` + ``PIPE`` + 后台线程逐行读
+    在同一环境下稳定可用，故这里用线程读取 + ``asyncio.Queue`` 桥接到事件循环：
+
+        node 边车 stdout ──(后台线程 readline)──▶ asyncio.Queue ──▶ 适配器协程
+    """
+
+    def __init__(self, node_path: str, script: Path, args: list[str]) -> None:
+        self.node_path = node_path
+        self.script = script
+        self.args = args
+        self.proc: subprocess.Popen | None = None
+        self._lines: "asyncio.Queue[str | None]" = asyncio.Queue(maxsize=2000)
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._reader: threading.Thread | None = None
+        self._stderr_reader: threading.Thread | None = None
+        self._closing = threading.Event()
+        self.last_message_at: float = 0.0
+        self.ready = False
+        self.info: dict[str, Any] = {}
+
+    # -- 启动/停止 --------------------------------------------------------
+    def start(self, loop: asyncio.AbstractEventLoop) -> None:
+        """同步启动子进程（调用方在 to_thread 中执行，避免阻塞事件循环）。
+
+        ``loop`` 由调用方（事件循环所在线程）显式传入：``start`` 跑在工作线程里，
+        那里没有运行中的事件循环，读线程需要用它把行投递回 asyncio 队列。
+        """
+        creationflags = 0
+        startupinfo = None
+        if sys.platform == "win32":
+            # 不弹控制台窗口（桌宠后端本身是隐藏窗口启动的）
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+        self._closing.clear()
+        self.proc = subprocess.Popen(  # noqa: S603
+            [self.node_path, str(self.script), *self.args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            creationflags=creationflags,
+            startupinfo=startupinfo,
+        )
+        self._loop = loop
+        self.last_message_at = loop.time()
+        self._reader = threading.Thread(target=self._read_stdout, name="dsh-sidecar-out", daemon=True)
+        self._reader.start()
+        self._stderr_reader = threading.Thread(target=self._read_stderr, name="dsh-sidecar-err", daemon=True)
+        self._stderr_reader.start()
+
+    def _publish(self, item: str | None) -> None:
+        """线程侧投递一行到事件循环队列（丢行好过阻塞读取线程）。"""
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        try:
+            loop.call_soon_threadsafe(self._put_nowait, item)
+        except RuntimeError:
+            pass
+
+    def _put_nowait(self, item: str | None) -> None:
+        if self._closing.is_set():
+            return
+        try:
+            self._lines.put_nowait(item)
+        except asyncio.QueueFull:
+            # 队列满：丢最旧的一行再放（保持实时性，绝不阻塞读取线程）
+            try:
+                self._lines.get_nowait()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                self._lines.put_nowait(item)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _read_stdout(self) -> None:
+        proc = self.proc
+        if proc is None or proc.stdout is None:
+            self._publish(None)
+            return
+        try:
+            for raw in proc.stdout:
+                if self._closing.is_set():
+                    break
+                line = (raw or "").strip()
+                if line:
+                    self._publish(line)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("DSH 适配器循环异常: %s", exc)
-            agent_bus_service.set_status(AGENT_ID, "error", error=str(exc)[:200])
-        await asyncio.sleep(10)
+            logger.debug("DSH 边车 stdout 读取结束：%s", exc)
+        finally:
+            self._publish(None)
+
+    def _read_stderr(self) -> None:
+        proc = self.proc
+        if proc is None or proc.stderr is None:
+            return
+        try:
+            for raw in proc.stderr:
+                if self._closing.is_set():
+                    break
+                text = (raw or "").strip()
+                if text:
+                    logger.debug("[dsh-sidecar] %s", text[:400])
+        except Exception:  # noqa: BLE001
+            return
+
+    async def next_message(self, timeout: float) -> str | None:
+        """取下一行；超时返回 ''；进程结束返回 None。"""
+        try:
+            item = await asyncio.wait_for(self._lines.get(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return ""
+        if item is not None:
+            loop = asyncio.get_running_loop()
+            self.last_message_at = loop.time()
+        return item
+
+    def alive(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def returncode(self) -> int | None:
+        return self.proc.poll() if self.proc is not None else None
+
+    def stop(self) -> None:
+        """同步停止（可用 to_thread 调用）；幂等。"""
+        self._closing.set()
+        proc, self.proc = self.proc, None
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                proc.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                try:
+                    proc.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+        # 关掉管道，唤醒读取线程
+        for stream in (getattr(proc, "stdout", None), getattr(proc, "stderr", None)):
+            try:
+                if stream is not None:
+                    stream.close()
+            except Exception:  # noqa: BLE001
+                pass
+        for thread in (self._reader, self._stderr_reader):
+            if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+                thread.join(timeout=2)
+        self._reader = None
+        self._stderr_reader = None
+        # 清空残留，避免下次启动读到旧行
+        self._lines = asyncio.Queue(maxsize=2000)
+        self.last_message_at = 0.0
+
+
+# ---------------------------------------------------------------------------
+# 适配器主循环
+# ---------------------------------------------------------------------------
+class DshAdapter:
+    """DSH 状态适配器：边车事件 → facts → phase → 总线。"""
+
+    def __init__(self) -> None:
+        self.sidecar: DshLogSidecar | None = None
+        self.facts: dict[str, Any] = {}
+        self.last_phase = ""
+        self.last_emit_at = 0.0
+        self.session_id = ""
+        self.sidecar_error = ""
+
+    # -- 生命周期 ---------------------------------------------------------
+    async def _ensure_sidecar(self, config: dict[str, Any]) -> bool:
+        node = resolve_node(config)
+        if not node:
+            self.sidecar_error = "未找到 node 可执行文件：请安装 Node.js 或配置 dsh_config.json 的 node_path"
+            return False
+        script = Path(__file__).with_name(SIDECAR_NAME)
+        if not script.exists():
+            self.sidecar_error = f"缺少边车脚本 {script}"
+            return False
+
+        args: list[str] = []
+        sessions_root = str(config.get("sessions_root") or "").strip()
+        args += ["--sessions-root", sessions_root or str(default_sessions_root())]
+        workspace = str(config.get("workspace") or "").strip() or default_workspace()
+        args += ["--workspace", workspace]
+        session_id = str(config.get("session_id") or "").strip()
+        if session_id:
+            args += ["--session-id", session_id]
+        try:
+            poll_ms = max(150, int(config.get("poll_ms") or 400))
+        except (TypeError, ValueError):
+            poll_ms = 400
+        args += ["--poll-ms", str(poll_ms)]
+
+        if self.sidecar is not None and self.sidecar.alive():
+            return True
+        # 旧边车（若还在）先停干净，避免两个读取器抢同一份输出
+        if self.sidecar is not None:
+            await asyncio.to_thread(self.sidecar.stop)
+            self.sidecar = None
+        sidecar = DshLogSidecar(node, script, args)
+        loop = asyncio.get_running_loop()
+        try:
+            await asyncio.to_thread(sidecar.start, loop)
+        except Exception as exc:  # noqa: BLE001
+            self.sidecar_error = f"边车启动失败：{exc}"
+            try:
+                await asyncio.to_thread(sidecar.stop)
+            except Exception:  # noqa: BLE001
+                pass
+            return False
+        self.sidecar = sidecar
+        self.sidecar_error = ""
+        return True
+
+    def _online_lost(self) -> bool:
+        """边车迟迟没有消息且进程也不在 → 视为 DSH 没在跑。"""
+        if self.sidecar is None:
+            return True
+        if self.sidecar.alive():
+            return False
+        return True
+
+    # -- 上报 -------------------------------------------------------------
+    def _bus_enabled(self) -> bool:
+        """总线上的启用开关（MIO 管理窗口 → Agent 页切换，持久化于 agent_bus_config.json）。
+
+        与 ``dsh_config.json`` 的 ``enabled``（部署就绪开关）是两个不同层次：
+        - ``dsh_config.json.enabled``：DSH 是否部署/接好（没接好就没必要跟）；
+        - 总线 ``enabled``：用户是否让 DSH 显示在桌宠上（即换即用）。
+        两者都为真才上报 phase，否则停用必须立即释放桌身。
+        """
+        try:
+            state = agent_bus_service.get(AGENT_ID)
+        except Exception:  # noqa: BLE001
+            return True
+        if state is None:
+            return True
+        return bool(state.enabled)
+
+    def _emit_phase(self, phase: str, state: dict[str, Any], *, force: bool = False) -> None:
+        if not self._bus_enabled():
+            # 已停用：不发任何 phase（避免停用后仍抢桌宠身体）
+            self.last_phase = ""
+            return
+        now = asyncio.get_running_loop().time()
+        changed = phase != self.last_phase
+        stale = (now - self.last_emit_at) * 1000 > REEMIT_MS
+        if not (changed or stale or force):
+            return
+        if not changed and not force and not is_work_phase(phase):
+            # 非工作态不必周期性重复上报（避免刷屏）
+            return
+        try:
+            # force=True：本函数已按 phase 变化 + REEMIT_MS 自行节流，
+            # 总线的 300ms 同 phase 节流不该再吃掉我们的「立即恢复」语义。
+            agent_bus_service.emit(AGENT_ID, phase, state=dict(state), force=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("DSH emit phase=%s 失败：%s", phase, exc)
+            return
+        self.last_phase = phase
+        self.last_emit_at = now
+
+    def _publish_facts(self, facts: dict[str, Any], *, force: bool = False) -> None:
+        self.facts = facts if isinstance(facts, dict) else {}
+        phase, state = phase_for_facts(self.facts)
+        # 透传关键上下文，便于 Agent 页/桌宠气泡展示
+        for key in ("tool", "turn", "step", "tool_calls"):
+            if key in self.facts and key not in state:
+                state[key] = self.facts[key]
+        err = str(self.facts.get("last_error") or "")
+        if err and "error" not in state:
+            state["error"] = err[:200]
+        if self.session_id:
+            state["session"] = self.session_id
+        self._emit_phase(phase, state, force=force)
+
+    # -- 主循环 -----------------------------------------------------------
+    async def run(self) -> None:
+        agent_bus_service.register(
+            AGENT_ID,
+            AGENT_NAME,
+            "dsh_adapter",
+            capabilities={
+                # 如实上报：本版 DSH 无 TTS/语音合成服务，voice phase 只在
+                # 用户自行部署 speak/tts 类工具时才可能被驱动。
+                "voice": False,
+                "text": True,
+                "screen": False,
+                # DSH 自带 MCP 客户端与 MCP 工具调用链路。
+                "mcp": True,
+                "observe": False,
+            },
+        )
+        while True:
+            try:
+                await self._loop_once()
+            except asyncio.CancelledError:
+                await self._shutdown()
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("DSH 适配器循环异常：%s", exc)
+                agent_bus_service.set_status(AGENT_ID, "error", error=str(exc)[:200])
+                await asyncio.sleep(5)
+
+    async def _shutdown(self) -> None:
+        if self.sidecar is not None:
+            await asyncio.to_thread(self.sidecar.stop)
+            self.sidecar = None
+
+    async def _loop_once(self) -> None:
+        """一轮配置检查 + 边车驱动；配置变化或边车异常时返回重来。"""
+        config = load_config()
+
+        # 1) 未启用：注册在册但离线，并给出启用指引
+        if not config.get("enabled"):
+            await self._shutdown()
+            self.facts = {}
+            self.last_phase = ""
+            agent_bus_service.set_status(
+                AGENT_ID,
+                "offline",
+                error=(
+                    "DSH 未启用：在项目根 dsh_config.json 设 \"enabled\": true "
+                    "（或到 MIO 管理窗口 → Agent 页启用 DSH）"
+                ),
+            )
+            await asyncio.sleep(8)
+            return
+
+        # 2) 已启用：检查 DSH 是否在运行
+        running = dsh_process_running()
+        if running is False:
+            await self._shutdown()
+            self.last_phase = ""
+            agent_bus_service.set_status(
+                AGENT_ID,
+                "offline",
+                error="DSH 未运行：请先启动 DeepSeek Harness 桌面应用",
+            )
+            await asyncio.sleep(5)
+            return
+        if running is None:
+            # 无法判定进程（非 Windows）：靠边车输出来判断
+            pass
+
+        # 3) 拉起边车
+        if not await self._ensure_sidecar(config):
+            agent_bus_service.set_status(AGENT_ID, "error", error=self.sidecar_error[:200])
+            await asyncio.sleep(8)
+            return
+
+        assert self.sidecar is not None
+        agent_bus_service.set_status(AGENT_ID, "connecting", error="")
+
+        # 4) 消费边车消息
+        idle_rounds = 0
+        was_enabled = self._bus_enabled()
+        while True:
+            config_now = load_config()
+            if bool(config_now.get("enabled")) != bool(config.get("enabled")):
+                return  # 启用状态变化：立刻重来
+            # 重新启用（Agent 页开关）：立即用当前事实补发一次状态，
+            # 不必等下一个 DSH 事件（否则会停在 idle 直到 DSH 动一下）
+            now_enabled = self._bus_enabled()
+            if now_enabled and not was_enabled:
+                self.last_phase = ""
+                if self.facts:
+                    self._publish_facts(self.facts, force=True)
+            was_enabled = now_enabled
+            if not self.sidecar.alive():
+                # 边车退出：DSH 还在就只是重启边车（connecting），DSH 没了才算离线
+                code = self.sidecar.returncode()
+                if dsh_process_running() is False:
+                    await self._shutdown()
+                    agent_bus_service.set_status(
+                        AGENT_ID, "offline",
+                        error="DSH 未运行：请先启动 DeepSeek Harness 桌面应用",
+                    )
+                else:
+                    agent_bus_service.set_status(
+                        AGENT_ID, "connecting",
+                        error=self.sidecar_error or f"DSH 边车退出(rc={code})，正在重启",
+                    )
+                await asyncio.sleep(2)
+                return
+
+            raw = await self.sidecar.next_message(timeout=1.0)
+            if raw is None:
+                # 边车输出结束（进程可能刚退出）：交给下一轮 alive() 判定与重启
+                await asyncio.sleep(1)
+                return
+            if raw == "":
+                # 超时：心跳 + 检查边车是否卡死
+                idle_rounds += 1
+                now = asyncio.get_running_loop().time()
+                if (now - self.sidecar.last_message_at) * 1000 > SIDECAR_STALE_MS:
+                    logger.warning("DSH 边车静默超时，重启")
+                    await asyncio.to_thread(self.sidecar.stop)
+                    return
+                agent_bus_service.heartbeat(AGENT_ID)
+                if idle_rounds % 10 == 0:
+                    # 静默期间也确认一下 DSH 进程是否还在
+                    if dsh_process_running() is False:
+                        return
+                continue
+            idle_rounds = 0
+            self._handle_message(raw)
+
+    def _handle_message(self, raw: str) -> None:
+        try:
+            msg = json.loads(raw)
+        except Exception:  # noqa: BLE001
+            return
+        if not isinstance(msg, dict):
+            return
+        kind = str(msg.get("kind") or "")
+
+        if kind == "ready":
+            self.session_id = str(msg.get("session") or "")
+            self.sidecar_error = ""
+            agent_bus_service.heartbeat(AGENT_ID)
+            agent_bus_service.set_status(AGENT_ID, "online", error="")
+            return
+
+        if kind == "facts":
+            agent_bus_service.heartbeat(AGENT_ID)
+            agent_bus_service.set_status(AGENT_ID, "online", error="")
+            self._publish_facts(msg.get("facts") or {})
+            return
+
+        if kind == "event":
+            agent_bus_service.heartbeat(AGENT_ID)
+            self._publish_facts(msg.get("facts") or {})
+            return
+
+        if kind == "switch":
+            self.session_id = str(msg.get("session") or "")
+            self.last_phase = ""  # 新会话：允许立即上报
+            return
+
+        if kind == "offline":
+            reason = str(msg.get("reason") or "DSH 会话不可用")
+            agent_bus_service.set_status(AGENT_ID, "offline", error=reason[:200])
+            # 进程还在但没会话：给一个 paused（断线待恢复）而不是 idle
+            self._emit_phase("paused", {"reason": reason[:120]}, force=True)
+            return
+
+        if kind == "ping":
+            agent_bus_service.heartbeat(AGENT_ID)
+            return
+
+        if kind == "error":
+            self.sidecar_error = str(msg.get("message") or "边车错误")
+            logger.debug("DSH 边车错误：%s", self.sidecar_error)
+
+
+# 单实例（后台任务持有）
+_adapter = DshAdapter()
+
+
+async def dsh_adapter_loop() -> None:
+    """后台任务入口：由 main.py 的 BACKGROUND_TASK_FACTORIES 挂载。"""
+    await _adapter.run()
+
+
+def inspect_current() -> dict[str, Any]:
+    """诊断快照（供 ``GET /api/companion/agents/{id}/inspect`` 与自检使用）。
+
+    故意不调用 ``asyncio.get_running_loop()``——它可能被同步代码在无事件循环的
+    线程里调用（例如 FastAPI 的线程池），必须任意上下文可安全执行。
+    """
+    facts = dict(_adapter.facts)
+    phase, state = phase_for_facts(facts)
+    return {
+        "agent_id": AGENT_ID,
+        "enabled": bool(load_config().get("enabled")),
+        "bus_enabled": _adapter._bus_enabled(),
+        "session_id": _adapter.session_id,
+        "phase": phase,
+        "state": state,
+        "facts": facts,
+        "sidecar_alive": bool(_adapter.sidecar and _adapter.sidecar.alive()),
+        "sidecar_error": _adapter.sidecar_error,
+        "dsh_process_running": dsh_process_running(),
+        "phases": list(DSH_PHASES),
+        "work_phases": list(DSH_WORK_PHASES),
+        "fact_phases": list(DSH_FACT_PHASES),
+        "config_path": str(dsh_config_path()),
+    }

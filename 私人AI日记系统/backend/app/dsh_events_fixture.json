@@ -1,0 +1,1064 @@
+{
+ "source_sessions": [
+  "session-6928e6ab-dcfb-4c68-856e-02e30f7729b8",
+  "bba0fcee-726b-4910-be36-194563b22cad"
+ ],
+ "event_type_counts": {
+  "tool/call": 511,
+  "tool/result": 509,
+  "step/start": 365,
+  "assistant/message": 365,
+  "step/end": 363,
+  "session-log-deepseek/delivery-accepted": 56,
+  "agent/inbox/spliced": 23,
+  "user/message": 19,
+  "todo/write": 8,
+  "request/header": 7,
+  "sandbox/mode": 6,
+  "approval/policy": 6,
+  "session/title": 6,
+  "session": 5,
+  "permission/preset": 4,
+  "turn/start": 4,
+  "system/message": 4,
+  "request/context": 4,
+  "assistant/attempt": 3,
+  "llm/retry": 3,
+  "llm/retry-started": 3,
+  "developer/message": 3,
+  "session/title-llm-request": 2,
+  "approval/asked": 2,
+  "approval/decided": 2,
+  "turn/end": 2,
+  "model/selection": 2,
+  "subagent/descriptor": 2,
+  "subagent/catalog": 2,
+  "command/run": 1,
+  "command/done": 1,
+  "goal/change": 1
+ },
+ "sequences": [
+  {
+   "name": "LLM 重试（真实 llm/retry 片段）",
+   "events": [
+    {
+     "type": "step/start",
+     "data": {
+      "_sanitized": true,
+      "turn": 1,
+      "step": 54
+     }
+    },
+    {
+     "type": "assistant/attempt",
+     "data": {
+      "_sanitized": true,
+      "stream_finishes": [
+       {
+        "kind": "error"
+       }
+      ]
+     }
+    },
+    {
+     "type": "llm/retry",
+     "data": {
+      "_sanitized": true,
+      "retry": 1,
+      "turn": 1,
+      "step": 54,
+      "has_failure": true
+     }
+    },
+    {
+     "type": "llm/retry-started",
+     "data": {
+      "_sanitized": true,
+      "retry": 1,
+      "turn": 1,
+      "step": 54,
+      "has_failure": false
+     }
+    },
+    {
+     "type": "assistant/message",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "content": [
+        {
+         "type": "reasoning",
+         "len": 7894
+        },
+        {
+         "type": "text",
+         "len": 78
+        },
+        {
+         "type": "tool-call",
+         "name": "job_kill"
+        },
+        {
+         "type": "tool-call",
+         "name": "pwsh"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "job_kill",
+      "turn": 1,
+      "step": 54
+     }
+    }
+   ]
+  },
+  {
+   "name": "工具失败→错误态（真实失败片段）",
+   "events": [
+    {
+     "type": "tool/result",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "isError": false
+      },
+      "has_error": false,
+      "turn": 1,
+      "step": 1
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "glob",
+      "turn": 1,
+      "step": 1
+     }
+    }
+   ]
+  },
+  {
+   "name": "工具调用（真实 tool/call 片段）",
+   "events": [
+    {
+     "type": "assistant/message",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "content": [
+        {
+         "type": "text",
+         "len": 116
+        },
+        {
+         "type": "tool-call",
+         "name": "pwsh"
+        },
+        {
+         "type": "tool-call",
+         "name": "glob"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "pwsh",
+      "turn": 1,
+      "step": 1
+     }
+    },
+    {
+     "type": "tool/result",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "isError": false
+      },
+      "has_error": false,
+      "turn": 1,
+      "step": 1
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "glob",
+      "turn": 1,
+      "step": 1
+     }
+    }
+   ]
+  },
+  {
+   "name": "turn1（真实完整轮次）",
+   "events": [
+    {
+     "type": "turn/start",
+     "data": {
+      "_sanitized": true,
+      "turn": 1
+     }
+    },
+    {
+     "type": "agent/inbox/spliced",
+     "data": {
+      "_sanitized": true,
+      "_keys": [
+       "inserted",
+       "removedCount",
+       "start",
+       "target"
+      ]
+     }
+    },
+    {
+     "type": "step/start",
+     "data": {
+      "_sanitized": true,
+      "turn": 1,
+      "step": 1
+     }
+    },
+    {
+     "type": "system/message",
+     "data": {
+      "_sanitized": true,
+      "_keys": [
+       "message",
+       "step",
+       "turn"
+      ]
+     }
+    },
+    {
+     "type": "user/message",
+     "data": {
+      "_sanitized": true,
+      "source_kind": "user"
+     }
+    },
+    {
+     "type": "user/message",
+     "data": {
+      "_sanitized": true,
+      "source_kind": "runtime-context"
+     }
+    },
+    {
+     "type": "user/message",
+     "data": {
+      "_sanitized": true,
+      "source_kind": "skill-catalog"
+     }
+    },
+    {
+     "type": "request/header",
+     "data": {
+      "_sanitized": true,
+      "_keys": [
+       "header",
+       "reason"
+      ]
+     }
+    },
+    {
+     "type": "request/context",
+     "data": {
+      "_sanitized": true,
+      "_keys": [
+       "contextWindow",
+       "model",
+       "provider"
+      ]
+     }
+    },
+    {
+     "type": "session/title",
+     "data": {
+      "_sanitized": true,
+      "_keys": [
+       "messageSeqs",
+       "source",
+       "title"
+      ]
+     }
+    },
+    {
+     "type": "assistant/message",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "content": [
+        {
+         "type": "text",
+         "len": 112
+        },
+        {
+         "type": "tool-call",
+         "name": "pwsh"
+        },
+        {
+         "type": "tool-call",
+         "name": "read"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "pwsh",
+      "turn": 1,
+      "step": 1
+     }
+    },
+    {
+     "type": "tool/result",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "isError": false
+      },
+      "has_error": false,
+      "turn": 1,
+      "step": 1
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "read",
+      "turn": 1,
+      "step": 1
+     }
+    },
+    {
+     "type": "tool/result",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "isError": false
+      },
+      "has_error": false,
+      "turn": 1,
+      "step": 1
+     }
+    },
+    {
+     "type": "step/end",
+     "data": {
+      "_sanitized": true,
+      "_keys": [
+       "step",
+       "turn"
+      ]
+     }
+    },
+    {
+     "type": "step/start",
+     "data": {
+      "_sanitized": true,
+      "turn": 1,
+      "step": 2
+     }
+    },
+    {
+     "type": "assistant/message",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "content": [
+        {
+         "type": "reasoning",
+         "len": 220
+        },
+        {
+         "type": "tool-call",
+         "name": "pwsh"
+        },
+        {
+         "type": "tool-call",
+         "name": "grep"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "pwsh",
+      "turn": 1,
+      "step": 2
+     }
+    },
+    {
+     "type": "tool/result",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "isError": false
+      },
+      "has_error": false,
+      "turn": 1,
+      "step": 2
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "grep",
+      "turn": 1,
+      "step": 2
+     }
+    },
+    {
+     "type": "tool/result",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "isError": false
+      },
+      "has_error": false,
+      "turn": 1,
+      "step": 2
+     }
+    },
+    {
+     "type": "step/end",
+     "data": {
+      "_sanitized": true,
+      "_keys": [
+       "step",
+       "turn"
+      ]
+     }
+    },
+    {
+     "type": "step/start",
+     "data": {
+      "_sanitized": true,
+      "turn": 1,
+      "step": 3
+     }
+    },
+    {
+     "type": "assistant/message",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "content": [
+        {
+         "type": "reasoning",
+         "len": 254
+        },
+        {
+         "type": "text",
+         "len": 79
+        },
+        {
+         "type": "tool-call",
+         "name": "read"
+        },
+        {
+         "type": "tool-call",
+         "name": "read"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "read",
+      "turn": 1,
+      "step": 3
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "read",
+      "turn": 1,
+      "step": 3
+     }
+    },
+    {
+     "type": "tool/result",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "isError": false
+      },
+      "has_error": false,
+      "turn": 1,
+      "step": 3
+     }
+    },
+    {
+     "type": "tool/result",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "isError": false
+      },
+      "has_error": false,
+      "turn": 1,
+      "step": 3
+     }
+    },
+    {
+     "type": "step/end",
+     "data": {
+      "_sanitized": true,
+      "_keys": [
+       "step",
+       "turn"
+      ]
+     }
+    },
+    {
+     "type": "step/start",
+     "data": {
+      "_sanitized": true,
+      "turn": 1,
+      "step": 4
+     }
+    },
+    {
+     "type": "assistant/message",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "content": [
+        {
+         "type": "reasoning",
+         "len": 190
+        },
+        {
+         "type": "text",
+         "len": 49
+        },
+        {
+         "type": "tool-call",
+         "name": "grep"
+        },
+        {
+         "type": "tool-call",
+         "name": "read"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "grep",
+      "turn": 1,
+      "step": 4
+     }
+    },
+    {
+     "type": "tool/result",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "isError": false
+      },
+      "has_error": false,
+      "turn": 1,
+      "step": 4
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "read",
+      "turn": 1,
+      "step": 4
+     }
+    },
+    {
+     "type": "tool/result",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "isError": false
+      },
+      "has_error": false,
+      "turn": 1,
+      "step": 4
+     }
+    },
+    {
+     "type": "step/end",
+     "data": {
+      "_sanitized": true,
+      "_keys": [
+       "step",
+       "turn"
+      ]
+     }
+    },
+    {
+     "type": "step/start",
+     "data": {
+      "_sanitized": true,
+      "turn": 1,
+      "step": 5
+     }
+    },
+    {
+     "type": "assistant/message",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "content": [
+        {
+         "type": "reasoning",
+         "len": 447
+        },
+        {
+         "type": "tool-call",
+         "name": "grep"
+        },
+        {
+         "type": "tool-call",
+         "name": "grep"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "grep",
+      "turn": 1,
+      "step": 5
+     }
+    },
+    {
+     "type": "tool/result",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "isError": false
+      },
+      "has_error": false,
+      "turn": 1,
+      "step": 5
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "grep",
+      "turn": 1,
+      "step": 5
+     }
+    },
+    {
+     "type": "tool/result",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "isError": false
+      },
+      "has_error": false,
+      "turn": 1,
+      "step": 5
+     }
+    },
+    {
+     "type": "step/end",
+     "data": {
+      "_sanitized": true,
+      "_keys": [
+       "step",
+       "turn"
+      ]
+     }
+    },
+    {
+     "type": "step/start",
+     "data": {
+      "_sanitized": true,
+      "turn": 1,
+      "step": 6
+     }
+    },
+    {
+     "type": "assistant/message",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "content": [
+        {
+         "type": "reasoning",
+         "len": 1191
+        },
+        {
+         "type": "text",
+         "len": 141
+        },
+        {
+         "type": "tool-call",
+         "name": "subagent"
+        },
+        {
+         "type": "tool-call",
+         "name": "subagent"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "subagent",
+      "turn": 1,
+      "step": 6
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "subagent",
+      "turn": 1,
+      "step": 6
+     }
+    },
+    {
+     "type": "tool/result",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "isError": true
+      },
+      "has_error": false,
+      "turn": 1,
+      "step": 6
+     }
+    },
+    {
+     "type": "tool/result",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "isError": true
+      },
+      "has_error": false,
+      "turn": 1,
+      "step": 6
+     }
+    },
+    {
+     "type": "step/end",
+     "data": {
+      "_sanitized": true,
+      "_keys": [
+       "step",
+       "turn"
+      ]
+     }
+    },
+    {
+     "type": "step/start",
+     "data": {
+      "_sanitized": true,
+      "turn": 1,
+      "step": 7
+     }
+    },
+    {
+     "type": "assistant/message",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "content": [
+        {
+         "type": "reasoning",
+         "len": 250
+        },
+        {
+         "type": "text",
+         "len": 125
+        },
+        {
+         "type": "tool-call",
+         "name": "read"
+        },
+        {
+         "type": "tool-call",
+         "name": "read"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "read",
+      "turn": 1,
+      "step": 7
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "read",
+      "turn": 1,
+      "step": 7
+     }
+    },
+    {
+     "type": "tool/result",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "isError": false
+      },
+      "has_error": false,
+      "turn": 1,
+      "step": 7
+     }
+    },
+    {
+     "type": "tool/result",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "isError": false
+      },
+      "has_error": false,
+      "turn": 1,
+      "step": 7
+     }
+    },
+    {
+     "type": "step/end",
+     "data": {
+      "_sanitized": true,
+      "_keys": [
+       "step",
+       "turn"
+      ]
+     }
+    },
+    {
+     "type": "step/start",
+     "data": {
+      "_sanitized": true,
+      "turn": 1,
+      "step": 8
+     }
+    },
+    {
+     "type": "assistant/message",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "content": [
+        {
+         "type": "reasoning",
+         "len": 872
+        },
+        {
+         "type": "text",
+         "len": 115
+        },
+        {
+         "type": "tool-call",
+         "name": "grep"
+        },
+        {
+         "type": "tool-call",
+         "name": "read"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "name": "LLM 重试（真实 llm/retry 片段）",
+   "events": [
+    {
+     "type": "step/start",
+     "data": {
+      "_sanitized": true,
+      "turn": 1,
+      "step": 72
+     }
+    },
+    {
+     "type": "assistant/attempt",
+     "data": {
+      "_sanitized": true,
+      "stream_finishes": [
+       {
+        "kind": "error"
+       }
+      ]
+     }
+    },
+    {
+     "type": "llm/retry",
+     "data": {
+      "_sanitized": true,
+      "retry": 1,
+      "turn": 1,
+      "step": 72,
+      "has_failure": true
+     }
+    },
+    {
+     "type": "llm/retry-started",
+     "data": {
+      "_sanitized": true,
+      "retry": 1,
+      "turn": 1,
+      "step": 72,
+      "has_failure": false
+     }
+    },
+    {
+     "type": "assistant/attempt",
+     "data": {
+      "_sanitized": true,
+      "stream_finishes": [
+       {
+        "kind": "error"
+       }
+      ]
+     }
+    },
+    {
+     "type": "llm/retry",
+     "data": {
+      "_sanitized": true,
+      "retry": 2,
+      "turn": 1,
+      "step": 72,
+      "has_failure": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "工具失败→错误态（真实失败片段）",
+   "events": [
+    {
+     "type": "tool/result",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "isError": false
+      },
+      "has_error": false,
+      "turn": 1,
+      "step": 1
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "read",
+      "turn": 1,
+      "step": 1
+     }
+    }
+   ]
+  },
+  {
+   "name": "工具调用（真实 tool/call 片段）",
+   "events": [
+    {
+     "type": "assistant/message",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "content": [
+        {
+         "type": "text",
+         "len": 112
+        },
+        {
+         "type": "tool-call",
+         "name": "pwsh"
+        },
+        {
+         "type": "tool-call",
+         "name": "read"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "pwsh",
+      "turn": 1,
+      "step": 1
+     }
+    },
+    {
+     "type": "tool/result",
+     "data": {
+      "_sanitized": true,
+      "message": {
+       "isError": false
+      },
+      "has_error": false,
+      "turn": 1,
+      "step": 1
+     }
+    },
+    {
+     "type": "tool/call",
+     "data": {
+      "_sanitized": true,
+      "name": "read",
+      "turn": 1,
+      "step": 1
+     }
+    }
+   ]
+  }
+ ]
+}

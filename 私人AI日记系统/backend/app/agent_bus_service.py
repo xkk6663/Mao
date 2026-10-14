@@ -242,6 +242,19 @@ class AgentBus:
             if not enabled:
                 agent.phase = "idle"
                 agent.state = {}
+                # 停用必须立即释放"身体"（README 6.3/6.9 的约定）：
+                # 否则停用后该 agent 仍带 active=True，快照的 active_agent 会
+                # 继续把它当成"当前显示者"，桌宠看着像没停用。
+                agent.active = False
+                if self._active_agent_id == agent_id:
+                    self._active_agent_id = None
+                    # 让位给其它已启用的 agent（下一轮事件会重新认领；这里
+                    # 先把最近有活动的已启用者顶上，避免身体空置）
+                    candidates = [a for a in self._agents.values() if a.enabled and a is not agent]
+                    if candidates:
+                        nxt = max(candidates, key=lambda a: a.last_phase_at)
+                        self._active_agent_id = nxt.agent_id
+                        nxt.active = True
         self._persist_enabled()
         self._broadcast_snapshot()
         return True
@@ -323,6 +336,13 @@ class AgentBus:
 
         if phase == "heartbeat":
             # 心跳不参与抢显示
+            return
+
+        # 已停用的 agent 绝不能占据"身体"（停用=立即释放，文档契约）
+        if not agent.enabled:
+            agent.active = False
+            if self._active_agent_id == agent.agent_id:
+                self._active_agent_id = None
             return
 
         # 事件源自己就是活跃者：直接更新

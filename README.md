@@ -1,4 +1,4 @@
-﻿# Mao 桌宠 · 跨 Agent 桌宠系统（v3.1）
+# Mao 桌宠 · 跨 Agent 桌宠系统（v3.1）
 
 > 把开源桌宠 Mio 改造为**跨 Agent 的"脸"**：桌宠本身无状态、只认标准 phase（思考/执行工具/说话/待机…），
 > 任何 Agent（小智 / DSH / Octop / 自研 Agent）通过一根**统一状态总线**接入即可驱动它——即换即用，无需重启。
@@ -400,26 +400,133 @@ async def my_adapter_loop() -> None:
 > 总线对事件来源零假设：你的 Agent 可以是任何进程/语言，只要能往本后端发 HTTP/WS 并最终调用总线 API 即可。
 > 想在独立进程接入？直接向 `POST /api/companion/agents` 家族扩展一个"外部事件上报"接口，或复用 pet_event_service 的 WS 通道（见 6.7）。
 
+**两条实战经验（`dsh_adapter` 踩过，接入时直接照做）：**
+
+1. **不要在 Windows 上用 `asyncio.create_subprocess_exec` 起边车**。它走 overlapped
+   命名管道，在受限/隐藏窗口环境下会直接 `PermissionError: [WinError 5]`。改用
+   `subprocess.Popen` + `PIPE` + 后台线程逐行读，再用
+   `loop.call_soon_threadsafe` 投递到 `asyncio.Queue`（见 `dsh_adapter.DshLogSidecar`）。
+2. **区分两个"启用"层次**：适配器自己的 `xx_config.json.enabled` 是"部署就绪开关"，
+   总线上的 `enabled`（Agent 页开关、持久化于 `agent_bus_config.json`）是"用户是否让它在
+   桌宠上显示"。上报前要同时检查两者（`dsh_adapter._bus_enabled()`），否则用户停用后
+   适配器仍在抢桌宠身体。
+
 ### 6.5 已内置适配器
 
 | Agent | 适配器 | capabilities | 配置 | 说明 |
 |---|---|---|---|---|
 | 小智 | `xiaozhi_adapter`（routes/xiaozhi.py 内） | voice/text/screen/mcp/observe 全开 | 无需配置 | 官方免费云，语音主通道；事件插桩见 6.6 |
-| DSH | `dsh_adapter.py` | text | `dsh_config.json` | DeepSeek Harness（Node.js 单 Agent），`base_url` 默认 `http://127.0.0.1:3080` |
+| DSH | `dsh_adapter.py` + `dsh_log_stream.mjs` | text/mcp | `dsh_config.json` | DeepSeek Harness 桌面版（Electron + Node），**真实会话事件摄取**，见 6.5.1 |
 | Octop | `octop_adapter.py` | text | `octop_config.json` | TencentCloud Octop（FastAPI + LangGraph 多 Agent），WS Hub 路径 `/api/agents/{aid}/chat/ws` |
 
-**DSH 事件 → phase 映射**（`dsh_adapter.parse_dsh_event`）：
+#### 6.5.1 DSH 接入（已实现，非占位）
 
-| DSH 事件 | phase |
+DSH 是 Electron + Node 的单 Agent 运行时，**不需要 token、不占端口**——它的工作状态
+直接来自本机会话事件日志：
+
+```
+~/.dsh/sessions/<cwd-slug>/<session-id>/session.v4.jsonl.zstd
+```
+
+该文件是**拼接式 Zstandard 帧**的 JSONL（每个追加批次一个独立 zstd 帧，因此不能一次性
+解压，只能逐帧解）。事件词汇是 DSH 官方 `SessionEvent` 词汇，粒度到 turn/step/tool。
+
+**进程拓扑**（DSH 协议细节全部隔离在边车里，总线与桌宠只认 phase）：
+
+```
+DSH 会话日志(.jsonl.zstd)
+  └─ node dsh_log_stream.mjs    协议侧：逐帧解 zstd + 折叠成客观事实 facts
+       └─ NDJSON over stdout
+            └─ dsh_adapter.py   策略侧：facts → phase → 总线
+                 └─ agent_bus_service → WS agent_phase → 桌宠
+```
+
+之所以加一层 Node 边车：Python 侧没有 zstd 绑定，而 Node 自带
+（`node:zlib` 的 `zstdDecompressSync`）。边车**零依赖、只读**，退出即被适配器自动拉起。
+
+**真实事件 → phase 映射**（`dsh_adapter.phase_for_facts`，判定顺序即优先级）：
+
+| DSH 真实事件 | phase | 说明 |
+|---|---|---|
+| `turn/start` | `planning` | 轮次开始 |
+| `todo_write` / `create_goal` / `update_goal` 工具 | `planning` | 规划类工具 |
+| `step/start`；`llm/retry` / `llm/retry-started` | `thinking` | 步骤推进 / LLM 重试 |
+| `tool/call`（调用未返回） | `executing_tool` | `active_tools > 0` |
+| `assistant/message` 且为**纯文字**（无 `tool-call` 块） | `streaming` | 正文输出 |
+| `ask_user_question` 工具在跑 | `waiting_input` | 等待用户作答 |
+| `approval/asked` → 未 `approval/decided` | `awaiting_approval` | 等待审批（本机已观测真实配对） |
+| `turn/end` 且 `reason.kind == "completed"` | `complete` | 单轮完成 |
+| `tool/result` 的 `message.isError === true`；`turn/end` 的 `error`/`max-tokens`/`interrupted` | `error` | 失败当下（不粘轮） |
+| DSH 进程退出但日志仍在（连接中断分支） | `paused` | 连接中断待恢复 |
+| DSH 在线且当前无工作 | `idle` | 待机 |
+
+> **12 个 phase 的"注册"与"可达路径"是两件事**（自检里有对应断言，别把二者混为一谈）：
+> `DSH_PHASES` 注册 12 个；其中 **10 个由实时事件（facts）产出**（`DSH_FACT_PHASES`）：
+> `planning` / `thinking` / `executing_tool` / `streaming` / `waiting_input` / `voice` /
+> `awaiting_approval` / `idle` / `complete` / `error`。另外两个：
+> - `paused` **不走 facts**，由「DSH 进程还在但会话不可用」的连接中断分支直接 emit；
+> - `heartbeat` **刻意不作为 phase emit**：总线的 `emit()` 对 heartbeat 不广播 `agent_phase`，
+>   且会把 `agent.phase` 写成 `"heartbeat"` 污染 Agent 页显示——保活一律走
+>   `agent_bus_service.heartbeat()`（这正是它存在的意义）。
+>
+> **`streaming` 的判据是「纯文字」而非「含文字」**：实测真实日志 377 条
+> `assistant/message` 中有 335 条同时含 `tool-call` 块，若拿"含 text"当判据会长期误报
+> 回复中。故边车额外折叠出 `last_message_text_only`（有 `text` 且无 `tool-call`），
+> `step/start` 会重置该标记。
+
+> **失败识别口径**：DSH 的失败标记是 `tool/result.data.message.isError === true`，
+> 而**不是** `data.error`（实测 330 条 tool/result：全部带 `isError` 布尔，仅 2 条带
+> `data.error`）。`error` phase 只在“最近一个事件本身是失败”时进入，后续任何进展事件
+> 立即恢复工作态，避免失败态粘住整轮。
+
+> **`voice`（语音播报）在本版 DSH 不可观测**：DSH 没有 TTS/语音合成服务（asar 内无
+> tts 包，官方 README 明确 "no speech synthesis"）；语音输入（STT）的转写只进输入框
+> 草稿，提交后与打字产生的 `user/message` **完全不可区分**。因此 DSH 的
+> `capabilities.voice` 如实报 `False`，适配器保留 `voice` phase 与映射：若日后部署了
+> 名为 `speak`/`tts` 的工具，桌宠会自动按"说话中"呈现，无需改代码。
+
+**摄取通道选型**（两个可编程面均在本机实测）：
+
+| 通道 | 实测延迟 | 取舍 |
+|---|---|---|
+| 会话日志 `session.v4.jsonl.zstd`（**本适配器采用**） | p50 215ms / p90 237ms | 无需鉴权、无需发现端口、DSH 重启不失效 |
+| Host WS `/api/remote.mux` → `session/follow` | p50 10ms / p90 78ms | 更低延迟且含 `assistant-stream` 增量，但需凭据 cookie 签名 + 端口发现（端口为临时分配、未持久化） |
+
+两者都能拿到同一批事件（实测同期各 12 条、seq 完全一致）。215ms 远优于 300ms 节流窗口与
+人眼感知，而日志通道在 DSH 重启/换端口/无 GUI 时都不失效，故取日志为主通道。
+
+**启用**：在 `私人AI日记系统\dsh_config.json` 设 `"enabled": true`（或在 MIO 管理窗口 →
+「Agent」页打开 DSH 开关）；随后启动 DeepSeek Harness 桌面应用即可。全部字段留空即用默认：
+
+```json
+{ "enabled": true, "sessions_root": "", "workspace": "", "session_id": "", "node_path": "", "poll_ms": 400 }
+```
+
+| 字段 | 留空时的行为 |
 |---|---|
-| `session/start` / `session/ready` | `idle` |
-| `turn/start`（payload 含 turn） | `planning` |
-| `step/start` | `thinking` |
-| `tool/call` / `tool/start` | `executing_tool` |
-| `text/stream` / `stream/start` | `streaming` |
-| `awaiting_approval` / `approval/required` | `awaiting_approval` |
-| `turn/end` / `turn/complete` | `complete` |
-| `error` | `error` |
+| `sessions_root` | `<DSH_HOME>/sessions`（默认 `~/.dsh/sessions`） |
+| `workspace` | 不限定，边车自动跟随"最近活跃的主会话"（优先 `delegationDepth=0`，避免跟到 subagent 子会话） |
+| `session_id` | 自动选活跃会话 |
+| `node_path` | 依次探测 PATH → DSH 自带 runtime → 常见安装位置 |
+| `poll_ms` | 400（日志尾随轮询间隔） |
+
+**自检与验证**（backend 目录下）：
+
+```powershell
+.venv\Scripts\python.exe -m app.dsh_adapter_selftest   # 115 项：映射/解码/回放/可达性/总线
+.venv\Scripts\python.exe -m app.dsh_adapter_e2e 60     # 端到端：轮询总线看 phase 实时变化
+.venv\Scripts\python.exe -m app.dsh_fixture_build      # 从真实日志重建回放夹具（脱敏）
+```
+
+**排障接口**（比 `/agents` 快照更深，先看这个）：
+
+```http
+GET /api/companion/agents/dsh/inspect
+```
+
+返回：`phase` / `bus_enabled` / `sidecar_alive` / `sidecar_error` / `dsh_process_running` /
+`session_id` / `facts`（最近折叠出的客观事实）/ `phases`（12）/ `fact_phases`（10）/
+`work_phases`（7）/ `config_path`（实际生效的配置文件路径）。
 
 **Octop 事件 → phase 映射**（`octop_adapter.parse_octop_event`）：
 

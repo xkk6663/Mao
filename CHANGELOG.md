@@ -5,6 +5,70 @@
 
 ---
 
+## v3.2（2026-10-14）· DSH 实时工作状态接入（真实事件摄取）
+
+**主线**：把 v3.1 里只是"配置就绪占位"的 DSH 适配器，改成**真实事件驱动**——DSH 真的在
+干什么，桌宠就实时演什么。接入后 DSH 能显示 v3.1 全部 12 个标准 phase。
+
+### DSH 事件摄取（dsh_log_stream.mjs + dsh_adapter.py）
+- **发现真实事件源**：DSH 把会话完整事件流持久化为**拼接式 Zstandard 帧**的 JSONL
+  （`~/.dsh/sessions/<cwd-slug>/<session-id>/session.v4.jsonl.zstd`）。每个追加批次一个独立
+  zstd 帧，**不能一次性解压**，只能逐帧解。
+- **新增零依赖 Node 边车** `dsh_log_stream.mjs`：逐帧解 zstd（`node:zlib` 自带）→ 解析
+  DSH 官方 `SessionEvent` → 折叠成**客观事实 facts** → NDJSON 输出。之所以放 Node 侧：
+  本项目 Python venv 无 zstd 绑定。协议细节（帧格式/事件字段）全部隔离在边车里，
+  Python 只做 facts → phase 的策略映射，两边规则不重复实现。
+- **会话选择**：优先"最近活跃的**主**会话"（`delegationDepth=0`），避免跟到 subagent
+  子会话；带迟滞（2.5s）防止两会话来回抖动；附着时不回放历史事件（只发一条推导出的
+  facts），否则桌宠会把几百条旧事件当实时状态闪一遍。
+- **12 个 phase 全部注册**（真实事件驱动）：
+  `turn/start`→planning、`step/start`/`llm/retry`→thinking、`tool/call`→executing_tool、
+  `assistant/message`(text)→streaming、`ask_user_question`→waiting_input、
+  `approval/asked`→awaiting_approval（未 decided）、`turn/end{completed}`→complete、
+  `tool/result{isError}`/`turn/end{error|max-tokens|interrupted}`→error、
+  进程退出→paused、无工作→idle、保活→heartbeat。
+- **失败识别口径修正**：DSH 的失败标记是 `tool/result.data.message.isError === true`，
+  **不是** `data.error`（实测 330 条 tool/result 全部带 `isError` 布尔，仅 2 条带 `data.error`）。
+  且 error 只在"最近一个事件本身失败"时进入，后续进展事件立即恢复工作态——**失败不粘轮**。
+- **如实的能力声明**：本版 DSH 无 TTS/语音合成服务（asar 内无 tts 包，官方 README 明确
+  "no speech synthesis"），STT 转写提交后与打字产生的 `user/message` 完全不可区分，故
+  `voice`/录音状态在 DSH 侧**不可观测** → `capabilities.voice=False`。适配器仍保留
+  `voice` phase 与 `speak`/`tts` 工具映射，日后部署了此类工具即自动生效，无需改代码。
+
+### 通道选型（实测，不靠猜）
+- A/B 实测同一段时间两条通道：**Host WS `/api/remote.mux` → `session/follow`**
+  p50 **10ms** / p90 78ms（含 `assistant-stream` 增量，但需凭据 cookie 签名 + 端口发现，
+  端口为临时分配未持久化）；**会话日志尾随** p50 **215ms** / p90 237ms（无需鉴权、无需端口、
+  DSH 重启不失效）。两者拿到的事件**完全一致**（同期各 12 条、seq 相同）。
+- **结论**：取日志为主通道——215ms 远优于 300ms 节流窗口与人眼感知，且在最无依赖、
+  最不易失效的一侧。WS 快通道留作后续可选加速项。
+
+### 修复
+- **`agent_bus_service.set_enabled` 未真正释放"身体"**：停用某 Agent 后 `enabled=False`、
+  `phase=idle`，但 `active` 仍为 `True`、`active_agent_id` 仍指向它——快照里它依旧是
+  "当前显示者"，桌宠看着像没停用（与 README 6.3/6.9 的"停用立即释放"契约相悖）。
+  现修正为：停用时清 `active`、清 `_active_agent_id`，并把身体让给最近有活动的其它已启用
+  Agent；`_decide_active_locked` 增加"已停用者绝不能占据身体"的硬门。
+- **停用后重新启用不立即恢复**：改用当前 facts 补发一次状态（`_publish_facts(force=True)`），
+  不必等下一个 DSH 事件；否则会停在 idle 直到 DSH 动一下。
+
+### 验证（可复现）
+- **自检 104/104 通过** `python -m app.dsh_adapter_selftest`：phase 映射全覆盖（含优先级
+  冲突组合）、单事件映射、边车真实日志解码、**真实事件回放**（夹具由
+  `app.dsh_fixture_build` 从真实会话日志抽取，84 步回放无异常且 phase 全合法）、总线集成。
+- **端到端** `python -m app.dsh_adapter_e2e`：轮询总线观测 DSH `online` 110/110 采样、
+  全程 `active=True` 且 `active_agent_id=dsh`，`state` 带真实 `tool/turn/step/session`。
+- **边界行为实测**：停用 → `active=False` 且身体让给小智；重新启用 → 立即恢复工作 phase；
+  杀掉边车进程 → 14s 内自动重启并恢复 online。
+
+### 文档
+- README 第六章重写 6.4/6.5：新增 **6.5.1 DSH 接入**（事件→phase 对照表、失败口径、
+  `voice` 不可观测的原因、通道选型实测表、配置字段表、自检命令）；6.4 补两条实战经验
+  （Windows 下不要用 `asyncio.create_subprocess_exec` 起边车——走 overlapped 命名管道会
+  `WinError 5`，改用 `Popen`+线程；区分 `xx_config.json.enabled` 与总线 `enabled` 两个层次）。
+
+---
+
 ## v3.1（2026-10-14）· 跨 Agent 桌宠迭代
 
 **主线**：桌宠定位升级为**跨 Agent 的"脸"**——后端统一状态总线 + 可插拔适配器（小智/DSH/Octop），桌宠只认标准 phase，即换即用无需重启。
@@ -17,7 +81,7 @@
 
 ### 适配器层（可插拔，原生协议全部隔离）
 - **小智插桩**（routes/xiaozhi.py）：`_xz_register/_xz_emit/_xz_status` 三 helper 全事件接入——hello→online+idle、goodbye→paused、MCP→executing_tool、STT→waiting_input、LLM→streaming、TTS→voice、TTS 结束→complete、断线→offline+paused；重连成功显式清除 error
-- **DSH 适配器**（dsh_adapter.py）：DeepSeek Harness 事件 → phase 映射（turn/step/tool/text/approval 状态机），配置即启用
+- **DSH 适配器**（dsh_adapter.py）：DeepSeek Harness 事件 → phase 映射（turn/step/tool/text/approval 状态机），配置即启用（**v3.2 已升级为真实事件摄取**，见上）
 - **Octop 适配器**（octop_adapter.py）：TencentCloud Octop WS 事件 → phase 映射，配置即启用
 
 ### 渲染端与前端
