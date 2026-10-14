@@ -221,13 +221,14 @@ class AgentBus:
         with self._lock:
             return self._agents.get(agent_id)
 
-    def set_status(self, agent_id: str, status: str, *, error: str = "") -> None:
+    def set_status(self, agent_id: str, status: str, *, error: str | None = None) -> None:
         agent = self.get(agent_id)
         if agent is None:
             return
         with self._lock:
             agent.status = status
-            if error:
+            # error 显式传入才更新（含空串=清除）；不传则保留旧值，避免覆盖适配器细节
+            if error is not None:
                 agent.error = str(error)[:300]
             agent.last_seen = time.monotonic()
         self._maybe_broadcast_status(agent_id)
@@ -450,7 +451,7 @@ def heartbeat(agent_id: str) -> None:
     bus.heartbeat(agent_id)
 
 
-def set_status(agent_id: str, status: str, *, error: str = "") -> None:
+def set_status(agent_id: str, status: str, *, error: str | None = None) -> None:
     bus.set_status(agent_id, status, error=error)
 
 

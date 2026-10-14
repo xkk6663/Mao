@@ -801,7 +801,8 @@ def _xz_emit(phase: str, **state) -> None:
         pass
 
 
-def _xz_status(status: str, *, error: str = "") -> None:
+def _xz_status(status: str, *, error: str | None = None) -> None:
+    """上报小智状态到总线。error=None 保留旧值；传空串清除（重连成功时）。"""
     try:
         from .. import agent_bus_service as _abs
         _abs.set_status("xiaozhi", status, error=error)
@@ -2454,9 +2455,9 @@ async def _ensure_upstream() -> tuple[object | None, str | None]:
         _upstream = conn
         _session_wake_done = False   # 保留变量（不再用于唤醒，静默连接直接音频流注入）
         _tts_playing = False
-        # 跨 Agent 总线：注册 + 在线 + 待机
+        # 跨 Agent 总线：注册 + 在线 + 待机（error 清空，消除"在线但残留断线提示"的矛盾显示）
         _xz_register()
-        _xz_status("online")
+        _xz_status("online", error="")
         _xz_emit("idle", session_id=str(_session_id or ""))
         # quiet: 连接成功/重连状态不写历史不广播（用户要求主聊天界面不显示重连/断开，避免刷屏占空间）
         await _syslog(f"🔗 小智已连接（会话 {_session_id}）", quiet=True)
