@@ -168,6 +168,22 @@
     var activeTag = agent.active
       ? '<span style="display:inline-block;font-size:10px;color:#fff;background:var(--accent,#4c8798);border-radius:8px;padding:0 7px;margin-left:6px;">当前显示</span>'
       : ''
+    // 未启用的 Agent 不展示工作状态（离线/阶段/能力均无意义），只保留启用引导
+    var stateRowHtml = ''
+    if (!agent.enabled) {
+      stateRowHtml =
+        '<div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted,#687984);">' +
+          '<span>未启用</span>' +
+        '</div>'
+    } else {
+      stateRowHtml =
+        '<div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted,#687984);">' +
+          '<span>状态：' + statusText(agent) + '</span>' +
+          '<span>·</span>' +
+          '<span>阶段：' + phaseLabel + '</span>' +
+          (capChips ? '<span style="flex:1;"></span>' + capChips : '') +
+        '</div>'
+    }
     var card = document.createElement('div')
     card.style.cssText =
       'border:1px solid var(--line,#d9e2e6);border-radius:10px;padding:12px 14px;background:var(--surface,#ffffff);' +
@@ -184,12 +200,7 @@
           (agent.enabled ? '启用' : '停用') +
         '</label>' +
       '</div>' +
-      '<div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted,#687984);">' +
-        '<span>状态：' + statusText(agent) + '</span>' +
-        '<span>·</span>' +
-        '<span>阶段：' + phaseLabel + '</span>' +
-        (capChips ? '<span style="flex:1;"></span>' + capChips : '') +
-      '</div>' +
+      stateRowHtml +
       errHtml
     var sw = $q('.mio-agent-switch', card)
     sw.addEventListener('change', function (e) {
