@@ -139,11 +139,20 @@ body,
   text-overflow: ellipsis;
 }
 
-.agent-badge-chip.working {
-  background: rgb(214 169 94 / 94%);
-  color: #1c2628;
-  font-weight: 600;
-}
+/* phase 全表 12 态专属色（含连接中/异常，深底白字） */
+.agent-badge-chip.p-idle { background: #57636e; }
+.agent-badge-chip.p-planning { background: #3aa0a0; }
+.agent-badge-chip.p-thinking { background: #3f7fd4; }
+.agent-badge-chip.p-executing_tool { background: #d2691e; }
+.agent-badge-chip.p-streaming { background: #4fa95f; }
+.agent-badge-chip.p-waiting_input { background: #2f9dbb; }
+.agent-badge-chip.p-voice { background: #c98a2b; }
+.agent-badge-chip.p-complete { background: #2f8f5b; }
+.agent-badge-chip.p-error { background: #d05757; }
+.agent-badge-chip.p-paused { background: #7b818c; }
+.agent-badge-chip.p-awaiting_approval { background: #7a5af8; }
+.agent-badge-chip.p-heartbeat { background: #4f7ba8; }
+.agent-badge-chip.p-connecting { background: #6b7f96; }
 
 .speech-bubble {
   position: absolute;

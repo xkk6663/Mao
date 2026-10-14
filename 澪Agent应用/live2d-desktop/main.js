@@ -830,7 +830,7 @@ function createWindow() {
   setMouseInteractive(false)
   try { mainWindow.webContents.session.clearCache() } catch (_e) {}
   try { mainWindow.webContents.session.setCacheSizeLimit(0) } catch (_e) {}
-  mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron&v=20261015-follow`)
+  mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron&v=20261015-phasecolors`)
   log('window.load', `${API_BASE}/agent-app/live2d-pet/index.html`)
   // 主进程轮询鼠标位置驱动穿透/交互（不依赖渲染层 forward 转发）
   // 60ms ≈ 16Hz：穿透策略与视线跟随共用，兼顾响应度与开销

@@ -1174,16 +1174,24 @@
       if (!st) return
       if (st.enabled === false) return          // 停用：状态栏一并停用
       if (st.status === 'offline') return       // 离线：即插即拔，不再展示
-      const working = Boolean(st.phase && WORK_PHASES.has(st.phase) && st.active)
-      const label = working
-        ? (PHASE_LABELS[st.phase] || st.phase)
-        : (AGENT_STATUS_LABELS[st.status] || '在线')
-      chips.push({ id, name: String(st.name || id), label, working })
+      // phase 全表 12 态各有专属色；连接中/异常覆盖为连接态色
+      let phase = String(st.phase || 'idle')
+      let label
+      if (st.status === 'connecting') {
+        phase = 'connecting'
+        label = '连接中'
+      } else if (st.status === 'error') {
+        phase = 'error'
+        label = '异常'
+      } else {
+        label = PHASE_LABELS[phase] || phase
+      }
+      chips.push({ id, name: String(st.name || id), label, phase })
     })
     badge.replaceChildren()
     for (const chip of chips) {
       const el = document.createElement('span')
-      el.className = chip.working ? 'agent-badge-chip working' : 'agent-badge-chip'
+      el.className = `agent-badge-chip p-${chip.phase}`
       el.textContent = `${chip.name} · ${chip.label}`
       el.title = `${chip.name} · ${chip.label}`
       badge.appendChild(el)
