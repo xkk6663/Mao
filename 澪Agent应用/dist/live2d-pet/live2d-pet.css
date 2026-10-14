@@ -227,8 +227,8 @@ body,
   position: absolute;
   z-index: 21;
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 2px;
   width: min(230px, calc(100% - 20px));
   padding: 6px 12px;
   color: #283b42;
@@ -236,12 +236,24 @@ body,
   border: 1px solid rgb(105 132 140 / 28%);
   border-radius: 16px;
   box-shadow: 0 10px 28px rgb(24 43 50 / 20%);
-  cursor: grab;
   user-select: none;
 }
 
 .size-panel[hidden] {
   display: none;
+}
+
+.size-panel header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  cursor: grab;
+  touch-action: none;
+}
+
+.size-panel header:active {
+  cursor: grabbing;
 }
 
 .size-panel output {

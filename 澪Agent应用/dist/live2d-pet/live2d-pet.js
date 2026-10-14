@@ -2130,6 +2130,33 @@
     await loadModel(modelId)
   })
 
+  const sizePanelHeader = document.getElementById('size-panel-header')
+  let panelDrag = null
+  sizePanelHeader?.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return
+    panelDrag = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      left: sizePanel.offsetLeft,
+      top: sizePanel.offsetTop,
+    }
+    try { sizePanelHeader.setPointerCapture(event.pointerId) } catch (_) {}
+  })
+  sizePanelHeader?.addEventListener('pointermove', (event) => {
+    if (!panelDrag || panelDrag.pointerId !== event.pointerId) return
+    const dx = event.clientX - panelDrag.startX
+    const dy = event.clientY - panelDrag.startY
+    const rect = sizePanel.getBoundingClientRect()
+    sizePanel.style.left = `${Math.max(4, Math.min(window.innerWidth - rect.width - 4, panelDrag.left + dx))}px`
+    sizePanel.style.top = `${Math.max(4, Math.min(window.innerHeight - rect.height - 4, panelDrag.top + dy))}px`
+  })
+  const endPanelDrag = (event) => {
+    if (panelDrag && panelDrag.pointerId === event.pointerId) panelDrag = null
+  }
+  sizePanelHeader?.addEventListener('pointerup', endPanelDrag)
+  sizePanelHeader?.addEventListener('pointercancel', endPanelDrag)
+
   sizeSlider.addEventListener('pointerdown', (event) => {
     try { sizeSlider.setPointerCapture(event.pointerId) } catch (_) {}
   })
