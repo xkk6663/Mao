@@ -513,7 +513,7 @@ DSH 会话日志(.jsonl.zstd)
 **自检与验证**（backend 目录下）：
 
 ```powershell
-.venv\Scripts\python.exe -m app.dsh_adapter_selftest   # 115 项：映射/解码/回放/可达性/总线
+.venv\Scripts\python.exe -m app.dsh_adapter_selftest   # 119 项：映射/解码/回放/可达性/总线/前端契约
 .venv\Scripts\python.exe -m app.dsh_adapter_e2e 60     # 端到端：轮询总线看 phase 实时变化
 .venv\Scripts\python.exe -m app.dsh_fixture_build      # 从真实日志重建回放夹具（脱敏）
 ```

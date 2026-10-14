@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -455,9 +456,40 @@ def test_replay_real_events() -> None:
 # ---------------------------------------------------------------------------
 # 4) 工具函数
 # ---------------------------------------------------------------------------
+def test_frontend_contract() -> None:
+    """前端契约：桌宠渲染端的 phase 映射必须覆盖本适配器会发出的每个 phase。
+
+    README 6.8 承诺「接入新 Agent 时前端零改动——只要 phase 落在枚举内」。
+    这条测试就是那句话的机器校验：解析 live2d-pet.js 里内嵌的 PHASE_LABELS 与
+    WORK_PHASES，断言 DSH 会发出的 phase 全部有中文标签，且"工作态"口径一致。
+    """
+    print("\n[6] 前端契约（桌宠渲染端 phase 映射覆盖）")
+
+    pet_js = Path(dsh.__file__).resolve().parents[3] / "澪Agent应用" / "dist" / "live2d-pet" / "live2d-pet.js"
+    if not pet_js.exists():
+        print(f"      未找到 {pet_js}，跳过前端契约检查")
+        return
+
+    src = pet_js.read_text(encoding="utf-8", errors="replace")
+    m_labels = re.search(r"const PHASE_LABELS\s*=\s*\{(.*?)\}", src, re.S)
+    m_work = re.search(r"const WORK_PHASES\s*=\s*new Set\(\[(.*?)\]\)", src, re.S)
+    check("解析到 PHASE_LABELS", m_labels is not None, "未匹配到 PHASE_LABELS")
+    check("解析到 WORK_PHASES", m_work is not None, "未匹配到 WORK_PHASES")
+    if not (m_labels and m_work):
+        return
+
+    labels = set(re.findall(r"([A-Za-z_]+)\s*:", m_labels.group(1)))
+    work = set(re.findall(r"'([a-z_]+)'", m_work.group(1)))
+
+    missing_label = [p for p in dsh.DSH_PHASES if p not in labels]
+    check("桌宠对 DSH 全部 12 phase 都有中文标签", not missing_label,
+          f"缺标签={missing_label}")
+    check("前端工作态口径与适配器一致（7 个）", work == set(dsh.DSH_WORK_PHASES),
+          f"frontend={sorted(work)} adapter={sorted(dsh.DSH_WORK_PHASES)}")
+
+
 def test_helpers() -> None:
     print("\n[4] 工具函数 / 配置")
-
     check("默认 sessions_root 指向 .dsh/sessions",
           "sessions" in str(dsh.default_sessions_root()))
     # 默认 workspace 留空 = 不限定，由边车选最近活跃的主会话
@@ -539,6 +571,7 @@ def main() -> int:
     test_replay_real_events()
     test_helpers()
     test_bus_integration()
+    test_frontend_contract()
 
     print("\n" + "=" * 68)
     print(f"结果：{PASS} 通过 / {FAIL} 失败")

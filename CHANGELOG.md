@@ -53,13 +53,18 @@
   不必等下一个 DSH 事件；否则会停在 idle 直到 DSH 动一下。
 
 ### 验证（可复现）
-- **自检 104/104 通过** `python -m app.dsh_adapter_selftest`：phase 映射全覆盖（含优先级
+- **自检 119/119 通过** `python -m app.dsh_adapter_selftest`：phase 映射全覆盖（含优先级
   冲突组合）、单事件映射、边车真实日志解码、**真实事件回放**（夹具由
-  `app.dsh_fixture_build` 从真实会话日志抽取，84 步回放无异常且 phase 全合法）、总线集成。
+  `app.dsh_fixture_build` 从真实会话日志脱敏抽取，84 步回放无异常且 phase 全合法）、
+  **可达性断言**（枚举事实网格，断言 `phase_for_facts` 恰好产出 `DSH_FACT_PHASES` 10 个，
+  且 `paused`/`heartbeat` 不由 facts 产出）、总线集成、**前端契约**（解析 `live2d-pet.js`
+  内嵌的 `PHASE_LABELS`/`WORK_PHASES`，断言 12 个 phase 都有中文标签且工作态口径一致）。
 - **端到端** `python -m app.dsh_adapter_e2e`：轮询总线观测 DSH `online` 110/110 采样、
   全程 `active=True` 且 `active_agent_id=dsh`，`state` 带真实 `tool/turn/step/session`。
 - **边界行为实测**：停用 → `active=False` 且身体让给小智；重新启用 → 立即恢复工作 phase；
   杀掉边车进程 → 14s 内自动重启并恢复 online。
+- **排障接口**：新增 `GET /api/companion/agents/{id}/inspect`（`phase`/`bus_enabled`/
+  `sidecar_alive`/`dsh_process_running`/`facts`/`phases`/`fact_phases`/`config_path`）。
 
 ### 文档
 - README 第六章重写 6.4/6.5：新增 **6.5.1 DSH 接入**（事件→phase 对照表、失败口径、
