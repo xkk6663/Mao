@@ -2062,13 +2062,24 @@
     if (!sizePanel.contains(event.target) && event.target?.dataset?.action !== 'size') sizePanel.hidden = true
   })
 
+  function positionSizePanelNear(event) {
+    const rect = sizePanel.getBoundingClientRect()
+    const px = Number(event?.clientX ?? window.innerWidth - rect.width - 16)
+    const py = Number(event?.clientY ?? window.innerHeight - rect.height - 16)
+    sizePanel.style.left = `${Math.max(8, Math.min(window.innerWidth - rect.width - 8, px))}px`
+    sizePanel.style.top = `${Math.max(8, Math.min(window.innerHeight - rect.height - 8, py))}px`
+  }
+
   contextMenu.addEventListener('click', async (event) => {
     const action = event.target.closest('button')?.dataset.action
     if (!action) return
     contextMenu.hidden = true
     const bridge = await waitForBridge()
     if (action === 'chat') await bridge.open_chat()
-    if (action === 'size') sizePanel.hidden = false
+    if (action === 'size') {
+      sizePanel.hidden = false
+      positionSizePanelNear(event)
+    }
     if (action === 'screenshot-ask') {
       // 截图提问：截全屏 → 小智视觉分析 → 直接显示气泡（后端已写 pet 历史+syslog）
       // 禁止复述注入：vision 返回文本不再调 /say 当成用户消息重发
@@ -2119,6 +2130,12 @@
     await loadModel(modelId)
   })
 
+  sizeSlider.addEventListener('pointerdown', (event) => {
+    try { sizeSlider.setPointerCapture(event.pointerId) } catch (_) {}
+  })
+  sizeSlider.addEventListener('pointerup', (event) => {
+    try { sizeSlider.releasePointerCapture(event.pointerId) } catch (_) {}
+  })
   sizeSlider.addEventListener('input', async () => {
     const percent = Number(sizeSlider.value)
     sizeValue.value = `${percent}%`
