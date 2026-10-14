@@ -271,6 +271,13 @@
     else showPanel()
   }
 
+  // 点击其他导航项时自动收起 Agent 页（与设置面板一致），避免覆盖对话/桌宠等视图
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('nav button.nav-item')
+    if (!b || b === navBtn) return
+    if (panel && panel.style.display !== 'none') hidePanel()
+  }, true)
+
   // ---------- 启动：等 Vue 渲染出侧边栏后再挂导航 ----------
   function boot() {
     if (!$q('nav')) { window.setTimeout(boot, 400); return }

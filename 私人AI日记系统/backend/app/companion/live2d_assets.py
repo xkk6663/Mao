@@ -28,13 +28,45 @@ class Live2DAssetsService:
         self._dep_save_config = dep_save_config
 
     def live2d_state_dir(self) -> Path:
-        configured_state_root = os.getenv("MIO_DESKTOP_STATE_DIR", "").strip()
-        state_root = Path(configured_state_root) if configured_state_root else (
-            Path("D:/Mio数据")
-            if Path("D:/").exists()
-            else Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "MioAgent"
-        )
-        return (state_root / "Live2D桌宠").resolve()
+        """桌宠数据目录（Electron 与后端必须解析到**同一个**目录）。
+
+        环境变量语义（与 Electron ``main.js`` 对齐，两者必须一致）：
+
+        - ``MIO_PET_STATE_DIR`` —— **完整的 "Live2D桌宠" 目录**（Electron 直接
+          把它当 ``STATE_DIR`` 用，不再拼接子目录）。后端优先读它，保证双方
+          永远指向同一处；
+        - ``MIO_DESKTOP_STATE_DIR`` —— 桌宠数据根（其下再拼 "Live2D桌宠"）；
+        - 都没有时用 ``source_workspace_root/pet-data/Live2D桌宠``（与
+          ``companion_service`` 拉起桌宠时传给 Electron 的默认值等价）;
+        - 最终兜底 ``LOCALAPPDATA\\MioAgent\\Live2D桌宠``（旧行为）。
+
+        历史坑：这里原先用 ``Path(MIO_PROJECT_ROOT) / "Mao" / "pet-data"``，
+        而 ``MIO_PROJECT_ROOT`` 的语义是"项目根"本身，再拼 "Mao" 会得到
+        ``C:\\Users\\xiao1\\Mao\\Mao\\pet-data``（空目录）——后端因此读不到任何
+        自定义模型（只剩 6 个内置），切角色静默失败。
+        """
+        # 1) 与 Electron 完全同一个变量，最高优先（指向完整的盘宠目录）
+        pet_state = os.getenv("MIO_PET_STATE_DIR", "").strip()
+        if pet_state:
+            return Path(pet_state).resolve()
+        # 2) 桌宠数据根（其下拼 Live2D桌宠）
+        configured = os.getenv("MIO_DESKTOP_STATE_DIR", "").strip()
+        if configured:
+            base = Path(configured)
+            # 容错：若调用方已经把 "Live2D桌宠" 传进来，就不要再拼一层
+            if base.name == "Live2D桌宠":
+                return base.resolve()
+            return (base / "Live2D桌宠").resolve()
+        # 3) 默认：项目根/pet-data/Live2D桌宠
+        try:
+            from ..config import settings as _settings
+            root = _settings.source_workspace_root
+        except Exception:  # noqa: BLE001
+            root = None
+        if root:
+            return (Path(root) / "pet-data" / "Live2D桌宠").resolve()
+        # 4) 旧行为兜底
+        return (Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "MioAgent" / "Live2D桌宠").resolve()
 
 
     def _live2d_models_dir(self) -> Path:

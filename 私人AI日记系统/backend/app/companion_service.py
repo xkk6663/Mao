@@ -224,7 +224,8 @@ def _electron_pet_command() -> list[str] | None:
     app_root = settings.source_workspace_root / "澪Agent应用" / "live2d-desktop"
     executable = app_root / "node_modules" / "electron" / "dist" / "electron.exe"
     if executable.is_file() and (app_root / "main.js").is_file():
-        return [str(executable), str(app_root)]
+        # --no-sandbox: 当前系统 Chromium 沙箱初始化崩溃（Win11 预览版），必须禁用
+        return [str(executable), "--no-sandbox", str(app_root)]
     return None
 
 
@@ -275,8 +276,9 @@ def start_pet() -> dict[str, Any]:
             ).rstrip("/")
             configured_state_root = os.getenv("MIO_DESKTOP_STATE_DIR", "").strip()
             state_root = Path(configured_state_root) if configured_state_root else (
-                Path("D:/Mio数据")
-                if Path("D:/").exists()
+                # 默认迁到项目根 pet-data（ASCII、可写），避开 LOCALAPPDATA\MioAgent 受控目录的写入限制
+                Path(settings.source_workspace_root) / "pet-data"
+                if hasattr(settings, "source_workspace_root") and settings.source_workspace_root
                 else Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "MioAgent"
             )
             env["MIO_PET_STATE_DIR"] = str(state_root / "Live2D桌宠")

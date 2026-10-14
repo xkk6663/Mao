@@ -41,4 +41,9 @@ contextBridge.exposeInMainWorld('mioDesktop', {
     ipcRenderer.on('mio-pet-event', listener)
     return () => ipcRenderer.removeListener('mio-pet-event', listener)
   },
+  onMouseMove: (callback) => {
+    const listener = (_event, payload) => callback(payload || {})
+    ipcRenderer.on('mio-desktop:mouse-move', listener)
+    return () => ipcRenderer.removeListener('mio-desktop:mouse-move', listener)
+  },
 })

@@ -63,6 +63,7 @@ let chatWindowOpen = false
 let modelBounds = null
 let uiOpen = false
 let mousePolicyTimer = null
+let lastIgnoreMouseEvents = null
 let topmostWatchdog = null
 let lockControlAnchor = null
 let parentWatchdog = null
@@ -200,7 +201,7 @@ function openPetAdmin() {
   const sess = petAdminWindow.webContents.session
   sess.clearCache().then(() => sess.clearStorageData()).then(() => {
     // 桌宠管理窗口：对话入口 = 原版 ChatPage 改造版（小智历史+WS+音频+跟随对话按钮+会话抽屉，无缝衔接原版框架）
-    petAdminWindow.loadURL(`${API_BASE}/agent-app/?workspace=main&v=20261012k`)
+    petAdminWindow.loadURL(`${API_BASE}/agent-app/?workspace=main&v=20261015a`)
   })
   petAdminWindow.on('closed', () => { petAdminWindow = null })
 }
@@ -437,14 +438,23 @@ async function importModel() {
   return { ok: true, modelId: id, models: modelCatalog() }
 }
 
+function setMainWindowIgnoreMouseEvents(ignore) {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  // 状态去重：只有需要翻转时才调用 setIgnoreMouseEvents，
+  // 避免高频切换 Windows hit-test 导致 pointer 事件流中断/丢失（拖动卡顿、漂移根因）
+  if (lastIgnoreMouseEvents === ignore) return
+  lastIgnoreMouseEvents = ignore
+  mainWindow.setIgnoreMouseEvents(ignore)
+}
+
 function applyMainWindowMousePolicy() {
   if (!mainWindow || mainWindow.isDestroyed()) return
   if (chatWindowOpen) {
-    mainWindow.setIgnoreMouseEvents(true)
+    setMainWindowIgnoreMouseEvents(true)
     return
   }
   if (clickThroughLocked) {
-    mainWindow.setIgnoreMouseEvents(true)
+    setMainWindowIgnoreMouseEvents(true)
     return
   }
   // 不再依赖渲染层鼠标事件转发（--no-sandbox 下 forward 不可靠）：
@@ -455,11 +465,21 @@ function applyMainWindowMousePolicy() {
     && pt.x >= wb.x + modelBounds.x && pt.x <= wb.x + modelBounds.x + modelBounds.width
     && pt.y >= wb.y + modelBounds.y && pt.y <= wb.y + modelBounds.y + modelBounds.height
   const inWindow = pt.x >= wb.x && pt.x <= wb.x + wb.width && pt.y >= wb.y && pt.y <= wb.y + wb.height
-  if (inModel || rendererInteractive || (uiOpen && inWindow)) {
-    mainWindow.setIgnoreMouseEvents(false)
-  } else {
-    mainWindow.setIgnoreMouseEvents(true)
-  }
+  setMainWindowIgnoreMouseEvents(!(inModel || rendererInteractive || (uiOpen && inWindow)))
+}
+
+// 全局鼠标位置推送（渲染层坐标 = 屏幕坐标 - 虚拟边界原点）：
+// Electron 穿透模式下渲染层收不到 mousemove，视线跟随必须由主进程高频喂数据
+function sendMouseMoveToRenderer() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  try {
+    const bounds = virtualBounds()
+    const pt = screen.getCursorScreenPoint()
+    mainWindow.webContents.send('mio-desktop:mouse-move', {
+      x: pt.x - bounds.x,
+      y: pt.y - bounds.y,
+    })
+  } catch (_) {}
 }
 
 function setMouseInteractive(interactive) {
@@ -805,17 +825,21 @@ function createWindow() {
   clickThroughLocked = Boolean(loadRuntimeState().clickThroughLocked)
   restoreWindowVisibility()
   mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  // 新窗口实例的穿透状态独立，重置去重标记确保首次判定一定下发
+  lastIgnoreMouseEvents = null
   setMouseInteractive(false)
   try { mainWindow.webContents.session.clearCache() } catch (_e) {}
   try { mainWindow.webContents.session.setCacheSizeLimit(0) } catch (_e) {}
-  mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron&v=20261014-multiagent`)
+  mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron&v=20261015-follow`)
   log('window.load', `${API_BASE}/agent-app/live2d-pet/index.html`)
   // 主进程轮询鼠标位置驱动穿透/交互（不依赖渲染层 forward 转发）
+  // 60ms ≈ 16Hz：穿透策略与视线跟随共用，兼顾响应度与开销
   if (!mousePolicyTimer) {
     mousePolicyTimer = setInterval(() => {
       if (quitting || !mainWindow || mainWindow.isDestroyed()) return
       applyMainWindowMousePolicy()
-    }, 120)
+      sendMouseMoveToRenderer()
+    }, 60)
   }
   // 启动后多次尝试修正跨屏虚拟边界（等渲染完成）
   ;[1200, 3200, 8000, 15000].forEach((ms) => setTimeout(applyMainWindowVirtualBounds, ms))

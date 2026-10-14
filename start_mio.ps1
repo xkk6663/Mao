@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 #  Mio 桌宠 一键启动脚本（后端 + Electron 桌宠）
 #  用法: pwsh -NoProfile -ExecutionPolicy Bypass -File start_mio.ps1
 #  幂等: 已在运行的服务会被跳过，不会重复启动
@@ -77,8 +77,17 @@ function Start-Wmi($exe, $argList, $workdir) {
 Write-Step '========== Mio 桌宠启动 =========='
 
 # ---------- 1) 后端 (uvicorn :8000) ----------
+# 桌宠数据目录：后端与 Electron 必须解析到**同一个**目录，否则后端写的
+# runtime.json（模型选择）与桌宠读的不是同一个文件 → 切角色"成功但无效"。
+# 这里显式传入，避免两边各自推导出不同路径。
+$petStateDir = Join-Path $root 'pet-data\Live2D桌宠'
+
+# 就绪探测用 /api/companion/agents（纯读总线，稳定）；
+# 不用 /api/companion/status —— 它依赖 Live2D 资源与磁盘写入，
+# 资源异常时返回 500 会让脚本误判"后端未运行"而重复拉起。
+$healthUrl = 'http://127.0.0.1:8000/api/companion/agents'
 $backendUp = $false
-try { $null = Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/companion/status' -TimeoutSec 2; $backendUp = $true } catch {}
+try { $null = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 2; $backendUp = $true } catch {}
 
 if ($backendUp) {
     Write-Step '[1/2] 后端已在运行，跳过'
@@ -86,12 +95,15 @@ if ($backendUp) {
     Write-Step '[1/2] 后端未运行，正在启动...'
     # 用 Start-Process 文件重定向（不用 .NET 管道：uvicorn 日志多时管道缓冲满会卡死后端）
     # -u: python 无缓冲，日志实时落盘便于排查音频链路
+    # MIO_PET_STATE_DIR：与 Electron main.js 同一个变量，指向完整的
+    # "Live2D桌宠" 目录（Electron 直接当 STATE_DIR 用，不再拼子目录）。
+    $env:MIO_PET_STATE_DIR = $petStateDir
     $p = Start-Process -FilePath $backendPy -ArgumentList '-u','-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8000' -WorkingDirectory $backendDir -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
-    Write-Step "      已启动 (pid=$($p.Id))，等待就绪..."
+    Write-Step "      已启动 (pid=$($p.Id))，数据目录=$petStateDir，等待就绪..."
     $ready = $false
     for ($i = 0; $i -lt 30; $i++) {
         Start-Sleep -Milliseconds 1000
-        try { $null = Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/companion/status' -TimeoutSec 1; $ready = $true; break } catch {}
+        try { $null = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 1; $ready = $true; break } catch {}
     }
     if ($ready) { Write-Step '      后端就绪 OK' }
     else { Write-Step '      后端启动超时，请查看 backend_err.log' }
@@ -103,7 +115,9 @@ if ($electronRunning) {
     Write-Step '[2/2] 桌宠已在运行，跳过'
 } else {
     Write-Step '[2/2] 桌宠未运行，正在启动...'
-    $petPid = Start-Wmi $electronExe '.' $electronDir
+    # --no-sandbox: 当前系统（Win11 预览版 + 近期更新）Chromium 沙箱初始化崩溃，
+    # 必须禁用沙箱才能启动；数据目录默认已迁至项目根 pet-data（避开受控目录）
+    $petPid = Start-Wmi $electronExe '--no-sandbox .' $electronDir
     Write-Step "      桌宠窗口已拉起 (pid=$petPid)，几秒内出现"
 }
 

@@ -555,8 +555,8 @@
       model.y = window.innerHeight * (0.5 + Number(settings.live2d_vertical_offset || 0))
     }
     if (settings.live2d_keep_visible) clampModelToViewport()
-    updateSpeechBubblePosition()
-    updateLockControlAnchor()
+    updateSpeechBubblePosition(true)
+    updateLockControlAnchor(true)
     reportModelBounds()
   }
 
@@ -756,8 +756,14 @@
     addParameter('ParamBodyAngleZ', bodyZ, 0.75)
   }
 
-  function updateLockControlAnchor() {
+  let lastLockAnchorAt = 0
+  function updateLockControlAnchor(force = false) {
     if (!electronRuntime || !model || !model.visible) return
+    // 节流：拖动路径每帧都会调用，getBounds 是全模型遍历重操作；
+    // 80ms 节流（≈12Hz）足够锁定窗跟随，强制刷新留给定位/结束场景
+    const now = performance.now()
+    if (!force && now - lastLockAnchorAt < 80) return
+    lastLockAnchorAt = now
     const bounds = model.getBounds()
     window.mioDesktop.setLockControlAnchor({
       x: bounds.x,
@@ -842,7 +848,20 @@
       activityIndicator.className = 'activity-indicator idle'
       activityIndicator.classList.remove('active')
     }
-    if (Date.now() > emotionUntil && currentActivity === 'idle') currentEmotion = 'neutral'
+    if (Date.now() > emotionUntil && currentActivity === 'idle') {
+      // 情绪到期：尝试恢复到自然（neutral）表情；模型表情命名匹配不到时
+      // 重置回默认表情，避免任何表情被应用后永久卡住（如大肥鱼）
+      if (currentEmotion !== 'neutral' && lastAppliedExpressionEmotion && lastAppliedExpressionEmotion !== 'neutral') {
+        const restore = expressionForEmotion('neutral')
+        if (restore) {
+          Promise.resolve(model.expression(restore)).catch(() => {})
+        } else {
+          resetModelExpression()
+        }
+        lastAppliedExpressionEmotion = 'neutral'
+      }
+      currentEmotion = 'neutral'
+    }
     const emotion = emotionParameters(currentEmotion)
     setParameter('ParamMouthForm', emotion.mouth, 0.38)
     setParameter('ParamEyeLSmile', emotion.smile, 0.45)
@@ -994,6 +1013,16 @@
     }
   }
 
+  // 表情恢复兜底：重置到模型默认表情（清除当前应用的表达式）。
+  // 用于"情绪/预览表情找不到匹配的自然表情"时，防止表情永久卡住。
+  function resetModelExpression() {
+    const internal = model?.internalModel
+    const manager = internal?.expressionManager
+    if (manager && typeof manager.resetExpression === 'function') {
+      try { manager.resetExpression() } catch (_) {}
+    }
+  }
+
   function applyEmotion(emotion, durationMs = 10000) {
     const nextEmotion = String(emotion || 'neutral')
     const expressionChanged = nextEmotion !== lastAppliedExpressionEmotion
@@ -1117,12 +1146,13 @@
     badge.addEventListener('dblclick', () => {
       // 双击恢复跟随桌宠头顶
       localStorage.removeItem('mio_agent_badge_manual_pos')
-      updateAgentBadgePosition()
+      updateAgentBadgePosition(true)
     })
     return badge
   }
 
   let lastAgentBadgePos = null
+  let lastBadgePosAt = 0
   let badgeDragging = false
 
   // ---- 多 Agent 状态栏：每个 agent 一个状态 chip，实时并排显示 ----
@@ -1160,19 +1190,24 @@
     }
     const visible = chips.length > 0
     badge.style.opacity = visible ? '1' : '0'
-    if (visible) updateAgentBadgePosition()
+    if (visible) updateAgentBadgePosition(true)
     // 兼容旧引用（右键菜单重新开启徽标时恢复展示）
     window.__lastAgentBadgeText = chips.map((c) => `${c.name} · ${c.label}`).join('，')
   }
 
   // 徽标定位：手动拖动位置优先；否则锚定模型头顶上方居中。锁定时不可交互。
-  function updateAgentBadgePosition() {
+  function updateAgentBadgePosition(force = false) {
     const badge = document.getElementById('agent-badge')
     if (!badge || !model) return
     // 锁定桌宠时徽标不可交互（跟随头顶仅展示）；解锁后可拖动
     badge.style.pointerEvents = clickThroughLocked() ? 'none' : 'auto'
     // 拖动期间不参与每帧定位，避免把徽标拉回旧位置
     if (badgeDragging || !agentBadgeEnabled() || badge.style.opacity === '0') return
+    // 节流：ticker 每帧调用，getBounds 是全模型遍历重操作；
+    // 80ms 节流（≈12Hz）跟随足够，显隐/手动复位场景用 force 立即刷新
+    const now = performance.now()
+    if (!force && now - lastBadgePosAt < 80) return
+    lastBadgePosAt = now
     let manual = null
     try {
       const saved = localStorage.getItem('mio_agent_badge_manual_pos')
@@ -2058,6 +2093,9 @@
             const restore = expressionForEmotion(currentEmotion)
             if (restore && restore !== previewExpression) {
               Promise.resolve(model.expression(restore)).catch(() => {})
+            } else if (!restore) {
+              // 找不到可恢复的自然表情 → 重置默认，防止预览表情卡住不回待机
+              resetModelExpression()
             }
           }, 5500)
         }
@@ -2124,8 +2162,14 @@
   }
 
   let lastBubblePos = null
-  function updateSpeechBubblePosition() {
+  let lastBubblePosAt = 0
+  function updateSpeechBubblePosition(force = false) {
     if (!model || speechBubble.hidden) return
+    // 节流：拖动路径每帧调用，getBounds 是全模型遍历重操作；
+    // 100ms 节流（≈10Hz）跟随足够，打字机/定位场景用 force 立即刷新
+    const now = performance.now()
+    if (!force && now - lastBubblePosAt < 100) return
+    lastBubblePosAt = now
     const bounds = model.getBounds()
     const valid = bounds && bounds.width > 0 && bounds.height > 0
     if (!valid) {
@@ -2185,7 +2229,7 @@
       speechBubbleVisibleCount += 1
       speechBubbleText.textContent = characters.slice(0, speechBubbleVisibleCount).join('')
       speechBubbleText.scrollTop = speechBubbleText.scrollHeight
-      updateSpeechBubblePosition()
+      updateSpeechBubblePosition(true)
       if (speechBubbleVisibleCount < characters.length) {
         speechBubbleTimer = window.setTimeout(revealNext, intervalMs)
       } else if (Number(durationMs) > 0) {
@@ -2367,6 +2411,9 @@
       if (settings.live2d_click_motion) playMotion(semanticMotion('touch'), undefined, { force: true })
       sendSocket('clicked', { x: event?.screenX || 0, y: event?.screenY || 0, emotion: 'gentle' })
     }
+    // 拖动/点击结束：强制刷新一次气泡与锁定锚点位置（拖动中走节流，收尾必须精确）
+    updateSpeechBubblePosition(true)
+    updateLockControlAnchor(true)
     updateMousePassThrough(true, event)
   }
 
@@ -2590,6 +2637,14 @@
       })
       window.mioDesktop.onClickThroughChanged(async (enabled) => {
         await setClickThroughLocked(enabled, true)
+      })
+      // Electron 穿透模式下渲染层收不到 mousemove：主进程高频推送全局鼠标位置，
+      // 渲染层直接喂给 pixi-live2d 的视线聚焦（focus 内部自带平滑，响应度由推送频率保证）
+      window.mioDesktop.onMouseMove((pos) => {
+        if (!settings.live2d_follow_cursor || !model) return
+        const x = Number(pos?.x)
+        const y = Number(pos?.y)
+        if (Number.isFinite(x) && Number.isFinite(y)) model.focus(x, y)
       })
       connectSocket()
     }
