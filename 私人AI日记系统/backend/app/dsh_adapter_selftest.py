@@ -56,6 +56,7 @@ def test_phase_mapping() -> None:
         "last_event_failed": False, "turn_end_reason": "", "last_error": "",
         "text_chars": 0, "reason_chars": 0, "last_assistant_has_text": False,
         "last_assistant_has_reason": False, "last_message_text_only": False,
+        "plan_intent": False, "voice_intent": False, "todo_count": 0, "goal_operation": "",
         "last_event": "step/start", "user_turns": 1,
     }
 
@@ -65,9 +66,21 @@ def test_phase_mapping() -> None:
         return f
 
     # --- 工作细分状态（7 个，桌宠会显示徽标）---
-    # planning：轮次刚开始
-    p, s = dsh.phase_for_facts(facts(last_event="turn/start"))
+    # planning：轮次刚开始（plan_intent 由 turn/start 置位）
+    p, s = dsh.phase_for_facts(facts(last_event="turn/start", plan_intent=True))
     check_eq("planning（轮次开始）", p, "planning")
+
+    # planning：规划类工具已调完、当前没工具在跑 → 规划态
+    p, s = dsh.phase_for_facts(facts(plan_intent=True, active_tools=0,
+                                     last_tool="todo_write", todo_count=5, last_event="todo/write"))
+    check_eq("planning（规划意图，无工具在跑）", p, "planning")
+    check_eq("  └ state.todos 透传", s.get("todos"), 5)
+
+    # 规划意图与工具执行同时存在时，以工具执行为准——与总线
+    # PHASE_PRIORITY（executing_tool=2 高于 planning=3）保持同一口径
+    p, _ = dsh.phase_for_facts(facts(plan_intent=True, active_tools=1,
+                                     last_tool="todo_write", tool_calls=1, last_event="tool/call"))
+    check_eq("planning 让位于 executing_tool（同总线优先级）", p, "executing_tool")
 
     # thinking：步骤推进中（纯推理）
     p, _ = dsh.phase_for_facts(facts(last_assistant_has_reason=True, last_event="assistant/message"))
@@ -184,17 +197,18 @@ def test_phase_mapping() -> None:
     grid_combos = [
         {"in_turn": t, "active_tools": a, "approvals_pending": ap, "awaiting_user": au,
          "voice_active": v, "last_event_failed": f, "turn_end_reason": r,
-         "last_message_text_only": tx, "retrying": ry, "last_event": le}
+         "last_message_text_only": tx, "retrying": ry, "last_event": le, "plan_intent": pi}
         for t in (True, False)
         for a in (0, 1)
         for ap in (0, 1)
         for au in (True, False)
         for v in (True, False)
         for f in (True, False)
-        for r in ("", "completed", "error", "max-tokens", "interrupted", "aborted", "blocked")
+        for r in ("", "completed", "error", "max-tokens", "interrupted", "aborted", "blocked", "forked")
         for tx in (True, False)
         for ry in (True, False)
         for le in ("turn/start", "step/start", "tool/call", "assistant/message", "tool/result")
+        for pi in (True, False)
     ]
     for combo in grid_combos:
         reachable.add(dsh.phase_for_facts(combo)[0])
@@ -345,6 +359,9 @@ def test_replay_real_events() -> None:
     def fold(prev: dict[str, Any], ev: dict[str, Any]) -> dict[str, Any]:
         f = dict(prev)
         f["last_event_failed"] = False
+        # 与边车同语义：intent 类标记每事件清零，由当前事件置位
+        f["plan_intent"] = False
+        f["voice_intent"] = False
         t = str(ev.get("type") or "")
         d = ev.get("data") if isinstance(ev.get("data"), dict) else {}
         d = d or {}
@@ -354,7 +371,8 @@ def test_replay_real_events() -> None:
                      active_tools=0, approvals_pending=0, awaiting_user=False, voice_active=False,
                      retrying=False, errored=False, turn_end_reason="", last_error="",
                      text_chars=0, reason_chars=0,
-                     last_assistant_has_text=False, last_assistant_has_reason=False)
+                     last_assistant_has_text=False, last_assistant_has_reason=False,
+                     last_message_text_only=False, plan_intent=True)
         elif t == "turn/end":
             reason = d.get("reason") if isinstance(d.get("reason"), dict) else {}
             kind = str((reason or {}).get("kind") or "")
@@ -391,10 +409,18 @@ def test_replay_real_events() -> None:
             name = str(d.get("name") or "")
             f.update(last_tool=name, tool_calls=f.get("tool_calls", 0) + 1,
                      active_tools=f.get("active_tools", 0) + 1)
-            if name.lower() in {"ask_user_question", "ask_user", "askuserquestion"}:
+            lname = name.lower()
+            if lname in {"ask_user_question", "ask_user", "askuserquestion"}:
                 f["awaiting_user"] = True
-            if name.lower() in {"speak", "tts", "text_to_speech"}:
+            if lname in {"speak", "tts", "text_to_speech"}:
                 f["voice_active"] = True
+            if lname in {"todo_write", "todowrite", "create_goal", "update_goal", "exit_plan_mode"}:
+                f["plan_intent"] = True
+        elif t == "todo/write":
+            f["plan_intent"] = True
+            f["todo_count"] = len(d.get("todos") or [])
+        elif t == "goal/change":
+            f["plan_intent"] = True
         elif t == "tool/result":
             msg = d.get("message") if isinstance(d.get("message"), dict) else {}
             f["active_tools"] = max(0, f.get("active_tools", 0) - 1)
@@ -416,6 +442,7 @@ def test_replay_real_events() -> None:
         "retrying": False, "errored": False, "last_event_failed": False, "turn_end_reason": "",
         "last_error": "", "text_chars": 0, "reason_chars": 0, "last_assistant_has_text": False,
         "last_assistant_has_reason": False, "last_message_text_only": False,
+        "plan_intent": False, "voice_intent": False, "todo_count": 0, "goal_operation": "",
         "last_event": "", "user_turns": 0,
     }
 

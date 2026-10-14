@@ -353,6 +353,11 @@ def phase_for_facts(facts: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         state["turn"] = facts.get("turn")
     if facts.get("step") is not None:
         state["step"] = facts.get("step")
+    if _i("todo_count"):
+        state["todos"] = _i("todo_count")
+    goal_op = str(facts.get("goal_operation") or "")
+    if goal_op:
+        state["goal"] = goal_op[:40]
     err = str(facts.get("last_error") or "")
     if err:
         state["error"] = err[:200]
@@ -393,6 +398,10 @@ def phase_for_facts(facts: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     if in_turn:
         if _i("active_tools") > 0:
             return "executing_tool", state
+        # 规划意图（轮次开始 / todo_write / goal/change / 规划类工具）优先于思考：
+        # 它表达的是"正在梳理要做什么"，与"正在推理怎么做"是不同的桌宠表现。
+        if facts.get("plan_intent"):
+            return "planning", state
         # 「正在输出正文」= 最近一条 assistant/message 是**纯文字**（无 tool-call）。
         # 实测真实日志：335/377 条 assistant/message 同时含 tool-call 块，所以
         # 不能拿 has_text 当判据，否则会长期误报 streaming。
@@ -400,8 +409,6 @@ def phase_for_facts(facts: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             return "streaming", state
         if facts.get("retrying"):
             return "thinking", state
-        if facts.get("last_event") in {"turn/start"}:
-            return "planning", state
         return "thinking", state
 
     # 7) 轮次外：在线待机

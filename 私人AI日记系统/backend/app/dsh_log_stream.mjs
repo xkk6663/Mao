@@ -300,6 +300,12 @@ function initialFacts() {
     approvals_pending: 0,
     awaiting_user: false,
     voice_active: false,
+    // “本事件本身表明的意图”（每事件清零后由当前事件置位，
+    // 与 last_event_failed 同一套语义，避免意图粘住整轮）
+    plan_intent: false,
+    voice_intent: false,
+    todo_count: 0,
+    goal_operation: '',
     // 异常 / 重试
     retrying: false,
     errored: false,
@@ -332,6 +338,9 @@ function foldEvent(prev, ev) {
   const d = ev.data || {}
   // 默认清零：只有“本事件本身是失败”才置 true，避免失败态粘住整轮
   f.last_event_failed = false
+  // 同理：planning/voice 这类“本事件本身表明的意图”每轮先清零，由本事件决定
+  f.plan_intent = false
+  f.voice_intent = false
 
   switch (t) {
     case 'turn/start':
@@ -352,6 +361,9 @@ function foldEvent(prev, ev) {
       f.reason_chars = 0
       f.last_assistant_has_text = false
       f.last_assistant_has_reason = false
+      f.last_message_text_only = false
+      // 轮次开始本身即“规划中”意图
+      f.plan_intent = true
       break
 
     case 'turn/end': {
@@ -438,7 +450,28 @@ function foldEvent(prev, ev) {
         f.awaiting_user = true
         f._askCalls = (prev._askCalls || []).concat([callId])
       }
-      if (VOICE_TOOLS.has(lname)) f.voice_active = true
+      // 规划类工具（todo_write/create_goal/update_goal）＝本轮在做规划
+      if (PLAN_TOOLS.has(lname)) f.plan_intent = true
+      if (VOICE_TOOLS.has(lname)) {
+        f.voice_active = true
+        f.voice_intent = true
+      }
+      break
+    }
+
+    case 'todo/write': {
+      // 待办清单被写入 = 规划动作（真实日志里独立于 tool/call 出现）
+      f.plan_intent = true
+      const todos = Array.isArray(d.todos) ? d.todos : []
+      f.todo_count = todos.length
+      break
+    }
+
+    case 'goal/change': {
+      // 目标创建/更新 = 规划动作
+      f.plan_intent = true
+      const op = String(d.operation || '')
+      if (op) f.goal_operation = op
       break
     }
 
