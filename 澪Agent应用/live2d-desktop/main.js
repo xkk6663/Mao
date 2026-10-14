@@ -767,11 +767,11 @@ function applyMainWindowVirtualBounds() {
   try {
     execFile(SYSTEM_PS, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', PHYS_BOUNDS_SCRIPT],
       { windowsHide: true, timeout: 8000 }, (error, stdout) => {
-        if (error) { log('window.extend_failed', String(error.message || error)); return }
+        if (error) { log('window.extend_failed', String(error.message || error)); notifyWindowStable(); return }
         const line = String(stdout || '').trim().split(/\r?\n/).pop()
         const parts = line.split(',').map(Number)
         if (parts.length < 5 || !parts.every(Number.isFinite) || parts[4] <= 0) {
-          log('window.extend_bad_output', line); return
+          log('window.extend_bad_output', line); notifyWindowStable(); return
         }
         const [physL, physT, physR, physB, primaryPhysW] = parts
         const primaryLogicalW = screen.getPrimaryDisplay().bounds.width
@@ -784,10 +784,22 @@ function applyMainWindowVirtualBounds() {
         }, false)
         reportWindowAction('pet-root', mainWindow, 'repositioned-virtual')
         log('window.virtual_bounds', `${physL},${physT},${physR},${physB} scale=${scale.toFixed(3)}`)
+        notifyWindowStable()
       })
   } catch (error) {
     log('window.extend_failed', String(error && error.message || error))
+    notifyWindowStable()
   }
+}
+
+// 窗口虚拟边界修正完成（成功或失败）后通知渲染层：
+// 渲染层此前保持模型隐藏，收到本消息才用最终坐标系 fit 并显示，杜绝启动跳位
+function notifyWindowStable() {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('mio-desktop:window-stable')
+    }
+  } catch (_) {}
 }
 
 function registerDisplayListeners() {
@@ -830,7 +842,7 @@ function createWindow() {
   setMouseInteractive(false)
   try { mainWindow.webContents.session.clearCache() } catch (_e) {}
   try { mainWindow.webContents.session.setCacheSizeLimit(0) } catch (_e) {}
-  mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron&v=20261015-calmfocus`)
+  mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron&v=20261015-windowstable`)
   log('window.load', `${API_BASE}/agent-app/live2d-pet/index.html`)
   // 主进程轮询鼠标位置驱动穿透/交互（不依赖渲染层 forward 转发）
   // 60ms ≈ 16Hz：穿透策略与视线跟随共用，兼顾响应度与开销

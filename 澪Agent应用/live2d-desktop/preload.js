@@ -46,4 +46,9 @@ contextBridge.exposeInMainWorld('mioDesktop', {
     ipcRenderer.on('mio-desktop:mouse-move', listener)
     return () => ipcRenderer.removeListener('mio-desktop:mouse-move', listener)
   },
+  onWindowStable: (callback) => {
+    const listener = () => callback()
+    ipcRenderer.on('mio-desktop:window-stable', listener)
+    return () => ipcRenderer.removeListener('mio-desktop:window-stable', listener)
+  },
 })

@@ -145,6 +145,8 @@
   let app = null
   let model = null
   let currentModelId = ''
+  // 窗口虚拟边界修正完成前保持模型隐藏，避免启动时先用旧坐标系定位再跳位
+  let windowStable = false
   // 模型自带"水印消除"表达式时，加载后自动应用并在每帧保持（大肥鱼等商用模型默认去水印）
   let watermarkParamMap = null
   let watermarkExpressionName = ''
@@ -496,12 +498,14 @@
       model.anchor.set(0.5, 0.5)
       model.eventMode = 'none'
       app.stage.addChild(model)
+      // Electron 启动时等窗口虚拟边界修正完成再显示，杜绝"先下方后上方"跳位
+      model.visible = windowStable || !electronRuntime
       currentModelId = definition.id
       lastAppliedExpressionEmotion = ''
       applyWatermarkRemoval(definition)
       fitModel()
       nextIdleMotionAt = Date.now() + 3500
-      loading.hidden = true
+      if (windowStable || !electronRuntime) loading.hidden = true
       populateModelSelect()
       updateMousePassThrough(true)
       sendRendererReady()
@@ -2661,6 +2665,16 @@
         const fx = Math.max(cx - rangeX, Math.min(cx + rangeX, x))
         const fy = Math.max(cy - rangeY, Math.min(cy + rangeY, y))
         model.focus(fx, fy)
+      })
+      // 窗口虚拟边界修正完成：用最终坐标系定位并显示模型（启动不跳位）
+      window.mioDesktop.onWindowStable(() => {
+        windowStable = true
+        loading.hidden = true
+        if (model) {
+          model.visible = true
+          fitModel()
+          updateAgentBadgePosition(true)
+        }
       })
       connectSocket()
     }
