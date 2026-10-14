@@ -996,6 +996,113 @@
     applyEmotion(activity.emotion || 'neutral', Number(activity.remaining_ms || 6000))
   }
 
+  // ---- 跨 Agent 总线：统一 phase → 桌宠"脸"的映射（桌宠只认 phase） ----
+  const PHASE_LABELS = {
+    idle: '待机', planning: '规划', thinking: '思考中', executing_tool: '执行工具',
+    streaming: '回复中', waiting_input: '聆听中', voice: '说话中', complete: '完成',
+    error: '出错', paused: '暂停', awaiting_approval: '待确认', heartbeat: '在线',
+  }
+  const PHASE_TO_ACTIVITY = {
+    voice: 'speaking',
+    executing_tool: 'responding',
+    awaiting_approval: 'responding',
+    thinking: 'responding',
+    planning: 'responding',
+    streaming: 'responding',
+    waiting_input: 'listening',
+    complete: 'idle',
+    error: 'idle',
+    paused: 'idle',
+    heartbeat: null,
+    idle: 'idle',
+  }
+  const PHASE_MOTION_HINT = {
+    executing_tool: 'observe',
+    awaiting_approval: 'attention',
+    thinking: 'thinking',
+    planning: 'thinking',
+    streaming: 'attention',
+    waiting_input: 'listening',
+  }
+
+  function ensureAgentBadge() {
+    let badge = document.getElementById('agent-badge')
+    if (badge) return badge
+    badge = document.createElement('div')
+    badge.id = 'agent-badge'
+    badge.style.cssText = 'position:fixed;left:50%;top:10px;transform:translateX(-50%);' +
+      'background:rgba(16,24,32,.72);color:#fff;font:11px/1.4 "Microsoft YaHei",sans-serif;' +
+      'padding:2px 10px;border-radius:10px;pointer-events:none;z-index:9999;' +
+      'opacity:0;transition:opacity .25s;white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis;'
+    document.body.appendChild(badge)
+    return badge
+  }
+
+  function setAgentBadge(text, visible = true) {
+    const badge = ensureAgentBadge()
+    badge.textContent = text
+    badge.style.opacity = visible ? '1' : '0'
+  }
+
+  function applyAgentPhase(payload) {
+    if (!payload) return
+    const phase = String(payload.phase || 'idle')
+    const agentName = String(payload.agent_name || payload.agent_id || 'Agent')
+    const active = Boolean(payload.active)
+    const label = PHASE_LABELS[phase] || phase
+    if (active) {
+      setAgentBadge(`${agentName} · ${label}`)
+      activityIndicator.title = `${agentName} · ${label}`
+    }
+    const activity = PHASE_TO_ACTIVITY[phase]
+    if (!activity) return   // heartbeat 等不改变动画
+    currentActivity = activity
+    activityUntil = Date.now() + (activity === 'speaking' ? 4000 : 2600)
+    activityIndicator.className = `activity-indicator ${activity}`
+    activityIndicator.classList.toggle('active', activity !== 'idle')
+    const hint = PHASE_MOTION_HINT[phase]
+    if (hint && phase !== 'voice') {
+      const group = semanticMotion(hint)
+      if (group) playMotion(group)
+      else startProceduralMotion(hint, 0.5)
+    }
+  }
+
+  function applyAgentStatus(payload) {
+    if (!payload) return
+    const agentName = String(payload.agent_name || payload.agent_id || 'Agent')
+    const status = String(payload.status || 'offline')
+    if (status === 'offline') {
+      setAgentBadge(`${agentName} · 离线`, true)
+    } else if (status === 'connecting') {
+      setAgentBadge(`${agentName} · 连接中…`, true)
+    } else if (status === 'online') {
+      setAgentBadge(`${agentName} · 在线`, true)
+    }
+  }
+
+  async function fetchAgentsSnapshot() {
+    try {
+      const snapshot = await request('/api/companion/agents')
+      const agents = snapshot.agents || []
+      const active = snapshot.active_agent
+      if (active) {
+        const phase = String(active.phase || 'idle')
+        setAgentBadge(`${active.name || active.agent_id} · ${PHASE_LABELS[phase] || phase}`)
+        const activity = PHASE_TO_ACTIVITY[phase]
+        if (activity && phase !== 'heartbeat') {
+          currentActivity = activity
+          activityUntil = Date.now() + 2600
+          activityIndicator.className = `activity-indicator ${activity}`
+          activityIndicator.classList.toggle('active', activity !== 'idle')
+        }
+      }
+      if (agents.some((agent) => agent.status === 'offline')) {
+        setAgentBadge('离线', false)
+      }
+    } catch (_) {}
+  }
+
   async function applySettings(nextSettings) {
     const previousModel = selectedModelId()
     settings = { ...settings, ...(nextSettings || {}) }
@@ -1028,6 +1135,7 @@
       const pet = status.pet || {}
       await applySettings(pet.settings || {})
       applyActivity(pet.activity || {})
+      if (status.agents) fetchAgentsSnapshot()
       lastStatusSuccess = Date.now()
     } catch (error) {
       if (Date.now() - lastStatusSuccess > 25000 && !electronRuntime && window.pywebview?.api) {
@@ -1681,10 +1789,17 @@
       if (message.type === 'ready') {
         await applySettings(payload.settings || {})
         applyActivity(payload.activity || {})
+        fetchAgentsSnapshot()
       } else if (message.type === 'settings_changed') {
         await applySettings(payload)
       } else if (message.type === 'activity') {
         applyActivity(payload)
+      } else if (message.type === 'agent_phase') {
+        applyAgentPhase(payload)
+      } else if (message.type === 'agent_status') {
+        applyAgentStatus(payload)
+      } else if (message.type === 'agents_snapshot') {
+        fetchAgentsSnapshot()
       } else if (message.type === 'speak') {
         const text = String(payload.text || payload.content || '').trim()
         applySpeakEmotionAndMotion(text, payload.emotion || 'neutral')

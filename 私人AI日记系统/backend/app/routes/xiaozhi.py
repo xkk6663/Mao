@@ -777,6 +777,38 @@ async def _syslog(text: str, tag: str = "sys", quiet: bool = False) -> None:
 _load_chat_history()
 
 
+def _xz_register() -> None:
+    """把"小智"注册进跨 Agent 总线（桌宠是跨 Agent 的"脸"，小智是语音主通道）。"""
+    try:
+        from .. import agent_bus_service as _abs
+        _abs.register(
+            "xiaozhi",
+            "小智",
+            "xiaozhi_adapter",
+            capabilities={"voice": True, "text": True, "screen": True, "mcp": True, "observe": True},
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _xz_emit(phase: str, **state) -> None:
+    """小智适配器 → 统一总线：把官方云事件翻译成标准 phase（有就翻译，丢异常不中断链路）。"""
+    try:
+        from .. import agent_bus_service as _abs
+        _abs.heartbeat("xiaozhi")
+        _abs.emit("xiaozhi", phase, state=state or None, meta={"source": "xiaozhi"})
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _xz_status(status: str, *, error: str = "") -> None:
+    try:
+        from .. import agent_bus_service as _abs
+        _abs.set_status("xiaozhi", status, error=error)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _sapi_tts_wav(text: str) -> bytes:
     """Windows SAPI 本地 TTS → 16kHz 16bit mono WAV（零依赖，无需下载）"""
     import comtypes.client
@@ -2197,6 +2229,7 @@ async def _sub_writer(ws: WebSocket) -> None:
 async def _reconnect_loop(initial_delay: float = 1.5) -> None:
     """上游断开后自动重连（退避 1.5s→15s），成功后广播 hello 让前端恢复。"""
     delay = initial_delay
+    _xz_status("connecting")
     while True:
         await asyncio.sleep(delay)
         async with _upstream_lock:
@@ -2206,6 +2239,7 @@ async def _reconnect_loop(initial_delay: float = 1.5) -> None:
             await _syslog("🔗 小智已重连（会话 " + str(_session_id) + "）", quiet=True)
             return
         logger.warning("上游重连失败，%.0fs 后重试: %s", delay, err)
+        _xz_status("connecting", error=str(err or "重连失败"))
         await _broadcast(json.dumps({"type": "error", "error": "connecting"}, ensure_ascii=False))
         delay = min(15.0, delay * 1.5)
 
@@ -2228,27 +2262,32 @@ async def _pump_upstream(conn) -> None:
                 # 官方主动结束会话（goodbye）：穿透到外层触发断开+快速重连，保持长连接
                 if j.get("type") == "goodbye":
                     logger.info("收到官方 goodbye，主动断开快速重连（保持长连接）")
+                    _xz_emit("paused", reason="goodbye")
                     raise _UpstreamGoodbye()
                 try:
                     if j.get("type") == "mcp":
                         _capture_vision_from_mcp(j.get("payload"))
+                        _xz_emit("executing_tool", tool=str((j.get("payload") or {}).get("name") or "")[:80])
                         resp = await _handle_mcp_message(j.get("payload"))
                         if resp:
                             await _send_mcp_response(conn, resp)
                     if j.get("type") == "stt":
                         _last_stt_ts = time.time()
                         _last_stt_text = str(j.get("text") or "")
+                        _xz_emit("waiting_input", text=_last_stt_text[:80])
                         # 机制级角色解耦：官方 STT 回传一律不写"你说"历史（含注入回声/官方误听），
                         # "你说"只由浏览器真实输入（_relay_browser_message）写入
                     if j.get("type") == "llm":
                         _pending_llm_text = str(j.get("text") or "")
                         _llm_text = _pending_llm_text
+                        _xz_emit("streaming", text=_pending_llm_text[:200])
                         # LLM 事件即写回答历史（官方 llm 事件为完整文本；tts stop 时同文本去重跳过），
                         # 修复"有声音但文字不显示"：官方部分会话 TTS 无 sentence_start，仅靠 tts stop 会丢文本
                         if _pending_llm_text:
                             _maybe_write_llm_reply(_pending_llm_text)
                     if j.get("type") == "tts" and j.get("state") == "start":
                         _tts_sentences = []
+                        _xz_emit("voice")
                     if j.get("type") == "tts" and j.get("state") == "sentence_start":
                         _txt = str(j.get("text") or "")
                         if _txt:
@@ -2264,6 +2303,7 @@ async def _pump_upstream(conn) -> None:
                             _maybe_write_llm_reply(_full)
                         _tts_sentences = []
                         _pending_llm_text = ""
+                        _xz_emit("complete")
                     if j.get("type") == "tts" and j.get("state") == "start":
                         _tts_playing = True
                         await _syslog("🗣️ 小智开始说话…")
@@ -2287,11 +2327,13 @@ async def _pump_upstream(conn) -> None:
                     # 官方主动结束会话（goodbye）：穿透到外层触发断开+快速重连，保持长连接
                     if isinstance(j, dict) and j.get("type") == "goodbye":
                         logger.info("收到官方 goodbye，主动断开快速重连（保持长连接）")
+                        _xz_emit("paused", reason="goodbye")
                         raise _UpstreamGoodbye()
                     try:
                         if isinstance(j, dict):
                             if j.get("type") == "mcp":
                                 _capture_vision_from_mcp(j.get("payload"))
+                                _xz_emit("executing_tool", tool=str((j.get("payload") or {}).get("name") or "")[:80])
                                 resp = await _handle_mcp_message(j.get("payload"))
                                 if resp:
                                     await _send_mcp_response(conn, resp)
@@ -2306,8 +2348,10 @@ async def _pump_upstream(conn) -> None:
                                     _maybe_write_llm_reply(_full)
                                 _tts_sentences = []
                                 _pending_llm_text = ""
+                                _xz_emit("complete")
                             if j.get("type") == "tts" and j.get("state") == "start":
                                 _tts_playing = True
+                                _xz_emit("voice")
                                 await _syslog("🗣️ 小智开始说话…")
                             if j.get("type") == "tts" and j.get("state") == "sentence_start":
                                 _txt = str(j.get("text") or "")
@@ -2326,6 +2370,7 @@ async def _pump_upstream(conn) -> None:
                             if j.get("type") == "stt":
                                 _last_stt_ts = time.time()
                                 _last_stt_text = str(j.get("text") or "")
+                                _xz_emit("waiting_input", text=_last_stt_text[:80])
                                 # 诊断（可移除）：显示官方 ASR 实际识别到的文本，
                                 # 验证注入语音是否被正确识别（区分 ASR 错 vs LLM 不调工具）
                                 if _last_stt_text:
@@ -2335,6 +2380,7 @@ async def _pump_upstream(conn) -> None:
                             if j.get("type") == "llm":
                                 _pending_llm_text = str(j.get("text") or "")
                                 _llm_text = _pending_llm_text
+                                _xz_emit("streaming", text=_pending_llm_text[:200])
                                 # LLM 事件即写回答历史（tts stop 时同文本去重跳过）：
                                 # 官方部分会话 TTS 无 sentence_start，仅靠 tts stop 会丢文字
                                 if _pending_llm_text:
@@ -2361,6 +2407,8 @@ async def _pump_upstream(conn) -> None:
             pass
         # 通知前端"连接中断，正在重连"，并启动自动重连
         # quiet：频繁重连/断连不写聊天历史不广播，避免刷屏占用界面空间
+        _xz_status("offline", error="连接中断，自动重连中")
+        _xz_emit("paused", reason="disconnected")
         await _syslog("⚠️ 小智连接中断，正在自动重连…", quiet=True)
         await _broadcast(json.dumps({"type": "error", "error": "connecting"}, ensure_ascii=False))
         asyncio.create_task(_reconnect_loop())
@@ -2406,6 +2454,10 @@ async def _ensure_upstream() -> tuple[object | None, str | None]:
         _upstream = conn
         _session_wake_done = False   # 保留变量（不再用于唤醒，静默连接直接音频流注入）
         _tts_playing = False
+        # 跨 Agent 总线：注册 + 在线 + 待机
+        _xz_register()
+        _xz_status("online")
+        _xz_emit("idle", session_id=str(_session_id or ""))
         # quiet: 连接成功/重连状态不写历史不广播（用户要求主聊天界面不显示重连/断开，避免刷屏占空间）
         await _syslog(f"🔗 小智已连接（会话 {_session_id}）", quiet=True)
     except Exception as exc:  # noqa: BLE001
@@ -2534,3 +2586,10 @@ async def xiaozhi_proxy(ws: WebSocket) -> None:
             await ws.close(code=1000, reason="bye")
         except Exception:  # noqa: BLE001
             pass
+
+# 启动即注册进跨 Agent 总线（连接前先以 offline 身份可见，hello 成功后转 online）
+try:
+    _xz_register()
+except Exception:  # noqa: BLE001
+    pass
+

@@ -9,12 +9,15 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import (
+    agent_bus_service,
     agent_task_service,
     companion_service,
     creation_service,
     db,
+    dsh_adapter,
     maintenance_service,
     migration_service,
+    octop_adapter,
     onboarding_service,
     pet_event_service,
     runtime_diagnostics,
@@ -54,6 +57,9 @@ BACKGROUND_TASK_FACTORIES = {
     "runtime_diagnostics_task": runtime_diagnostics.monitor_loop,
     "screen_observation_task": screen_observation_service.observation_loop,
     "pet_event_task": pet_event_service.event_loop,
+    "agent_bus_task": agent_bus_service.heartbeat_loop,
+    "dsh_adapter_task": dsh_adapter.dsh_adapter_loop,
+    "octop_adapter_task": octop_adapter.octop_adapter_loop,
 }
 
 
@@ -73,6 +79,7 @@ def initialize_runtime() -> None:
     )
     db.refresh_manual_memories(load_manuals())
     backfill_explicit_structured_memories()
+    agent_bus_service.bus.configure(settings.project_root / "agent_bus_config.json")
 
 
 async def _start_background_tasks(app: FastAPI, *, exclude: set[str] | None = None) -> None:

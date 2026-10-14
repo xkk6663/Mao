@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .. import (
+    agent_bus_service,
     audio_diag,
     call_session_service,
     companion_service,
@@ -435,7 +436,28 @@ def _preview_response(not_found_detail: str) -> Response:
 
 @router.get("/status")
 async def companion_status():
-    return await asyncio.to_thread(_status_payload)
+    payload = await asyncio.to_thread(_status_payload)
+    payload["agents"] = agent_bus_service.snapshot()
+    return payload
+
+
+@router.get("/agents")
+async def companion_agents():
+    """跨 Agent 总线快照：全部 Agent 状态 + 当前活跃者。"""
+    return agent_bus_service.snapshot()
+
+
+class AgentEnableRequest(BaseModel):
+    enabled: bool
+
+
+@router.post("/agents/{agent_id}/enabled")
+async def companion_agent_enabled(agent_id: str, payload: AgentEnableRequest):
+    """启用/停用某个 Agent 适配器（即换即用：停用立即释放"身体"，启用立即可接收事件）。"""
+    changed = agent_bus_service.set_enabled(agent_id, payload.enabled)
+    if not changed:
+        raise HTTPException(status_code=404, detail=f"未知的 agent: {agent_id}")
+    return {"ok": True, "agent_id": agent_id, "enabled": payload.enabled}
 
 
 @router.get("/chat-anchor")
