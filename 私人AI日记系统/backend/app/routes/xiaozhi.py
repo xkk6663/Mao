@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections import OrderedDict
 import ctypes
 import io
 import json
@@ -841,8 +842,12 @@ async def _edge_tts_wav(text: str, voice: str = "zh-CN-XiaoxiaoNeural") -> bytes
 
     替换损坏的 Windows SAPI 引擎（0x80045040）；音色默认晓晓，比 SAPI 的
     Huihui 更自然。mp3 由 PyAV 解码并重采样为 16k mono，与 SAPI 输出格式完全一致，
-    所有下游（本地播放广播 / 官方 ASR 注入）无需改动。"""
+    所有下游（本地播放广播 / 官方 ASR 注入）无需改动。带 LRU 缓存：重复文本零合成延迟。"""
     import edge_tts
+    cache_key = f"{voice}:{text}"
+    hit = _tts_wav_cache.get(cache_key)
+    if hit is not None:
+        return hit
     mp3_tmp = os.path.join(tempfile.gettempdir(), "mio_tts_tmp.mp3")
     com = edge_tts.Communicate(str(text)[:300], voice)
     await com.save(mp3_tmp)
@@ -861,7 +866,9 @@ async def _edge_tts_wav(text: str, voice: str = "zh-CN-XiaoxiaoNeural") -> bytes
         w.setsampwidth(2)
         w.setframerate(16000)
         w.writeframes(pcm16)
-    return buf.getvalue()
+    out = buf.getvalue()
+    _tts_cache_put(_tts_wav_cache, cache_key, out)
+    return out
 
 
 async def _speak_local(text: str, source: str = "vision") -> bool:
@@ -951,8 +958,13 @@ async def _send_audio_stream(conn, text: str) -> list[bytes] | None:
     让 VAD 判定语音结束并立即触发 ASR。
     """
     try:
-        wav = await _edge_tts_wav(text)
-        voice = await asyncio.to_thread(_wav_to_opus_frames, wav)
+        cached = _tts_opus_cache.get(text)
+        if cached is not None:
+            voice = list(cached)  # 拷贝，避免调用方误改缓存
+        else:
+            wav = await _edge_tts_wav(text)
+            voice = await asyncio.to_thread(_wav_to_opus_frames, wav)
+            _tts_cache_put(_tts_opus_cache, text, voice)
         # 模拟真实麦克风语音段：前导静音(0.5s) → 语音 → 尾部静音(1s)，
         # 让官方云 VAD 检测到完整"语音开始→结束"边界才触发 ASR
         head = await asyncio.to_thread(_silence_opus_frames, 0.5)
@@ -1016,6 +1028,31 @@ _VISION_TRIGGERS = ["请看看这张图片", "请再看看这张图片", "请看
 _OBSERVE_TRIGGERS = ["看看我的屏幕", "再看看我的屏幕", "帮我看看屏幕", "看看我现在屏幕上的内容", "再看看我现在的屏幕"]
 _vision_trigger_idx = 0
 _observe_trigger_idx = 0
+
+# ---- edge-tts 合成缓存（LRU）：固定触发语/重复文本预合成后零延迟注入 ----
+_tts_wav_cache: "OrderedDict[str, bytes]" = OrderedDict()
+_tts_opus_cache: "OrderedDict[str, list[bytes]]" = OrderedDict()
+_TTS_CACHE_MAX = 32
+
+
+def _tts_cache_put(cache: "OrderedDict", key: str, val) -> None:
+    cache[key] = val
+    cache.move_to_end(key)
+    while len(cache) > _TTS_CACHE_MAX:
+        cache.popitem(last=False)
+
+
+async def prewarm_tts_cache() -> None:
+    """后端启动后后台预合成全部视觉/观察触发语 → 首次发图/观察触发零合成延迟。
+    预热失败（网络等）静默跳过，首次使用时再合成并回填缓存。"""
+    for t in (*_VISION_TRIGGERS, *_OBSERVE_TRIGGERS):
+        try:
+            wav = await _edge_tts_wav(t)
+            frames = await asyncio.to_thread(_wav_to_opus_frames, wav)
+            _tts_cache_put(_tts_opus_cache, t, frames)
+        except Exception:  # noqa: BLE001
+            continue
+        await asyncio.sleep(0.05)
 
 
 def _next_vision_trigger() -> str:

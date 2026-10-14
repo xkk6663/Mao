@@ -125,6 +125,11 @@ async def app_lifespan(app: FastAPI):
     agent_task_service.recover_interrupted()
     await creation_service.resume_active_jobs()
     await _start_background_tasks(app)
+    # 后台预合成小智触发语 TTS（edge-tts），首次发图/观察触发零合成延迟；失败静默
+    try:
+        asyncio.create_task(xiaozhi.prewarm_tts_cache(), name="tts-prewarm")
+    except Exception:  # noqa: BLE001
+        logger.exception("启动 TTS 预合成任务失败")
     maintenance_lock = asyncio.Lock()
 
     async def enter_maintenance(reason: str) -> dict[str, object]:
