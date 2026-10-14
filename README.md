@@ -528,6 +528,14 @@ GET /api/companion/agents/dsh/inspect
 `session_id` / `facts`（最近折叠出的客观事实）/ `phases`（12）/ `fact_phases`（10）/
 `work_phases`（7）/ `config_path`（实际生效的配置文件路径）。
 
+**WS 链路检查**（确认桌宠真正消费的那条通道）：`.venv\Scripts\python.exe -m app.dsh_ws_check 30`
+
+**「一直在干活」为什么要周期补发**：桌宠渲染端的动作有时限（`live2d-pet.js`：
+speaking 4s、其余 **2.6s** 后回落待机）。DSH 单次工具调用可能持续几十秒（本机实测
+有 33s 的 `pwsh` 调用），这期间**没有任何新事件**；若只在事件到达时上报，桌宠会在工具
+还在跑时就变回待机，看着像 DSH 停工了。故适配器把补发间隔压到 **2s**（`REEMIT_MS`，
+小于 2.6s 活动窗口），在静默期也周期性补发当前工作态——`emit` 内部自带节流，不会刷屏。
+
 **Octop 事件 → phase 映射**（`octop_adapter.parse_octop_event`）：
 
 | Octop WS 消息 | phase |

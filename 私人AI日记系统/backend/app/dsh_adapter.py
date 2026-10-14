@@ -145,8 +145,14 @@ SIDECAR_NAME = "dsh_log_stream.mjs"
 # DSH 进程名（用于在线/离线判定与 paused 上报）
 DSH_PROCESS_NAMES = ("DeepSeek Harness.exe", "dsh.exe")
 
-# 事件驱动的节流：phase 变化才上报；同一 phase 最长这么多久补一次事件
-REEMIT_MS = 2500
+# 事件驱动的节流：phase 变化才上报；同一 phase 最长这么久补一次事件。
+#
+# 为什么要周期补发（而不是"变了才发"）：桌宠渲染端的动作/表情是有时限的
+# （`live2d-pet.js`：speaking 4s、其余 2.6s 后回落到待机）。DSH 单次工具调用
+# 可能持续几十秒（本机实测有 33s 的 pwsh 调用），这期间**没有任何新事件**；
+# 若只在事件到达时上报，桌宠会在工具还在跑时就变回待机——看着像 DSH 停工了。
+# 故把补发间隔压到桌宠活动窗口以内（2s < 2.6s），让"一直在干活"持续可见。
+REEMIT_MS = 2000
 # 边车静默超过该时长视为异常，重启边车
 SIDECAR_STALE_MS = 20_000
 # 读取超时（等待边车首行）
@@ -893,6 +899,11 @@ class DshAdapter:
                     await asyncio.to_thread(self.sidecar.stop)
                     return
                 agent_bus_service.heartbeat(AGENT_ID)
+                # 静默期也要按 REEMIT_MS 补发当前工作态：DSH 单次工具调用可能持续
+                # 几十秒（实测有 33s 的 pwsh），这期间无新事件；不补发的话桌宠会在
+                # 工具还在跑时就变回待机——看着像停工。_emit_phase 内部自带节流。
+                if self.facts and now_enabled:
+                    self._publish_facts(self.facts)
                 if idle_rounds % 10 == 0:
                     # 静默期间也确认一下 DSH 进程是否还在
                     if dsh_process_running() is False:
