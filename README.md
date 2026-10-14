@@ -522,12 +522,25 @@ DSH 会话日志(.jsonl.zstd)
 **自检与验证**（backend 目录下）：
 
 ```powershell
+.venv\Scripts\python.exe -m app.dsh_acceptance          # 验收报告：12 phase 逐条列出注册/可达/驱动来源
 .venv\Scripts\python.exe -m app.dsh_adapter_selftest   # 122 项：映射/解码/回放/可达性/总线/前端契约
 .venv\Scripts\python.exe -m app.dsh_adapter_e2e 60     # 端到端：轮询总线看 phase 实时变化
 .venv\Scripts\python.exe -m app.dsh_ws_check 30        # 桌宠消费的那条 WS 通道
 .venv\Scripts\python.exe -m app.dsh_gap_analysis       # 事件覆盖缺口（DSH 升级后跑一次）
 .venv\Scripts\python.exe -m app.dsh_fixture_build      # 从真实日志重建回放夹具（脱敏）
 ```
+
+> 控制台若报 `UnicodeEncodeError`（Windows 默认 GBK），先设 `$env:PYTHONIOENCODING='utf-8'`；
+> `dsh_acceptance` 已自行把 stdout 重配为 UTF-8，其它脚本未处理。
+
+**接入状态总览**（`app.dsh_acceptance` 的输出口径）：
+
+| 口径 | 数量 | 说明 |
+|---|---|---|
+| 总线 phase 枚举 | 12 | `agent_bus_service.PHASES` |
+| 本适配器注册 | **12** | `DSH_PHASES`，全部在总线枚举内 |
+| 实时事件可达 | **10** | `DSH_FACT_PHASES`（`paused`/`heartbeat` 走各自专用路径，见上） |
+| 工作细分状态 | 7 | `DSH_WORK_PHASES`，与桌宠 `WORK_PHASES` 逐字一致 |
 
 **排障接口**（比 `/agents` 快照更深，先看这个）：
 
