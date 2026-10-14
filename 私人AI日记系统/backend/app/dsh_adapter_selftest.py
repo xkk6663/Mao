@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -418,7 +419,11 @@ def test_replay_real_events() -> None:
                 f["plan_intent"] = True
         elif t == "todo/write":
             f["plan_intent"] = True
-            f["todo_count"] = len(d.get("todos") or [])
+            # 脱敏后 todos 是**数量**（int），不是列表
+            try:
+                f["todo_count"] = int(d.get("todos") or 0)
+            except (TypeError, ValueError):
+                f["todo_count"] = 0
         elif t == "goal/change":
             f["plan_intent"] = True
         elif t == "tool/result":
@@ -483,6 +488,100 @@ def test_replay_real_events() -> None:
 # ---------------------------------------------------------------------------
 # 4) 工具函数
 # ---------------------------------------------------------------------------
+def test_step_start_resets_output_flags() -> None:
+    """回归：step/start 必须清掉上一轮的「纯文字」标记，否则 streaming 会粘到新步骤。
+
+    这是两个独立验证者都报出的真实缺陷：README 写了「step/start 会重置该标记」，
+    但代码只重置了 last_assistant_has_text/has_reason，漏了 last_message_text_only。
+    后果：上一轮以纯文字收尾后，新步骤即使只在推理，桌宠仍显示「回复中」。
+
+    这里用**边车的真实实现**跑一遍（不是复刻），直接验证 .mjs 的行为。
+    """
+    print("\n[7] 回归：step/start 重置输出标记（真实边车实现）")
+
+    node = dsh.resolve_node({})
+    script = Path(dsh.__file__).with_name(dsh.SIDECAR_NAME)
+    if not node or not script.exists():
+        print("      缺少 node 或边车脚本，跳过")
+        return
+
+    # 造一个最小合法 zstd 会话日志：纯文字 assistant/message → step/start。
+    # 落盘位置用 __pycache__ 下的子目录（同仓库内、确定可写），不用系统 temp：
+    # Windows 沙箱下 tempfile 的清理会因权限回收失败而抛 PermissionError。
+    # 脚本用 `node -e` 内联传入，不落 .mjs 文件——仓库路径含中文，node 按路径
+    # 加载脚本时会因 URL 编码解析失败（file:///…%E7%A7%81…）。
+    root = Path(dsh.__file__).resolve().parent / "__pycache__" / "_dsh_regress"
+    if root.exists():
+        shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True, exist_ok=True)
+
+    probe_js = r"""
+const fs=require('fs'),path=require('path'),zlib=require('node:zlib');
+const outDir=process.argv[1];
+const sid='session-regress';
+const dir=path.join(outDir,'--C-Users-xiao1-Regress--',sid);
+fs.mkdirSync(dir,{recursive:true});
+const header={type:'session',version:4,id:sid,createdAt:Date.now(),cwd:'C:\\Users\\xiao1\\Regress',
+  isSeeded:false,delegationDepth:0,agentPreset:'standard'};
+const events=[
+  {type:'turn/start',seq:0,time:Date.now(),data:{turn:1}},
+  {type:'step/start',seq:1,time:Date.now(),data:{turn:1,step:1}},
+  // 纯文字（无 tool-call）→ 应使 last_message_text_only=true
+  {type:'assistant/message',seq:2,time:Date.now(),data:{turn:1,step:1,
+    message:{role:'assistant',content:[{type:'text',text:'纯文字收尾'}]}}},
+  {type:'step/start',seq:3,time:Date.now(),data:{turn:1,step:2}},
+];
+const lines=[JSON.stringify(header),...events.map(e=>JSON.stringify(e))].join('\n')+'\n';
+fs.writeFileSync(path.join(dir,'session.v4.jsonl.zstd'),
+  zlib.zstdCompressSync(Buffer.from(lines,'utf8')));
+console.log('MADE');
+"""
+    try:
+        try:
+            made = subprocess.run([node, "-e", probe_js, str(root)], capture_output=True,
+                                  text=True, encoding="utf-8", timeout=60)
+        except Exception as exc:  # noqa: BLE001
+            check("构造回归日志", False, str(exc))
+            return
+        if made.returncode != 0:
+            check("构造回归日志", False, (made.stderr or "")[:300])
+            return
+        check("构造回归日志", "MADE" in (made.stdout or ""), (made.stdout or "")[:120])
+
+        proc = subprocess.run(
+            [node, str(script), "--once", "--sessions-root", str(root)],
+            capture_output=True, text=True, encoding="utf-8", timeout=60,
+        )
+        check_eq("边车读取回归日志退出码", proc.returncode, 0)
+        facts = {}
+        for line in proc.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except Exception:  # noqa: BLE001
+                continue
+            if msg.get("kind") == "facts":
+                facts = msg.get("facts") or {}
+        check("拿到 facts", bool(facts), proc.stdout[:200])
+        if not facts:
+            return
+
+        check_eq("最后事件是 step/start", facts.get("last_event"), "step/start")
+        check("step/start 后 last_message_text_only 已清零（回归点）",
+              facts.get("last_message_text_only") is False,
+              f"got={facts.get('last_message_text_only')!r}")
+        check("step/start 后 has_text 已清零",
+              facts.get("last_assistant_has_text") is False,
+              f"got={facts.get('last_assistant_has_text')!r}")
+        # 该状态下不应再判为 streaming
+        phase, _ = dsh.phase_for_facts(facts)
+        check("新步骤不应判为 streaming", phase != "streaming", f"phase={phase}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_frontend_contract() -> None:
     """前端契约：桌宠渲染端的 phase 映射必须覆盖本适配器会发出的每个 phase。
 
@@ -505,12 +604,25 @@ def test_frontend_contract() -> None:
     if not (m_labels and m_work):
         return
 
-    labels = set(re.findall(r"([A-Za-z_]+)\s*:", m_labels.group(1)))
+    # 同时解析 key 与 **value**：只抓 key 会让"标签值被改成空串/英文"这类
+    # 真实回归静默通过（只抓 key 的写法已被变异测试证明是空过）。
+    pairs = re.findall(r"([A-Za-z_]+)\s*:\s*'([^']*)'", m_labels.group(1))
+    labels = {k: v for k, v in pairs}
+    keys = set(labels)
     work = set(re.findall(r"'([a-z_]+)'", m_work.group(1)))
 
-    missing_label = [p for p in dsh.DSH_PHASES if p not in labels]
+    missing_label = [p for p in dsh.DSH_PHASES if p not in keys]
     check("桌宠对 DSH 全部 12 phase 都有中文标签", not missing_label,
           f"缺标签={missing_label}")
+
+    # 值必须真的存在且为中文（catch 空串 / 未翻译 / 占位符）
+    empty_vals = [k for k, v in labels.items() if not v.strip()]
+    check("没有空标签值", not empty_vals, f"空值={empty_vals}")
+    untranslated = [k for k in keys & set(dsh.DSH_PHASES)
+                    if labels.get(k, "") and not any("\u4e00" <= ch <= "\u9fff" for ch in labels[k])]
+    check("DSH 各 phase 的标签值含中文（非占位/未翻译）", not untranslated,
+          f"未翻译={[(k, labels[k]) for k in untranslated]}")
+
     check("前端工作态口径与适配器一致（7 个）", work == set(dsh.DSH_WORK_PHASES),
           f"frontend={sorted(work)} adapter={sorted(dsh.DSH_WORK_PHASES)}")
 
@@ -598,6 +710,7 @@ def main() -> int:
     test_replay_real_events()
     test_helpers()
     test_bus_integration()
+    test_step_start_resets_output_flags()
     test_frontend_contract()
 
     print("\n" + "=" * 68)

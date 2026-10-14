@@ -29,7 +29,7 @@
  * 用法
  * ----
  *   node dsh_log_stream.mjs [--sessions-root <dir>] [--workspace <cwd>] [--session-id <id>]
- *                          [--poll-ms 400] [--stale-takeover-ms 2500] [--once]
+ *                          [--poll-ms 150] [--stale-takeover-ms 2500] [--once]
  *   --once 只输出当前 facts 后退出（探测/自检用）。
  *
  * 设计约束
@@ -60,7 +60,7 @@ function parseArgs(argv) {
     sessionsRoot: '',
     workspace: '',
     sessionId: '',
-    pollMs: 400,
+    pollMs: 150,
     takeoverMs: DEFAULT_TAKEOVER_MS,
     once: false,
   }
@@ -69,7 +69,7 @@ function parseArgs(argv) {
     if (a === '--sessions-root') out.sessionsRoot = argv[++i] || ''
     else if (a === '--workspace') out.workspace = argv[++i] || ''
     else if (a === '--session-id') out.sessionId = argv[++i] || ''
-    else if (a === '--poll-ms') out.pollMs = Math.max(100, Number(argv[++i]) || 400)
+    else if (a === '--poll-ms') out.pollMs = Math.max(100, Number(argv[++i]) || 150)
     else if (a === '--stale-takeover-ms') out.takeoverMs = Math.max(0, Number(argv[++i]) || 0)
     else if (a === '--once') out.once = true
   }
@@ -390,9 +390,12 @@ function foldEvent(prev, ev) {
       f.step = d.step ?? f.step
       // 与 DSH 官方桌宠投影一致：新步骤清空“本步骤内的运行中工具”
       f.active_tools = 0
-      // 新步骤 = 新一轮推理，上一轮的输出标记不再代表当下
+      // 新步骤 = 新一轮推理：上一轮的输出标记（含「纯文字」判定）不再代表当下。
+      // 漏掉 last_message_text_only 会让上一轮的 streaming 粘到新步骤上——
+      // 界面上表现为"明明在思考却一直显示回复中"。
       f.last_assistant_has_text = false
       f.last_assistant_has_reason = false
+      f.last_message_text_only = false
       break
 
     case 'step/end':

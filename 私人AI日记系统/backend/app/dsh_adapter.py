@@ -219,7 +219,10 @@ def load_config() -> dict[str, Any]:
         "workspace": "",
         "session_id": "",
         "node_path": "",
-        "poll_ms": 400,
+        # 边车日志尾随轮询间隔。150ms 是"我方唯一能控的延迟项"：
+        # 端到端延迟主要由 DSH 自身写盘节奏决定，但这一项纯属我方开销，越小越跟手。
+        # 代价是空闲时每秒多读几次文件（stat + 只在变化时读增量，可忽略）。
+        "poll_ms": 150,
         "base_url": "",
         "api_key": "",
         "ws_url": "",
@@ -694,9 +697,9 @@ class DshAdapter:
         if session_id:
             args += ["--session-id", session_id]
         try:
-            poll_ms = max(150, int(config.get("poll_ms") or 400))
+            poll_ms = max(80, int(config.get("poll_ms") or 150))
         except (TypeError, ValueError):
-            poll_ms = 400
+            poll_ms = 150
         args += ["--poll-ms", str(poll_ms)]
 
         if self.sidecar is not None and self.sidecar.alive():

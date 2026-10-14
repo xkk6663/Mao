@@ -464,10 +464,13 @@ DSH 会话日志(.jsonl.zstd)
 > `error` / `max-tokens` / `interrupted` / `forked`。未列出的新值一律落到 `idle`
 > （该 map 可被下游 merge 扩展，不能让桌宠挂在工作态）。
 
-> **并发工具调用是真实的**：本机日志实测 `tool/call` 与 `tool/result` 存在 19 组
-> "同时 ≥2 个在飞"（最多 3 个并发），所以 `tool/result` **不一定**紧跟自己的
+> **并发工具调用是真实的**：本机日志实测存在"同时 ≥2 个 `tool/call` 在飞"的情况
+> （峰值并发 >1，随会话规模增长），所以 `tool/result` **不一定**紧跟自己的
 > `tool/call`。适配器用**计数器**（`active_tools`，每个 result 递减）而非"配对"，
 > 因此并发下语义天然正确——这也是为什么不要改成按位置配对。
+>
+> 另注：`tool/result` 的 `data` 里**没有** `callId`（只有 `message.toolCallId`），
+> 所以"按 id 配对算单个工具耗时"这条路在日志上走不通；用计数器是唯一稳妥做法。
 
 > **12 个 phase 的"注册"与"可达路径"是两件事**（自检里有对应断言，别把二者混为一谈）：
 > `DSH_PHASES` 注册 12 个；其中 **10 个由实时事件（facts）产出**（`DSH_FACT_PHASES`）：
@@ -478,15 +481,20 @@ DSH 会话日志(.jsonl.zstd)
 >   且会把 `agent.phase` 写成 `"heartbeat"` 污染 Agent 页显示——保活一律走
 >   `agent_bus_service.heartbeat()`（这正是它存在的意义）。
 >
-> **`streaming` 的判据是「纯文字」而非「含文字」**：实测真实日志 377 条
-> `assistant/message` 中有 335 条同时含 `tool-call` 块，若拿"含 text"当判据会长期误报
-> 回复中。故边车额外折叠出 `last_message_text_only`（有 `text` 且无 `tool-call`），
-> `step/start` 会重置该标记。
+> **`streaming` 的判据是「纯文字」而非「含文字」**：实测真实日志里 `assistant/message`
+> **绝大多数（约 99%）都带 `tool-call` 块**，若拿"含 text"当判据会长期误报回复中。
+> 故边车额外折叠出 `last_message_text_only`（有 `text` 且无 `tool-call`），
+> 且 `step/start` 与本轮 `turn/start` 都会重置该标记（否则上一轮的 streaming 会粘到
+> 新步骤上；这正是自检 `[7]` 那条回归测试守着的点）。
 
 > **失败识别口径**：DSH 的失败标记是 `tool/result.data.message.isError === true`，
-> 而**不是** `data.error`（实测 330 条 tool/result：全部带 `isError` 布尔，仅 2 条带
-> `data.error`）。`error` phase 只在“最近一个事件本身是失败”时进入，后续任何进展事件
+> 而**不是** `data.error`。实测（`python -m app.dsh_stats`）：`message.isError` 字段
+> **从不缺失**，失败样本里 `data.error` 只是**可选的补充信息**，所以判据必须用 `isError`。
+> `error` phase 只在“最近一个事件本身是失败”时进入，后续任何进展事件
 > 立即恢复工作态，避免失败态粘住整轮。
+>
+> 注：本机日志持续增长，任何绝对条数都会过期——**别照抄数字，跑 `dsh_stats` 取当时的**。
+> 早先版本写死的 "330 条 / 仅 2 条带 data.error" 已被复核证伪（同口径实测是 8 条）。
 
 > **`voice`（语音播报）在本版 DSH 不可观测**：DSH 没有 TTS/语音合成服务（asar 内无
 > tts 包，官方 README 明确 "no speech synthesis"）；语音输入（STT）的转写只进输入框
@@ -494,21 +502,41 @@ DSH 会话日志(.jsonl.zstd)
 > `capabilities.voice` 如实报 `False`，适配器保留 `voice` phase 与映射：若日后部署了
 > 名为 `speak`/`tts` 的工具，桌宠会自动按"说话中"呈现，无需改代码。
 
-**摄取通道选型**（两个可编程面均在本机实测）：
+**摄取通道选型**（两个可编程面都在本机实测过）：
 
-| 通道 | 实测延迟 | 取舍 |
+| 通道 | 延迟量级 | 取舍 |
 |---|---|---|
-| 会话日志 `session.v4.jsonl.zstd`（**本适配器采用**） | p50 215ms / p90 237ms | 无需鉴权、无需发现端口、DSH 重启不失效 |
-| Host WS `/api/remote.mux` → `session/follow` | p50 10ms / p90 78ms | 更低延迟且含 `assistant-stream` 增量，但需凭据 cookie 签名 + 端口发现（端口为临时分配、未持久化） |
+| 会话日志 `session.v4.jsonl.zstd`（**本适配器采用**） | 见下方说明（受 DSH 写盘节奏支配） | 无需鉴权、无需发现端口、DSH 重启不失效 |
+| Host WS `/api/remote.mux` → `session/follow` | 推送更及时（含 `assistant-stream` 增量） | 需凭据 cookie 签名 + 端口发现（端口临时分配、未持久化） |
 
-两者都能拿到同一批事件（实测同期各 12 条、seq 完全一致）。215ms 远优于 300ms 节流窗口与
-人眼感知，而日志通道在 DSH 重启/换端口/无 GUI 时都不失效，故取日志为主通道。
+> **不要轻信任何写死的延迟数字**（本文件早先版本写过 "p50 215ms"，已被两位独立复核者
+> 证伪：他们各自量到 p50 259ms / 400ms，我重测则为 ~1.5s）。跑
+> `.venv\Scripts\python.exe -m app.dsh_latency 45` 自己量——它按 `facts.updated_at`
+> 变化判定新事件，量到的是"用户真实感知"的端到端值。**本机实测约 1.5s**。
+
+关于延迟，三条经过实测、较稳定的事实：
+
+1. **主要成本在 DSH 自己的写盘节奏**，不在我方管道：DSH 按批落盘而非每条事件即时
+   `flush`，所以"事件发生 → 文件里能读到"这一段就占了大头。我方 `poll_ms` 只决定
+   额外叠加多少，改成 150ms 后我方部分 ≤150ms。**这也是日志通道的固有代价**——
+   它换来的是零鉴权、零端口发现、DSH 重启不失效。
+2. **长工具调用期间日志会长时间不写**：本机实测单次 `pwsh` 调用可让日志停止增长
+   **40s 以上**（期间 0 条新事件）。这不是故障，是 DSH 的事件粒度——工具调用只在
+   开始（`tool/call`）与结束（`tool/result`）落两条，中间没有增量。
+   因此**"工具正在跑"这件事必须靠周期补发维持**，见下方"一直在干活"小节。
+3. **该量级对桌宠是够用的**：状态徽标本身设计为"短暂展示 4s 后淡出"，桌宠做的是
+   氛围表达而非逐帧同步；1.5s 的滞后不影响"看起来在干活"的可读性。若日后要追求
+   亚秒级，接 WS 快通道即可（事件内容与日志通道完全一致）。
+
+选日志为主通道的理由：两个通道能拿到**同一批事件**（实测同期条数与 seq 完全一致），
+而日志通道在 DSH 重启/换端口/无 GUI 时都不失效——对桌宠这种常驻展示场景，健壮性
+比那几百毫秒更重要。WS 快通道留作后续可选加速项。
 
 **启用**：在 `私人AI日记系统\dsh_config.json` 设 `"enabled": true`（或在 MIO 管理窗口 →
 「Agent」页打开 DSH 开关）；随后启动 DeepSeek Harness 桌面应用即可。全部字段留空即用默认：
 
 ```json
-{ "enabled": true, "sessions_root": "", "workspace": "", "session_id": "", "node_path": "", "poll_ms": 400 }
+{ "enabled": true, "sessions_root": "", "workspace": "", "session_id": "", "node_path": "", "poll_ms": 150 }
 ```
 
 | 字段 | 留空时的行为 |
@@ -517,17 +545,20 @@ DSH 会话日志(.jsonl.zstd)
 | `workspace` | 不限定，边车自动跟随"最近活跃的主会话"（优先 `delegationDepth=0`，避免跟到 subagent 子会话） |
 | `session_id` | 自动选活跃会话 |
 | `node_path` | 依次探测 PATH → DSH 自带 runtime → 常见安装位置 |
-| `poll_ms` | 400（日志尾随轮询间隔） |
+| `poll_ms` | 150（边车日志尾随轮询间隔；这是我方唯一能控的延迟项，调小更跟手、代价是空闲时多读几次文件） |
+| `base_url` / `api_key` / `ws_url` | **当前无代码读取**（v3.1 遗留的占位键，保留以免旧配置报错）。日志通道不需要它们；若日后启用 WS 快通道才会用到 |
 
 **自检与验证**（backend 目录下）：
 
 ```powershell
 .venv\Scripts\python.exe -m app.dsh_acceptance          # 验收报告：12 phase 逐条列出注册/可达/驱动来源
-.venv\Scripts\python.exe -m app.dsh_adapter_selftest   # 122 项：映射/解码/回放/可达性/总线/前端契约
+.venv\Scripts\python.exe -m app.dsh_adapter_selftest   # 131 项：映射/解码/回放/可达性/总线/回归/前端契约
 .venv\Scripts\python.exe -m app.dsh_adapter_e2e 60     # 端到端：轮询总线看 phase 实时变化
 .venv\Scripts\python.exe -m app.dsh_ws_check 30        # 桌宠消费的那条 WS 通道
+.venv\Scripts\python.exe -m app.dsh_latency 45         # 端到端状态延迟（诚实口径，别抄死数字）
+.venv\Scripts\python.exe -m app.dsh_stats              # 真实事件语料统计（条数会过期，现取现用）
 .venv\Scripts\python.exe -m app.dsh_gap_analysis       # 事件覆盖缺口（DSH 升级后跑一次）
-.venv\Scripts\python.exe -m app.dsh_fixture_build      # 从真实日志重建回放夹具（脱敏）
+.venv\Scripts\python.exe -m app.dsh_fixture_build      # 从真实日志重建回放夹具（脱敏+分支覆盖自检）
 ```
 
 > 控制台若报 `UnicodeEncodeError`（Windows 默认 GBK），先设 `$env:PYTHONIOENCODING='utf-8'`；
@@ -555,9 +586,9 @@ GET /api/companion/agents/dsh/inspect
 **WS 链路检查**（确认桌宠真正消费的那条通道）：`.venv\Scripts\python.exe -m app.dsh_ws_check 30`
 
 **「一直在干活」为什么要周期补发**：桌宠渲染端的动作有时限（`live2d-pet.js`：
-speaking 4s、其余 **2.6s** 后回落待机）。DSH 单次工具调用可能持续几十秒（本机实测
-有 33s 的 `pwsh` 调用），这期间**没有任何新事件**；若只在事件到达时上报，桌宠会在工具
-还在跑时就变回待机，看着像 DSH 停工了。故适配器把补发间隔压到 **2s**（`REEMIT_MS`，
+speaking 4s、其余 **2.6s** 后回落待机）。DSH 单次工具调用可能持续很久（本机实测日志
+可停止增长 **40s 以上**，见上文延迟小节），这期间**没有任何新事件**；若只在事件到达时上报，
+桌宠会在工具还在跑时就变回待机，看着像 DSH 停工了。故适配器把补发间隔压到 **2s**（`REEMIT_MS`，
 小于 2.6s 活动窗口），在静默期也周期性补发当前工作态——`emit` 内部自带节流，不会刷屏。
 
 **Octop 事件 → phase 映射**（`octop_adapter.parse_octop_event`）：
