@@ -114,6 +114,37 @@ body,
   box-shadow: 0 0 0 3px rgba(216, 97, 97, 0.2);
 }
 
+/* ---- 多 Agent 状态徽标（桌宠头顶，支持多 agent 并排显示） ---- */
+#agent-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 480px;
+  background: none;
+  padding: 0;
+}
+
+.agent-badge-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 9px;
+  background: rgb(16 24 32 / 72%);
+  color: #e8eef0;
+  font: 11px/1.4 "Microsoft YaHei", sans-serif;
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-badge-chip.working {
+  background: rgb(214 169 94 / 94%);
+  color: #1c2628;
+  font-weight: 600;
+}
+
 .speech-bubble {
   position: absolute;
   z-index: 12;

@@ -1086,10 +1086,8 @@
     if (badge) return badge
     badge = document.createElement('div')
     badge.id = 'agent-badge'
-    badge.style.cssText = 'position:fixed;left:0;top:0;cursor:grab;user-select:none;' +
-      'background:rgba(16,24,32,.72);color:#fff;font:11px/1.4 "Microsoft YaHei",sans-serif;' +
-      'padding:2px 10px;border-radius:10px;z-index:9999;' +
-      'opacity:0;transition:opacity .25s;white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis;'
+    badge.style.cssText = 'position:fixed;left:0;top:0;opacity:0;transition:opacity .25s;' +
+      'cursor:grab;user-select:none;z-index:9999;'
     document.body.appendChild(badge)
     // 拖动：解锁状态下可任意移动并记住位置；拖动期间暂停每帧跟随，防止被拉回
     badge.addEventListener('pointerdown', (e) => {
@@ -1097,8 +1095,6 @@
       e.preventDefault()
       e.stopPropagation()
       badgeDragging = true
-      // 拖动期间保持可见，不被自动隐藏打断
-      window.clearTimeout(agentBadgeHideTimer)
       const rect = badge.getBoundingClientRect()
       const offX = e.clientX - rect.left
       const offY = e.clientY - rect.top
@@ -1113,12 +1109,6 @@
         const r = badge.getBoundingClientRect()
         localStorage.setItem('mio_agent_badge_manual_pos', JSON.stringify({ left: Math.round(r.left), top: Math.round(r.top) }))
         badge.style.cursor = 'grab'
-        // 拖动结束重新计时自动隐藏
-        window.clearTimeout(agentBadgeHideTimer)
-        agentBadgeHideTimer = window.setTimeout(() => {
-          const b = document.getElementById('agent-badge')
-          if (b) b.style.opacity = '0'
-        }, 4000)
       }
       badge.style.cursor = 'grabbing'
       window.addEventListener('pointermove', move)
@@ -1133,8 +1123,47 @@
   }
 
   let lastAgentBadgePos = null
-  let agentBadgeHideTimer = null
   let badgeDragging = false
+
+  // ---- 多 Agent 状态栏：每个 agent 一个状态 chip，实时并排显示 ----
+  // 即插即用：注册/上线即出现；停用(enabled=false)或离线(offline)即移除。
+  const agentBadgeStates = new Map()
+
+  const AGENT_STATUS_LABELS = { online: '在线', connecting: '连接中', error: '异常', offline: '离线' }
+
+  function renderAgentBadge() {
+    if (!agentBadgeEnabled()) {
+      const badge = document.getElementById('agent-badge')
+      if (badge) badge.style.opacity = '0'
+      window.__lastAgentBadgeText = ''
+      return
+    }
+    const badge = ensureAgentBadge()
+    const chips = []
+    agentBadgeStates.forEach((st, id) => {
+      if (!st) return
+      if (st.enabled === false) return          // 停用：状态栏一并停用
+      if (st.status === 'offline') return       // 离线：即插即拔，不再展示
+      const working = Boolean(st.phase && WORK_PHASES.has(st.phase) && st.active)
+      const label = working
+        ? (PHASE_LABELS[st.phase] || st.phase)
+        : (AGENT_STATUS_LABELS[st.status] || '在线')
+      chips.push({ id, name: String(st.name || id), label, working })
+    })
+    badge.replaceChildren()
+    for (const chip of chips) {
+      const el = document.createElement('span')
+      el.className = chip.working ? 'agent-badge-chip working' : 'agent-badge-chip'
+      el.textContent = `${chip.name} · ${chip.label}`
+      el.title = `${chip.name} · ${chip.label}`
+      badge.appendChild(el)
+    }
+    const visible = chips.length > 0
+    badge.style.opacity = visible ? '1' : '0'
+    if (visible) updateAgentBadgePosition()
+    // 兼容旧引用（右键菜单重新开启徽标时恢复展示）
+    window.__lastAgentBadgeText = chips.map((c) => `${c.name} · ${c.label}`).join('，')
+  }
 
   // 徽标定位：手动拖动位置优先；否则锚定模型头顶上方居中。锁定时不可交互。
   function updateAgentBadgePosition() {
@@ -1175,28 +1204,6 @@
     badge.style.top = `${lastAgentBadgePos.top}px`
   }
 
-  function setAgentBadge(text, visible = true) {
-    window.clearTimeout(agentBadgeHideTimer)
-    agentBadgeHideTimer = null
-    window.__lastAgentBadgeText = text
-    if (!agentBadgeEnabled()) {
-      const badge = document.getElementById('agent-badge')
-      if (badge) badge.style.opacity = '0'
-      return
-    }
-    const badge = ensureAgentBadge()
-    badge.textContent = text
-    badge.style.opacity = visible ? '1' : '0'
-    if (visible) {
-      updateAgentBadgePosition()
-      // 状态变化后短暂展示，自动淡出（不常驻不闪烁）
-      agentBadgeHideTimer = window.setTimeout(() => {
-        const b = document.getElementById('agent-badge')
-        if (b) b.style.opacity = '0'
-      }, 4000)
-    }
-  }
-
   // 只展示"工作中"的细分状态；连接/断连/待机/完成等不打扰
   const WORK_PHASES = new Set([
     'voice', 'thinking', 'planning', 'executing_tool', 'streaming', 'waiting_input', 'awaiting_approval',
@@ -1204,16 +1211,28 @@
 
   function applyAgentPhase(payload) {
     if (!payload) return
+    const agentId = String(payload.agent_id || '')
     const phase = String(payload.phase || 'idle')
     const agentName = String(payload.agent_name || payload.agent_id || 'Agent')
     const active = Boolean(payload.active)
-    const label = PHASE_LABELS[phase] || phase
-    if (active && WORK_PHASES.has(phase)) {
-      setAgentBadge(`${agentName} · ${label}`)
+    // 实时刷新对应 agent 的状态 chip（多 agent 各自更新，互不覆盖）
+    if (agentId) {
+      const prev = agentBadgeStates.get(agentId) || {}
+      agentBadgeStates.set(agentId, {
+        name: payload.agent_name || prev.name || agentId,
+        status: prev.status || 'online',
+        enabled: prev.enabled !== false,
+        phase,
+        active,
+      })
     }
+    renderAgentBadge()
+    const label = PHASE_LABELS[phase] || phase
     if (active) {
       activityIndicator.title = `${agentName} · ${label}`
     }
+    // 多 agent 并行时，只有当前活跃者驱动桌宠"身体"（表情/动作），互不抢占
+    if (!active) return
     const activity = PHASE_TO_ACTIVITY[phase]
     if (!activity) return   // heartbeat 等不改变动画
     currentActivity = activity
@@ -1229,30 +1248,49 @@
   }
 
   function applyAgentStatus(payload) {
-    // 连接/断连/在线等状态变化不显示徽标（避免重连闪烁），仅保留状态位供后续使用
+    // 连接/在线/离线/停用状态变化实时刷新状态栏：即插即用（上线即出现、停用/离线即移除）
     if (!payload) return
-    const agentName = String(payload.agent_name || payload.agent_id || 'Agent')
+    const agentId = String(payload.agent_id || '')
     const status = String(payload.status || 'offline')
-    const label = { offline: '离线', connecting: '连接中', online: '在线' }[status] || status
-    if (payload.active) activityIndicator.title = `${agentName} · ${label}`
+    const agentName = String(payload.agent_name || payload.agent_id || 'Agent')
+    if (agentId) {
+      const prev = agentBadgeStates.get(agentId) || {}
+      agentBadgeStates.set(agentId, {
+        name: payload.agent_name || prev.name || agentId,
+        status,
+        enabled: payload.enabled !== undefined ? Boolean(payload.enabled) : (prev.enabled !== false),
+        phase: prev.phase || 'idle',
+        active: prev.active || false,
+      })
+    }
+    renderAgentBadge()
+    if (payload.active) {
+      activityIndicator.title = `${agentName} · ${AGENT_STATUS_LABELS[status] || status}`
+    }
   }
 
-  let lastBadgeSnapshotKey = ''
   async function fetchAgentsSnapshot() {
     try {
       const snapshot = await request('/api/companion/agents')
       const agents = snapshot.agents || []
+      // 全量同步：以服务端快照为准，停用(enabled=false)/未注册的 agent 从状态栏移除
+      const next = new Map()
+      for (const a of agents) {
+        if (!a || !a.agent_id) continue
+        next.set(String(a.agent_id), {
+          name: String(a.name || a.agent_id),
+          status: String(a.status || 'offline'),
+          enabled: a.enabled !== false,
+          phase: String(a.phase || 'idle'),
+          active: Boolean(a.active),
+        })
+      }
+      agentBadgeStates.clear()
+      next.forEach((value, key) => agentBadgeStates.set(key, value))
+      renderAgentBadge()
       const active = snapshot.active_agent
       if (active) {
         const phase = String(active.phase || 'idle')
-        // 仅工作细分状态且真变化时才亮徽标（轮询不重复闪烁；连接/断连/待机不显示）
-        if (WORK_PHASES.has(phase)) {
-          const key = `${active.agent_id}|${phase}`
-          if (key !== lastBadgeSnapshotKey) {
-            lastBadgeSnapshotKey = key
-            setAgentBadge(`${active.name || active.agent_id} · ${PHASE_LABELS[phase] || phase}`)
-          }
-        }
         const activity = PHASE_TO_ACTIVITY[phase]
         if (activity && phase !== 'heartbeat') {
           currentActivity = activity
@@ -2419,8 +2457,7 @@
         const b = document.getElementById('agent-badge')
         if (b) b.style.opacity = '0'
       } else {
-        const active = window.__lastAgentBadgeText
-        if (active) setAgentBadge(active)
+        renderAgentBadge()
       }
     }
     if (action === 'agent') await bridge.open_agent()
