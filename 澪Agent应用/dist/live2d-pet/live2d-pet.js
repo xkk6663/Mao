@@ -2875,6 +2875,15 @@
       }
     }
     if (action === 'agent') await bridge.open_agent()
+    if (action === 'sound-check') {
+      // 音效自检：把结论直接画在屏上（无边框小窗不便开 DevTools）
+      try {
+        if (window.__mioPetSoundReport) await window.__mioPetSoundReport()
+        else showSpeechBubble('音效自检模块未加载', 4000)
+      } catch (err) {
+        showSpeechBubble(`自检失败：${String(err && err.message || err)}`, 4000)
+      }
+    }
     if (action === 'close') await bridge.close_pet()
     updateMousePassThrough(true, event)
   })
