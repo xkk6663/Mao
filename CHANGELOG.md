@@ -5,6 +5,42 @@
 
 ---
 
+## v3.11（2026-10-15）· 泡泡工坊迁入 Mio 管理页 + 穿透根因修复
+
+**主线**：按用户裁决重构泡泡定制的入口——从桌宠右键迁到 **Mio 左侧导航「泡泡」功能页**
+（皮肤配色 / 模块管理 / 图片素材库三合一）；同时根治穿透 bug 的**真正根因**
+（a10 修复挂在死的事件通路上，本次改为对齐主进程轮询决策）。
+
+### 泡泡工坊（Mio 左侧导航「泡泡」，core-inject/bubble-panel-inject.js）
+- **气泡皮肤**：8 款卡点选 → `PATCH live2d_bubble_style` → settings_changed → 桌宠热应用；
+- **模块化泡泡**：6 类模块开关 / 文本 / 倒计时目标 / 配色循环 → `PATCH live2d_bubble_modules`
+  （扁平 map 形态，渲染端 `normalizeModules` 兼容两种结构）；
+- **图片素材库**：上传（data_url ≤5MB、扩展名白名单）/ 预览 / 删除
+  （`POST|DELETE /api/companion/bubble-images/...`）；
+- 桌宠右键菜单移除「泡泡模块」「泡泡样式」两入口；渲染端 pet-bubble-styles.js /
+  pet-bubble-modules.js 去面板化，纯应用器，配置以 settings 为准（localStorage 仅老配置迁移回退）。
+
+### 穿透根因修复（a10 失败原因 + 正解）
+- **a10 为什么无效**：主进程 `applyMainWindowMousePolicy` 的注释与实现都表明
+  穿透模式下**渲染层收不到 mousemove（--no-sandbox 下 forward 不可靠）**——主进程
+  自己轮询光标位置决策。a10 把命中检测挂在 `window mousemove` 上 = 死通路，从未执行。
+- **正解（对齐主进程决策模型）**：
+  1. `reportUiOpen` 纳入图库等模态面板（A7 图库的历史漏报一并修复）；
+  2. 新增 `mio-desktop:ui-bounds` 通道：渲染层 500ms 上报**常驻可交互 UI**（模块卡片/
+     图片泡泡/图库面板）的窗口矩形，主进程轮询加 `inUiRect` 判定——模块卡片常驻
+     不能走 uiOpen（会把穿透永久关掉），必须按光标命中精确判定。
+
+### 验证
+- 上传/列表/删除/样式 PATCH 全链路 200 且 `设置.json` 正确落盘；测试素材已清理复原；
+- 6 个 JS 文件 `node --check` 通过；`--dump-dom` 确认「泡泡」导航注入；
+- start_mio 兜底链路 + 桌宠 restart 实测（`ELECTRON_RUN_AS_NODE` 防御生效，Popen 拉起成功）。
+
+---
+
+
+**主线**：DSH 融合方案 A 组（渲染层增强，对齐 whale-widget 体验）剩余三项全部落地；
+顺带根治两个启动链路问题（venv 中文路径失效、宿主环境变量毒化桌宠进程）。
+
 ## v3.10（2026-10-15）· A组渲染增强收尾（随机图片 / 泡泡图库 / 模块化泡泡）+ 启动链路加固
 
 **主线**：DSH 融合方案 A 组（渲染层增强，对齐 whale-widget 体验）剩余三项全部落地；
@@ -49,8 +85,6 @@
 - 后端路由：列表/取图 200（中文文件名编码正确）、越界 404、非法扩展 400；
 - 4 个渲染端文件 `node --check` 通过；headless 渲染整页正常（模型 + 徽标 + 新脚本）；
 - start_mio.ps1 完整链路实测：venv 失败 → 兜底启动 → 后端就绪 → 桌宠 WMI 拉起。
-
----
 
 ## v3.9（2026-10-15）· 模型切换 UI 断链修复 + 水印消除加固 + 工作区清理
 

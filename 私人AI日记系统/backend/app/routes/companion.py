@@ -200,6 +200,9 @@ class CompanionSettingsRequest(BaseModel):
     live2d_disable_gpu: bool = False
     live2d_motion_slots: dict[str, dict[str, str]] = Field(default_factory=dict)
     live2d_expression_slots: dict[str, dict[str, str]] = Field(default_factory=dict)
+    # 泡泡工坊：说话气泡皮肤 + 模块化泡泡配置（Mio「泡泡」页管理，桌宠热应用）
+    live2d_bubble_style: str = Field(default="default", max_length=40)
+    live2d_bubble_modules: dict = Field(default_factory=dict)
     # A 档：桌宠"生命感"设置。
     # ⚠️ 本模型就是**写入白名单**：未在此声明的键会被 model_dump(exclude_unset=True)
     # 静默丢弃（读得到、写不进，表现为"改了没反应"）。新增桌宠设置必须同时改
@@ -795,6 +798,59 @@ async def companion_bubble_image(name: str):
     if not path.is_file():
         raise HTTPException(status_code=404, detail="图片不存在。")
     return FileResponse(path)
+
+
+class BubbleImageUploadRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    data_url: str = Field(min_length=16, max_length=8_000_000)
+
+
+@router.post("/bubble-images/upload")
+async def companion_bubble_image_upload(payload: BubbleImageUploadRequest):
+    """泡泡工坊素材上传：data_url 落盘到 bubble-imgs/（5MB 上限，扩展名白名单）。"""
+    import base64
+    import re
+
+    name = str(payload.name or "").strip()
+    if not name or "/" in name or "\\" in name or name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="文件名无效。")
+    suffix = Path(name).suffix.lower()
+    if suffix not in _BUBBLE_IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="仅支持 PNG/JPG/GIF/WebP。")
+    match = re.match(r"^data:image/(png|jpeg|gif|webp);base64,(.+)$", payload.data_url, re.S)
+    if not match:
+        raise HTTPException(status_code=400, detail="data_url 必须是 base64 图片。")
+    try:
+        blob = base64.b64decode(match.group(2), validate=True)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail="base64 解码失败。") from exc
+    if len(blob) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="图片不能超过 5MB。")
+    root = _bubble_images_dir().resolve()
+    target = (root / name).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="路径越界。") from exc
+    target.write_bytes(blob)
+    return {"ok": True, "name": name, "bytes": len(blob)}
+
+
+@router.delete("/bubble-images/{name}")
+async def companion_bubble_image_delete(name: str):
+    if not name or "/" in name or "\\" in name or name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="文件名无效。")
+    if Path(name).suffix.lower() not in _BUBBLE_IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="不支持的图片格式。")
+    root = _bubble_images_dir().resolve()
+    path = (root / name).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="路径越界。") from exc
+    if path.is_file():
+        path.unlink()
+    return {"ok": True}
 
 
 # ---- Live2D 模型定时自动更换 ----

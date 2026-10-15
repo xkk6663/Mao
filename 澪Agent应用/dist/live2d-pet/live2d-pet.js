@@ -492,6 +492,7 @@
     app.ticker.add(() => {
       reportModelBounds()
       reportUiOpen()
+      reportUiBounds()
     }, undefined, -25)
   }
 
@@ -1623,6 +1624,17 @@
     if (nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, 'live2d_model_id')) {
       desktopSelectedModelId = ''
     }
+    // 泡泡工坊：皮肤 + 模块化泡泡配置（Mio「泡泡」页 → settings → 这里热应用）
+    try {
+      const bs = window.__mioPetBubbleStyles
+      if (bs && nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, 'live2d_bubble_style')) {
+        bs.setStyle(nextSettings.live2d_bubble_style, speechBubble)
+      }
+      const bm = window.__mioPetBubbleModules
+      if (bm && nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, 'live2d_bubble_modules')) {
+        bm.applyConfig(nextSettings.live2d_bubble_modules)
+      }
+    } catch (_) {}
     if (electronRuntime) {
       window.mioDesktop.setAlwaysOnTop(Boolean(settings.live2d_always_on_top ?? true))
       window.mioDesktop.setClickThroughLocked(Boolean(settings.live2d_click_through_locked))
@@ -2633,10 +2645,46 @@
   let lastUiOpenReport = null
   function reportUiOpen() {
     if (!electronRuntime || !window.mioDesktop || !window.mioDesktop.setUiOpen) return
-    const open = !contextMenu.hidden || !sizePanel.hidden
+    // UI 打开 = 任一模态面板可见（含 A7 角色图库——历史漏报导致图库点击全穿透）
+    let galleryOpen = false
+    try {
+      const g = document.getElementById('pet-gallery')
+      galleryOpen = Boolean(g && !g.hidden)
+    } catch (_) {}
+    const open = !contextMenu.hidden || !sizePanel.hidden || galleryOpen
     if (open === lastUiOpenReport) return
     lastUiOpenReport = open
     window.mioDesktop.setUiOpen(open)
+  }
+
+  // 常驻可交互 UI（模块卡片/图库面板/图片泡泡）的矩形上报：主进程轮询穿透判定
+  // 需要"鼠标是否悬在这些 UI 上"。面板类走 uiOpen；常驻元素走这里（500ms 节流）。
+  function collectUiBounds() {
+    const rects = []
+    const gallery = document.getElementById('pet-gallery')
+    if (gallery && !gallery.hidden) rects.push(gallery.getBoundingClientRect())
+    try {
+      const bm = window.__mioPetBubbleModules
+      if (bm) bm.collectBounds().forEach((r) => rects.push(r))
+    } catch (_) {}
+    const img = document.getElementById('pet-image-bubble')
+    if (img && !img.hidden) rects.push(img.getBoundingClientRect())
+    return rects
+      .filter((r) => r.width > 2 && r.height > 2)
+      .map((r) => ({ x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) }))
+  }
+  let lastUiBoundsSentAt = 0
+  function reportUiBounds(force = false) {
+    if (!electronRuntime || !window.mioDesktop || !window.mioDesktop.setUiBounds) return
+    const now = performance.now()
+    let dirty = false
+    try { dirty = Boolean(window.__mioPetBubbleModules && window.__mioPetBubbleModules.isBoundsDirty()) } catch (_) {}
+    if (!force && !dirty && now - lastUiBoundsSentAt < 500) return
+    lastUiBoundsSentAt = now
+    try {
+      window.mioDesktop.setUiBounds(collectUiBounds())
+      window.__mioPetBubbleModules && window.__mioPetBubbleModules.clearBoundsDirty()
+    } catch (_) {}
   }
 
   // 智能穿透的 UI 白名单：悬停在这些元素上时窗口必须可交互（可点击/可拖动）。
@@ -2901,22 +2949,6 @@
         })
       }
     }
-    if (action === 'bubble-styles') {
-      // A组 泡泡图库：换说话气泡皮肤（渲染层 localStorage 持久化）
-      const s = window.__mioPetBubbleStyles
-      if (s) {
-        s.mount(root)
-        s.show()
-      }
-    }
-    if (action === 'bubble-modules') {
-      // A组 模块化泡泡：模块库面板（开关/编辑/配色，卡片拖拽排版）
-      const m = window.__mioPetBubbleModules
-      if (m) {
-        m.mount(root)
-        m.toggle()
-      }
-    }
     if (action === 'screenshot-ask') {
       // 截图提问：截全屏 → 小智视觉分析 → 直接显示气泡（后端已写 pet 历史+syslog）
       // 禁止复述注入：vision 返回文本不再调 /say 当成用户消息重发
@@ -3144,15 +3176,10 @@
     scheduleIdleTalk()
     // A7：初始化角色图库（数据在首次打开时才拉，不占用启动时间）
     initGallery()
-    // A组：随机图片 + 泡泡图库 + 模块化泡泡（全部渲染层自足，启动零开销）
+    // A组：随机图片 + 气泡皮肤/模块化泡泡（配置在 Mio「泡泡」页，settings 下发热应用）
     try {
       window.__mioPetRandomImage && window.__mioPetRandomImage.mount(root)
-      const bs = window.__mioPetBubbleStyles
-      if (bs) {
-        bs.mount(root)
-        bs.apply(speechBubble)                       // 启动即恢复上次选的皮肤
-        bs.onPick(() => bs.apply(speechBubble))      // 点选即换
-      }
+      window.__mioPetBubbleStyles && window.__mioPetBubbleStyles.apply(speechBubble)
       window.__mioPetBubbleModules && window.__mioPetBubbleModules.init()
     } catch (_) {}
   }
@@ -3304,6 +3331,15 @@
       parts.push(`${st.name || id}·${PHASE_LABELS[p] || p}`)
     })
     return parts.join(' / ')
+  }
+  // 泡泡模块卡片上的本地变更（拖动排版/✕隐藏）回写 settings（泡泡工坊同源）
+  window.__mioPetPersistModules = (cfg) => {
+    try {
+      request('/api/companion/settings', {
+        method: 'PATCH',
+        body: JSON.stringify({ live2d_bubble_modules: (cfg && cfg.modules) || {} }),
+      }).catch(() => {})
+    } catch (_) {}
   }
 
   start().catch((error) => {

@@ -120,3 +120,6 @@ pet-data/pet-instance/
 # --- 会话工作现场/工作区记忆（本机自足，不入库） ---
 workspace_patch/
 .workbuddy/
+
+# pet-data 根目录调试文本（多会话工作现场，不入库）
+pet-data/*.txt
