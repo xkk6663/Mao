@@ -105,6 +105,11 @@ logger = logging.getLogger(__name__)
 AGENT_ID = "dsh"
 AGENT_NAME = "DSH"
 
+# 本插件的身份色（靛蓝）：桌宠气泡/徽标用它区分"这条消息来自 DSH"。
+# 与前端 ``plugins/dsh/manifest.js`` 的 bubble.accent、插件 routes.py 的
+# plugin.accent 是**同一个值**——三处由自检断言保持一致，改一处不改另两处会报错。
+DSH_ACCENT = "#4F6BED"
+
 # DSH 的 12 phase 中，DSH 原生事件能真实驱动的“工作细分状态”。
 # 桌宠徽标只展示这些 phase（与前端 WORK_PHASES 一致）。
 #
@@ -836,6 +841,11 @@ class DshAdapter:
                 "mcp": True,
                 "observe": False,
             },
+            # 本插件的身份色（气泡/徽标用）。
+            # 由插件自己声明、经总线透传给渲染端，桌宠窗口因此**不需要**加载
+            # 管理页的插件注册表也能拿到色值——早期实现正是漏了这一点，
+            # 导致气泡明明是 DSH 发的却不变蓝。
+            accent=DSH_ACCENT,
         )
         while True:
             try:

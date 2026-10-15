@@ -109,3 +109,10 @@ xiaozhi_memo.json
 agent_bus_config.json
 dsh_config.json
 octop_config.json
+
+# --- 桌宠运行时数据 + 上传临时残留（v3.9 整理，保留在磁盘不入库） ---
+pet-data/Live2D桌宠/
+pet-data/pet-instance/
+私人AI日记系统/backend/????????
+私人AI日记系统/xiaozhi_observe.json
+私人AI日记系统/backend/uvicorn_v2*.log

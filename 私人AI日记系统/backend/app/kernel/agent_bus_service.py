@@ -85,7 +85,7 @@ class AgentState:
 
     __slots__ = (
         "agent_id", "name", "adapter", "status", "enabled",
-        "phase", "state", "meta", "seq", "capabilities",
+        "phase", "state", "meta", "seq", "capabilities", "accent",
         "last_phase_at", "last_seen", "last_heartbeat_at",
         "inbox", "active", "error",
     )
@@ -97,6 +97,7 @@ class AgentState:
         adapter: str,
         capabilities: dict[str, Any] | None = None,
         enabled: bool = True,
+        accent: str = "",
     ) -> None:
         self.agent_id = agent_id
         self.name = name
@@ -115,6 +116,8 @@ class AgentState:
         self.inbox: Deque[dict[str, Any]] = deque(maxlen=200)
         self.active = False
         self.error = ""
+        # 插件自声明的身份色（空 = 未声明，渲染端回落默认配色）
+        self.accent = accent
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -128,6 +131,7 @@ class AgentState:
             "meta": dict(self.meta),
             "seq": self.seq,
             "capabilities": dict(self.capabilities),
+            "accent": self.accent,
             "active": self.active,
             "last_seen": datetime.fromtimestamp(time.time()).astimezone().isoformat(timespec="seconds"),
             "error": self.error[:300],
@@ -190,7 +194,15 @@ class AgentBus:
         adapter: str,
         capabilities: dict[str, Any] | None = None,
         enabled: bool | None = None,
+        accent: str = "",
     ) -> AgentState:
+        """注册 Agent。
+
+        ``accent`` 是**插件自己声明的身份色**（如 DSH 的靛蓝）。总线只是存下来
+        并随 ``agent_phase`` / ``agent_bubble`` 透传给渲染端——这样桌宠窗口
+        无需加载管理页的插件注册表也能拿到色值（两个窗口是不同 HTML 页面，
+        早期实现因此拿不到色值，气泡不变蓝）。
+        """
         with self._lock:
             existing = self._agents.get(agent_id)
             if existing is not None:
@@ -200,6 +212,8 @@ class AgentBus:
                     existing.capabilities = {**DEFAULT_CAPABILITIES, **capabilities}
                 if enabled is not None:
                     existing.enabled = enabled
+                if accent:
+                    existing.accent = accent
                 return existing
             state = AgentState(
                 agent_id=agent_id,
@@ -207,6 +221,7 @@ class AgentBus:
                 adapter=adapter,
                 capabilities=capabilities,
                 enabled=True if enabled is None else enabled,
+                accent=accent,
             )
             self._agents[agent_id] = state
             return state
@@ -322,6 +337,7 @@ class AgentBus:
                     "state": dict(agent.state),
                     "meta": dict(agent.meta),
                     "seq": agent.seq,
+                    "accent": agent.accent,
                     "active": agent.active,
                     "active_agent_id": self._active_agent_id,
                     "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -334,8 +350,8 @@ class AgentBus:
         与 ``emit`` 的分工：``emit`` 表达"我在干什么"（驱动动画/徽标），
         ``announce`` 表达"我想说一句话"（只出气泡）。二者互不覆盖。
 
-        颜色区分：气泡带 ``agent_id``，渲染端按该插件 manifest 声明的
-        ``bubble.accent`` 着色——**总线不认识任何具体插件**，只透传 id。
+        颜色区分：气泡带 ``accent``（插件在 register 时自己声明的身份色），
+        渲染端直接套用——**总线不认识任何具体插件**，只是把插件给的色值透传下去。
 
         返回 False 表示未广播（插件停用/文本为空）。
         """
@@ -347,11 +363,13 @@ class AgentBus:
             if agent is None or not agent.enabled:
                 return False
             name = agent.name
+            accent = agent.accent
         pet_event_service.publish(
             "agent_bubble",
             {
                 "agent_id": agent_id,
                 "agent_name": name,
+                "accent": accent,
                 "text": body,
                 "duration_ms": max(0, int(duration_ms or 0)),
                 "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -486,8 +504,10 @@ def register(
     adapter: str,
     capabilities: dict[str, Any] | None = None,
     enabled: bool | None = None,
+    accent: str = "",
 ) -> AgentState:
-    return bus.register(agent_id, name, adapter, capabilities, enabled=enabled)
+    """注册 Agent。``accent`` = 插件自己声明的身份色（见 ``AgentBus.register``）。"""
+    return bus.register(agent_id, name, adapter, capabilities, enabled=enabled, accent=accent)
 
 
 def unregister(agent_id: str) -> None:

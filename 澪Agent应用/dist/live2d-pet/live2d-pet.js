@@ -607,7 +607,9 @@
       model.visible = windowStable || !electronRuntime
       currentModelId = definition.id
       lastAppliedExpressionEmotion = ''
-      applyWatermarkRemoval(definition)
+      // 必须在模型可见前完成水印消除：await 保证第一帧可见时水印参数已生效
+      // （Electron 侧 windowStable 会再延迟显示，双保险无冲突）
+      await applyWatermarkRemoval(definition)
       fitModel()
       nextIdleMotionAt = Date.now() + 3500
       if (windowStable || !electronRuntime) loading.hidden = true
@@ -716,6 +718,9 @@
       if (!Object.keys(map).length) return
       watermarkParamMap = map
       watermarkExpressionName = String(entry.Name || '')
+      // 立即同步置参一次：不等下一帧 ticker，也不依赖 model.expression 的淡入时序，
+      // 保证 applyWatermarkRemoval 返回时水印参数已经生效（初始化第一帧就无水印）
+      for (const paramId in map) setParameter(paramId, map[paramId])
       Promise.resolve(model.expression(watermarkExpressionName)).catch(() => {})
     } catch (error) {
       console.debug('[MioLive2D] watermark expression load failed', error)

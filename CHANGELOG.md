@@ -5,6 +5,55 @@
 
 ---
 
+## v3.9（2026-10-15）· 模型切换 UI 断链修复 + 水印消除加固 + 工作区清理
+
+**主线**：修掉"前端 UI 切模型永远回到大肥鱼"的状态覆盖断链，加固大肥鱼启动水印消除时序，
+并完成一次工作区中间产物大清理与文档归位。
+
+### 修复 1：前端 UI 切换模型不生效 / 应用后回退大肥鱼
+- **根因（证据链）**：模型卡片点击 → `CompanionPage.He` → `PATCH /api/companion/settings
+  {live2d_model_id}` 本身是通的（curl 实测 config + runtime.json 均正确持久化）。断点在
+  **切换成功后 store 的 `companionStatus.pet.settings` 从不回读**：
+  1. 设置页 3s 轮询走 `Xn({preserveSettings:true})`，加载器用**内存里的旧 settings 对象**
+     覆盖新 status 的 settings（`i.pet.settings=t`），过期值被永久冻结；
+  2. 面板卡片高亮 `$e()` 以 `G.value.live2d_model_id`（=冻结的旧值）比对 → UI 永远高亮大肥鱼；
+  3. 点"应用"→ `saveCompanionSettings('pet')` 按 `companionSettingKeys.pet`（**含
+     `live2d_model_id`**）整包 PATCH 冻结的旧值 → 刚切好的模型被**热切换回大肥鱼**。
+- **修复（两处独立兜底）**：
+  - `CompanionPage-D7yDEAVz.js` `He()`：PATCH 成功后立即把新 model_id 写回
+    `R.companionStatus.value.pet.settings.live2d_model_id`（store 上下文已确认暴露该 ref），
+    卡片高亮即时纠正、后续"应用"不再携带过期值；
+  - `index-BBVquePX.js` 保存函数：`t==='pet'` 分支在构建 payload 后**强制用服务端最新
+    `live2d_model_id` 覆盖**（`await Ba()` 取 /api/companion/status）——即使还有第二条
+    陈旧标签页等路径，"应用"也永远以服务端为准。
+- **验证**：PATCH `mao-sakiko-10002` → config/runtime.json 双写正确；PATCH 回 `da-feiyu` 恢复；
+  `node --check` 两个 bundle 通过；后端 API 全链路实测。
+
+### 修复 2：大肥鱼初始化水印（时序加固）
+- e9e3278f 已修相对 URL 解析抛错（headless 实测水印已消失）；本次消除**首帧竞态**：
+  - `loadModel` 改为 `await applyWatermarkRemoval(definition)`——模型可见前水印参数已生效；
+  - `applyWatermarkRemoval` 在构建参数表后**立即同步置参一次**（不再等下一帧 ticker /
+    expression 淡入），`updateModelPerformance` 每帧保持逻辑不变；
+  - `live2d-pet/index.html` 版本号 a7→a8。
+
+### 附带：DSH 插件身份色（上一会话完成未提交的收尾）
+- `agent_bus_service.py`：`AgentState`/`register` 支持 `accent`（插件自声明身份色），随
+  `agent_phase`/`agent_bubble` 透传——桌宠窗口不加载插件注册表也能正确着色；
+- `dsh_adapter.py`：DSH 声明靛蓝 `#4F6BED`；自检补 4 条 accent 链路断言
+  （`dsh_adapter_selftest.py`）。
+
+### 工作区清理 + 文档归位
+- 移出仓库（可回收于 `C:/Users/xiao1/.workbuddy-trash/mao-v3.9-cleanup/`）：
+  `_dsh_src/`(11M)、`_research/`(3.7M)、`workspace_patch/`(3.9M，仅剩 2 个活跃 uvicorn
+  日志被占用保留)、pet-data 调试残留 30 个（rail_check*.html / srv_* / chat-dom*.txt /
+  探针截图等）、`私人AI日记系统/backend/` 15 个 8 位随机名测试残留；
+- `.gitignore` 新增：`pet-data/Live2D桌宠/`、`pet-data/pet-instance/`、backend 8 位随机
+  临时文件、`xiaozhi_observe.json`、`uvicorn_v2*.log`——运行时数据留盘不入库；
+- 文档归位 `docs/`：`桌宠性能根因分析.html`、`DSH桌宠深度融合技术方案.md`、
+  `技术需求与现状分析-桌宠音频对话链路.md`；v3.5 引用路径同步更新。
+
+---
+
 ## v3.5（2026-10-15）· 性能优化收尾 + 语音完整播放修复
 
 **主线**：桌宠性能问题（跟随不灵敏、拖动卡顿漂移）的 P0 方案落地，同时根治两个体验问题——
@@ -22,7 +71,7 @@ Agent 面板覆盖不退出、小智语音"没讲完就结束"。
   拖动路径 `getBounds` 调用量从约 180 次/秒降到约 12 次/秒。
 - **背景**：性能退化调查（2026-10-14 提交链 `8a9c5aa7`→`f2f51fd4`→`7581c6bc`→`c613bc80`）
   发现交互链路从"渲染层 mousemove 实时驱动"退化为"主进程 120ms 轮询 + 无条件穿透刷新"，
-  详见 `桌宠性能根因分析.html`。
+  详见 `docs/桌宠性能根因分析.html`（v3.9 起文档统一收进 `docs/`）。
 
 ### 修复
 - **Agent 面板打开后按其他页面仍被覆盖**（`dist/agent-switch-inject.js`）：补齐与设置面板

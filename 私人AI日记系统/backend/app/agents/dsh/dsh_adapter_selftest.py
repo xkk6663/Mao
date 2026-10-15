@@ -712,6 +712,18 @@ def test_bus_integration() -> None:
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
+def _pet_js_src() -> str:
+    """读桌宠渲染端源码（找不到时返回空串，让调用方按"未找到"处理）。"""
+    here = Path(dsh.__file__).resolve()
+    for up in (4, 3, 2, 5):
+        if up >= len(here.parents):
+            continue
+        cand = here.parents[up] / "澪Agent应用" / "dist" / "live2d-pet" / "live2d-pet.js"
+        if cand.exists():
+            return cand.read_text(encoding="utf-8", errors="replace")
+    return ""
+
+
 def test_plugin_api() -> None:
     """[8] 插件包自足性：路由契约 + 独有信号 + 气泡身份色。
 
@@ -721,6 +733,37 @@ def test_plugin_api() -> None:
       - 总线 announce 只透传 agent_id，不认识任何具体插件
     """
     print("\n[8] 插件包自足性（路由契约 / 独有信号 / 气泡身份色）")
+
+    # ---- 身份色：插件声明 → 总线透传 → 渲染端套用 ----
+    # 这条链路踩过两次坑，都是"看似写对了其实没生效"：
+    #   ① AgentState.__init__ 收了 accent 参数却写死 self.accent = ""；
+    #   ② 桌宠窗口与管理页是不同 HTML 页面，桌宠没加载插件注册表，
+    #      所以只从注册表读色值在桌宠这边永远拿到空 → 气泡不变蓝。
+    # 现在由插件在 register() 时声明色值，经 agent_phase / agent_bubble 透传。
+    from ...kernel import agent_bus_service as _bus_mod
+    from .dsh_adapter import DSH_ACCENT as _accent
+    _bus_mod.bus.register("__selftest_accent__", "T", "t", accent=_accent)
+    _snap = _bus_mod.bus.snapshot()
+    _row = next((a for a in _snap["agents"] if a["agent_id"] == "__selftest_accent__"), None)
+    check("快照里带插件身份色", bool(_row and _row.get("accent") == _accent),
+          repr(_row and _row.get("accent")))
+    _sent: list[tuple[str, dict]] = []
+    _orig_publish = _bus_mod.pet_event_service.publish
+    _bus_mod.pet_event_service.publish = lambda t, p: _sent.append((t, p))
+    try:
+        _bus_mod.bus.emit("__selftest_accent__", "executing_tool")
+        _bus_mod.bus.announce("__selftest_accent__", "自检气泡", duration_ms=1000)
+    finally:
+        _bus_mod.pet_event_service.publish = _orig_publish
+    _kinds = {k for k, _ in _sent}
+    check("agent_phase 带身份色", any(p.get("accent") == _accent for k, p in _sent if k == "agent_phase"),
+          repr([(k, p.get("accent")) for k, p in _sent]))
+    check("agent_bubble 带身份色", any(p.get("accent") == _accent for k, p in _sent if k == "agent_bubble"),
+          repr([(k, p.get("accent")) for k, p in _sent]))
+    check("渲染端气泡走 payload.accent", "applyBubbleAgentAccent" in _pet_js_src(),
+          "未在桌宠渲染端找到 applyBubbleAgentAccent")
+    _bus_mod.bus.unregister("__selftest_accent__")
+
     try:
         from . import routes as plugin_routes
         from . import dsh_signals
