@@ -11,13 +11,30 @@
   var agentEnabled = {}
   var POLL_MS = 8000
 
-  // agentId -> 导航匹配关键词（title + 文本 包含即命中）
-  var AGENT_NAV_RULES = {
-    xiaozhi: ['小智工具', '对话'],
-  }
-
   // 固定导航：始终显示且固定顺序（Agent 置顶 → 桌宠 → 设置），插件导航统一追加其后
   var FIXED_NAV_ORDER = ['Agent', '桌宠', '设置']
+
+  // 从插件 manifest 动态收集导航规则（插件零相互依赖：各自声明，这里只聚合）
+  // window.__mioPluginManifests[agentId] = { nav: { keywords: [...] }, observeTab: bool }
+  function collectNavRules() {
+    var rules = {}
+    var ms = window.__mioPluginManifests || {}
+    for (var id in ms) {
+      var m = ms[id]
+      if (m && m.nav && m.nav.keywords) rules[id] = m.nav.keywords
+    }
+    return rules
+  }
+
+  // 声明 observeTab（桌宠页「观察」子tab）的插件：任意一个 enabled 时显示观察tab
+  function observeTabEnabled() {
+    var ms = window.__mioPluginManifests || {}
+    for (var id in ms) {
+      var m = ms[id]
+      if (m && m.observeTab === true && agentEnabled[id] === true) return true
+    }
+    return false
+  }
 
   function $q(sel, root) { return (root || document).querySelector(sel) }
 
@@ -100,7 +117,7 @@
       if (obsBtn && btns[i] === obsBtn && btns[i].classList.contains('active')) obsActive = true
     }
     if (!obsBtn) return
-    var on = agentEnabled['xiaozhi'] === true
+    var on = observeTabEnabled()
     obsBtn.style.display = on ? '' : 'none'
     if (on) obsBtn.classList.remove('plugin-off')
     else obsBtn.classList.add('plugin-off')
@@ -111,8 +128,9 @@
 
   function applyVisibility() {
     var items = getNavItems()
-    for (var agentId in AGENT_NAV_RULES) {
-      var keywords = AGENT_NAV_RULES[agentId]
+    var rules = collectNavRules()
+    for (var agentId in rules) {
+      var keywords = rules[agentId]
       var enabled = agentEnabled[agentId] === true
       for (var i = 0; i < items.length; i++) {
         var btn = items[i]
