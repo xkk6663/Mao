@@ -42,6 +42,9 @@ app.commandLine.appendSwitch('disable-background-timer-throttling')
 app.commandLine.appendSwitch('disable-renderer-backgrounding')
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
+// 透明窗口 WebGL 合成保险：开机后首个 Electron 实例偶发模型层不上屏（DOM 徽标正常），
+// 显式启用透明视觉合成，保证自启动场景下 Live2D 画面一定参与桌面合成
+app.commandLine.appendSwitch('enable-transparent-visuals')
 if (process.env.MIO_PET_DEBUG_PORT) {
   app.commandLine.appendSwitch('remote-debugging-port', String(process.env.MIO_PET_DEBUG_PORT))
 }
