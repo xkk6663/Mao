@@ -9,10 +9,10 @@ from pydantic import BaseModel, Field
 
 from .. import db, memory_revision_service as revisions
 from ..config import settings
-from ..context_service import SUMMARY_TYPE, _strip_summary_marker, _summary_last_message_id, _summary_with_marker
+from ..chat.context_service import SUMMARY_TYPE, _strip_summary_marker, _summary_last_message_id, _summary_with_marker
 from ..documents import read_text_with_fallback
 from ..life_loop_service import public_follow_up_result, record_follow_up_result
-from ..mio_profile import load_mio_profile, save_mio_profile
+from ..companion.mio_profile import load_mio_profile, save_mio_profile
 from ..memory_service import public_memory_item, save_memory_item
 from ..web import templates
 

@@ -1775,7 +1775,7 @@ async def _mcp_companion_switch_model(args: dict) -> str:
     与小智对话链路打通：官方 LLM 调 tools/call 或本地意图兜底命中时执行，
     切换后重启桌宠换装，返回结果文本由官方 LLM 组织回答 → 官方 TTS 播报。
     """
-    from .. import companion_service
+    from ..companion import companion_service
 
     import random as _random
 
@@ -2430,7 +2430,7 @@ async def _pump_upstream(conn) -> None:
                                     # 附加 emotion：以用户真实输入为上下文推断（支持"哭一下/笑一个"等情绪指令联动桌宠表情动作）
                                     _xz_emotion = ""
                                     try:
-                                        from ..companion_service import infer_speech_emotion as _infer_xz_emo
+                                        from ..companion.companion_service import infer_speech_emotion as _infer_xz_emo
                                         _xz_emotion = _infer_xz_emo(_txt, _last_user_input)
                                     except Exception:
                                         _xz_emotion = ""

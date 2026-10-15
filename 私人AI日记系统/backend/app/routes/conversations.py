@@ -7,9 +7,10 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .. import conversation_service, db
-from ..chat_service import cancel_scheduled_companion_actions
-from ..conversation_runtime import chat_run_coordinator
+from .. import db
+from ..chat import conversation_service
+from ..chat.chat_service import cancel_scheduled_companion_actions
+from ..chat.conversation_runtime import chat_run_coordinator
 
 
 router = APIRouter()

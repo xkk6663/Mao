@@ -316,7 +316,7 @@ def ready_to_continue(task: dict[str, Any]) -> bool:
 async def continue_task(task_id: str) -> None:
     from .agent_loop_service import run_agent_loop, begin_final_response, finish_final_response, final_model_call
     from ..llm import call_chat_completion_result
-    from ..chat_service import clean_chat_reply, _guard_agent_creation_completion_claim
+    from ..chat.chat_service import clean_chat_reply, _guard_agent_creation_completion_claim
 
     task = get(task_id)
     if automatic_work_paused() or task is None or task["status"] not in {"ready", *WAITING}:

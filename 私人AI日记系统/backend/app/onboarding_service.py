@@ -8,7 +8,7 @@ from typing import Any
 
 from . import db
 from .config import save_runtime_settings, settings
-from .mio_profile import DEFAULT_PROFILE, load_mio_profile, save_mio_profile_from_settings
+from .companion.mio_profile import DEFAULT_PROFILE, load_mio_profile, save_mio_profile_from_settings
 from .model_registry import get_model_profile
 
 
@@ -141,7 +141,7 @@ def prepare_first_launch_defaults() -> None:
     """Disable sensing defaults only for a genuinely new, unconfigured installation."""
     if settings.companion_config_path.exists() or onboarding_status()["completed"]:
         return
-    from . import companion_service
+    from .companion import companion_service
 
     companion_service.save_config(
         {

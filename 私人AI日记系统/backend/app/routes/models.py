@@ -9,7 +9,8 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .. import companion_service, onboarding_service
+from .. import onboarding_service
+from ..companion import companion_service
 from ..config import settings
 from ..model_registry import (
     delete_provider,

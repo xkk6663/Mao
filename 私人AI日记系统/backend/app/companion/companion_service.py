@@ -33,8 +33,8 @@ import httpx
 import yaml
 from PIL import Image
 
-from . import system_audio_service
-from .config import settings
+from .. import system_audio_service
+from ..config import settings
 from .companion_observation_service import GameObserver, WindowObserver, cleanup_legacy_preview
 
 
@@ -595,7 +595,7 @@ SPEECH_LETTER_PRONUNCIATIONS = {
 
 
 # Domain composition. Legacy imports remain supported; new code belongs in the domains.
-from .companion.configuration import ConfigurationService
+from .configuration import ConfigurationService
 _configuration_service = ConfigurationService(
     dep_DEFAULT_CONFIG=lambda: DEFAULT_CONFIG,
     dep_LIVE2D_EXPRESSION_SLOT_IDS=lambda: LIVE2D_EXPRESSION_SLOT_IDS,
@@ -612,7 +612,7 @@ load_normalized_config = _configuration_service.load_normalized_config
 save_pet_position = _configuration_service.save_pet_position
 save_pet_size = _configuration_service.save_pet_size
 
-from .companion.live2d_assets import Live2DAssetsService
+from .live2d_assets import Live2DAssetsService
 _live2d_assets_service = Live2DAssetsService(
     dep_LIVE2D_MODELS=lambda: _builtin_live2d_models(),
     dep__decode_image_data_url=lambda *args, **kwargs: _decode_image_data_url(*args, **kwargs),
@@ -638,7 +638,7 @@ live2d_model_preview_path = _live2d_assets_service.live2d_model_preview_path
 save_live2d_model_preview_data_url = _live2d_assets_service.save_live2d_model_preview_data_url
 live2d_model_root = _live2d_assets_service.live2d_model_root
 
-from .companion.appearance import AppearanceService
+from .appearance import AppearanceService
 _appearance_service = AppearanceService(
     dep_MAX_SPRITE_SHEET_BYTES=lambda: MAX_SPRITE_SHEET_BYTES,
     dep_MAX_SPRITE_SHEET_PIXELS=lambda: MAX_SPRITE_SHEET_PIXELS,
@@ -656,7 +656,7 @@ save_user_avatar_data_url = _appearance_service.save_user_avatar_data_url
 save_chat_background_data_url = _appearance_service.save_chat_background_data_url
 save_sprite_sheet_data_url = _appearance_service.save_sprite_sheet_data_url
 
-from .companion.speech_text import SpeechTextService
+from .speech_text import SpeechTextService
 _speech_text_service = SpeechTextService(
     dep_ADAPTIVE_QQ_VOICE_RE=lambda: ADAPTIVE_QQ_VOICE_RE,
     dep_SPEECH_CONTENT_RE=lambda: SPEECH_CONTENT_RE,
@@ -694,7 +694,7 @@ def _create_window_observer():
     }
     is_worker = os.getenv("MIO_SCREEN_OBSERVER_WORKER", "").strip() == "1"
     if use_process and not is_worker:
-        from .screen_observer_process import ScreenObserverProcess
+        from ..screen_observer_process import ScreenObserverProcess
 
         return ScreenObserverProcess()
     return WindowObserver()
@@ -719,7 +719,7 @@ def shutdown() -> None:
     run("临时预览", cleanup_legacy_preview)
     run("Live2D 桌宠", stop_pet)
     try:
-        from . import local_vision_service
+        from .. import local_vision_service
     except Exception:
         logger.exception("加载本地视觉清理模块失败")
     else:

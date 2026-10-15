@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from .. import db
-from ..chat_service import chat_with_ai
+from ..chat.chat_service import chat_with_ai
 from ..llm import LLMConfigError, call_chat_completion, require_configured
 from ..prompts import build_state_messages
 

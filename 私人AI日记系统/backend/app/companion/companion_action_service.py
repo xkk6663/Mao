@@ -9,11 +9,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from . import db, maintenance_service
-from .config import settings
-from .llm import call_chat_completion
-from .prompts import DAILY_THIRTY_RULES
-from .tool_registry import ToolPermission, tool_registry
+from .. import db
+from .. import maintenance_service
+from ..config import settings
+from ..llm import call_chat_completion
+from ..prompts import DAILY_THIRTY_RULES
+from ..tool_registry import ToolPermission, tool_registry
 
 logger = logging.getLogger(__name__)
 
@@ -741,7 +742,7 @@ def _with_deterministic_diary_generation(
 def backfill_explicit_structured_memories(limit: int = 500) -> int:
     if db.list_structured_memories(status="active", limit=1):
         return 0
-    from .memory_service import save_memory_item
+    from ..memory_service import save_memory_item
 
     saved_count = 0
     for row in db.list_recent_private_user_messages(limit=limit):
@@ -859,7 +860,7 @@ async def execute_companion_action_primitive(
         return f"thread:{thread_id}"
 
     if action_type == "resolve_thread":
-        from .life_loop_service import record_matching_follow_up_result
+        from ..life_loop_service import record_matching_follow_up_result
 
         content = _clean_text(action.get("content"), 500)
         result = record_matching_follow_up_result(
@@ -872,7 +873,7 @@ async def execute_companion_action_primitive(
         return f"thread_resolved:{int(result['thread_id']) if result else 0}"
 
     if action_type == "record_follow_up_result":
-        from .life_loop_service import record_matching_follow_up_result
+        from ..life_loop_service import record_matching_follow_up_result
 
         content = _clean_text(action.get("content"), 500)
         outcome = str(action.get("outcome") or "").strip().lower()
@@ -893,7 +894,7 @@ async def execute_companion_action_primitive(
         return f"follow_up_result:{result['id']}:{outcome}"
 
     if action_type == "remember_memory":
-        from .memory_service import save_memory_candidate, save_memory_item
+        from ..memory_service import save_memory_candidate, save_memory_item
 
         memory_kwargs = {
             "layer": str(action.get("layer") or "L1"),
@@ -1078,7 +1079,7 @@ async def execute_companion_actions(
 
 
 async def approve_companion_action(action_id: int) -> dict[str, str]:
-    from .kernel import agent_task_service as tasks
+    from ..kernel import agent_task_service as tasks
     tasks.initialize()
     with db.get_conn() as conn:
         conn.execute("BEGIN IMMEDIATE")

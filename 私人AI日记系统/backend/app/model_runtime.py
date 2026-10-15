@@ -141,7 +141,7 @@ def model_selection(mode: Mode, model_id: str = "", reasoning_level: str = "stan
     # Once saved, a mode policy also governs persisted/background callers.
     if model_id and not policy["revision"] and policy["selection"] != "fixed":
         return model_id, reasoning_level
-    from .companion_service import load_config
+    from .companion.companion_service import load_config
     shared = load_config()
     selected = (policy["model_id"] if policy["selection"] == "fixed"
                 else str(shared.get("chat_model_id") or "auto"))

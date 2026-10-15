@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from . import companion_service, db, screen_observation_service, system_audio_service
+from . import db, screen_observation_service, system_audio_service
+from .companion import companion_service
 from .config import load_runtime_settings, save_runtime_settings, settings
 
 

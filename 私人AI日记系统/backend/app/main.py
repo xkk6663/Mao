@@ -9,24 +9,23 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import (
-    companion_service,
     creation_service,
     db,
     maintenance_service,
     migration_service,
     onboarding_service,
-    pet_event_service,
     runtime_diagnostics,
     screen_observation_service,
     subservice_health,
 )
+from .companion import companion_service, pet_event_service
 from .kernel import agent_bus_service, agent_task_service
 from .agents.dsh import dsh_adapter
 from .agents.octop import octop_adapter
 from . import model_runtime
 from .runtime_identity import runtime_identity
 from .config import settings
-from .companion_action_service import backfill_explicit_structured_memories
+from .companion.companion_action_service import backfill_explicit_structured_memories
 from .documents import load_manuals
 from .local_security import LocalControlMiddleware, SecureAttachmentFiles
 from .routes import (

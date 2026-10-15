@@ -347,7 +347,7 @@ async def _dispatch_write_tool(
         from ..creation_service import cancel_job
 
         return {"job": await cancel_job(str(arguments.get("job_id") or ""))}
-    from ..companion_action_service import execute_companion_action_primitive
+    from ..companion.companion_action_service import execute_companion_action_primitive
 
     action = {"type": name, **arguments}
     with maintenance_service.mutation_scope():

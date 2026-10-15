@@ -399,7 +399,7 @@ def _worker_result(observer: Any, command: str, payload: dict[str, Any]) -> Any:
 
 def worker_main() -> int:
     os.environ["MIO_SCREEN_OBSERVER_WORKER"] = "1"
-    from .companion_observation_service import WindowObserver
+    from .companion.companion_observation_service import WindowObserver
 
     port_argument = next(
         (item for item in sys.argv if item.startswith("--screen-observer-port=")),

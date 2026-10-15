@@ -5,21 +5,21 @@ import re
 from copy import deepcopy
 from typing import Any
 
-from . import db
-from .model_runtime import operation
-from .config import settings
-from .llm import LLMConfigError, call_chat_completion
+from .. import db
+from ..model_runtime import operation
+from ..config import settings
+from ..llm import LLMConfigError, call_chat_completion
 
 
 PROFILE_VERSION = 1
 
 def _load_distribution_default_profile() -> dict[str, Any]:
     try:
-        from .public_distribution_defaults import PUBLIC_DEFAULT_PROFILE
+        from ..public_distribution_defaults import PUBLIC_DEFAULT_PROFILE
 
         profile = PUBLIC_DEFAULT_PROFILE
     except ImportError:
-        from .private_distribution_defaults import PRIVATE_DEFAULT_PROFILE
+        from ..private_distribution_defaults import PRIVATE_DEFAULT_PROFILE
 
         profile = PRIVATE_DEFAULT_PROFILE
     if not isinstance(profile, dict):

@@ -5,7 +5,7 @@ import json
 import uuid
 from dataclasses import dataclass
 
-from . import db
+from .. import db
 
 
 @dataclass(frozen=True)

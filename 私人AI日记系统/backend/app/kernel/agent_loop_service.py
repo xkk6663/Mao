@@ -18,7 +18,7 @@ from .agent_tool_service import (
     execute_tool_call,
     tool_availability,
 )
-from ..companion_action_service import ALLOWED_ACTION_TYPES, enrich_companion_actions
+from ..companion.companion_action_service import ALLOWED_ACTION_TYPES, enrich_companion_actions
 from ..creation_lora_catalog import IMAGE_LORA_CATALOG
 from ..llm import CompletionResult, ModelRequestError, ToolCall, call_chat_completion_result
 from ..tool_registry import ToolPermission, tool_registry
@@ -654,7 +654,7 @@ def source_context_messages(context_snapshot: list[dict]) -> list[dict]:
 
 
 def _planner_history(conversation_id: str, source_message_id: int) -> str:
-    from ..context_service import _rows_by_recent_user_turns, _trim_turn_rows_to_token_budget
+    from ..chat.context_service import _rows_by_recent_user_turns, _trim_turn_rows_to_token_budget
     rows = _trim_turn_rows_to_token_budget(_rows_by_recent_user_turns(
         list(db.get_recent_messages(limit=160, conversation_id=conversation_id)), 12), 6000)
     lines: list[str] = []

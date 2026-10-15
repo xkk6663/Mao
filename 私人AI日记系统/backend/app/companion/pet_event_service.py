@@ -11,7 +11,7 @@ from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from . import db
+from .. import db
 
 
 DESKTOP_PET_CONVERSATION_ID = "desktop_pet"
@@ -223,7 +223,8 @@ class PetEventHub:
 
     async def serve(self, websocket: WebSocket) -> None:
         await self.register(websocket)
-        from . import companion_service, screen_observation_service
+        from . import companion_service
+        from .. import screen_observation_service
 
         await self.send(
             websocket,

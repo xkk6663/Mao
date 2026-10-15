@@ -37,7 +37,8 @@ def _service(
 
 def snapshot() -> dict[str, Any]:
     """Collect a passive, non-network health snapshot for isolated runtimes."""
-    from . import companion_service, local_vision_service, screen_observation_service, system_audio_service
+    from . import local_vision_service, screen_observation_service, system_audio_service
+    from .companion import companion_service
     from .routes import companion
 
     call = companion.call_runtime_status()
@@ -225,7 +226,8 @@ def reset_recovery_state_for_tests() -> None:
 
 def recover_failed(health: dict[str, Any] | None = None) -> dict[str, Any]:
     """Recover only explicitly desired child services that are clearly failed."""
-    from . import companion_service, local_vision_service, screen_observation_service, system_audio_service
+    from . import local_vision_service, screen_observation_service, system_audio_service
+    from .companion import companion_service
 
     current = health if isinstance(health, dict) else snapshot()
     services = current.get("services") if isinstance(current, dict) else None

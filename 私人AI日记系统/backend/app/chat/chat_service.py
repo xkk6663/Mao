@@ -8,9 +8,10 @@ import uuid
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 
-from . import db, system_audio_service
-from .model_runtime import operation
-from .kernel.agent_loop_service import (
+from .. import db
+from .. import system_audio_service
+from ..model_runtime import operation
+from ..kernel.agent_loop_service import (
     AgentLoopResult,
     CREATION_GENERATION_TOOLS,
     begin_final_response,
@@ -20,26 +21,26 @@ from .kernel.agent_loop_service import (
     finish_final_response,
     run_agent_loop,
 )
-from .companion_action_service import (
+from ..companion.companion_action_service import (
     apply_daily_state_assessment,
     execute_companion_actions,
     plan_companion_actions,
 )
-from .config import settings
+from ..config import settings
 from .context_service import (
     build_chat_context,
     build_chat_context_snapshot,
     build_fast_chat_context_snapshot,
 )
-from .cost_reconciliation_service import queue_cost_reconciliation
+from ..cost_reconciliation_service import queue_cost_reconciliation
 from .conversation_runtime import (
     chat_run_coordinator,
     current_runtime_trace_id,
     mark_runtime_stage,
 )
-from .documents import load_manuals
-from .image_service import ImageAttachment
-from .llm import (
+from ..documents import load_manuals
+from ..image_service import ImageAttachment
+from ..llm import (
     CompletionResult,
     LLMConfigError,
     ModelRequestError,
@@ -49,11 +50,11 @@ from .llm import (
     require_configured,
     resolve_model_id,
 )
-from .model_registry import get_model_profile, normalize_model_reasoning
-from .tool_registry import tool_registry
-from .model_latency_service import record_latency
-from .prompts import build_group_system_prompt, build_system_prompt
-from .web_search_service import (
+from ..model_registry import get_model_profile, normalize_model_reasoning
+from ..tool_registry import tool_registry
+from ..model_latency_service import record_latency
+from ..prompts import build_group_system_prompt, build_system_prompt
+from ..web_search_service import (
     WebLookup,
     build_web_context_message,
     build_contextual_lookup_message,
@@ -123,7 +124,7 @@ def _guard_agent_creation_completion_claim(
 
 
 def _self_snapshot_context_for_message_sync(message: str) -> str:
-    from . import self_snapshot_service
+    from .. import self_snapshot_service
 
     if not self_snapshot_service.scopes_for_message(message):
         return ""
@@ -1222,7 +1223,7 @@ def _annotate_history_content(
     note = f"[内部消息时间：{label}]"
     if isinstance(content, str):
         if current_message_id is None or int(row["id"]) != current_message_id:
-            from .memory_revision_service import sanitize_history
+            from ..memory_revision_service import sanitize_history
             content = sanitize_history(content)
         return f"{note}\n{content}"
     if isinstance(content, list):
@@ -1361,7 +1362,7 @@ async def _chat_with_ai_unlocked(
     if not message and not images and not text_files:
         raise ValueError("消息不能为空。")
     request_id = str(request_id or "").strip()[:80] or uuid.uuid4().hex
-    from . import companion_service
+    from ..companion import companion_service
 
     recitation_history = list(
         db.get_recent_messages(limit=40, conversation_id=conversation_id)
@@ -1971,7 +1972,7 @@ async def _chat_in_qq_group_unlocked(
 
 
 def _background_chat_selection() -> tuple[str, str]:
-    from .companion_service import load_config
+    from ..companion.companion_service import load_config
     config = load_config()
     model_id = resolve_model_id(str(config.get("chat_model_id") or "auto"))
     require_configured(model_id)

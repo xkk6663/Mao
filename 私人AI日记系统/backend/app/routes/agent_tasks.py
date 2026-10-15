@@ -3,9 +3,10 @@ from urllib.parse import unquote
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from .. import agent_task_service as tasks, db
-from .. import agent_file_service as files
-from ..companion_action_service import approve_companion_action
+from .. import db
+from ..kernel import agent_task_service as tasks
+from ..kernel import agent_file_service as files
+from ..companion.companion_action_service import approve_companion_action
 
 router = APIRouter(prefix="/work", tags=["agent-tasks"])
 

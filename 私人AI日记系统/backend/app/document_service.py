@@ -16,7 +16,7 @@ from docx import Document
 from openpyxl import load_workbook
 from PIL import Image
 
-from .chat_service import TextAttachment
+from .chat.chat_service import TextAttachment
 from .config import settings
 from .image_service import ImageAttachment
 
