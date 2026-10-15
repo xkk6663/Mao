@@ -226,12 +226,35 @@
     b.style.background = (composer && btn) ? '#22c55e' : (composer ? '#eab308' : '#ef4444')
   }
 
-  // ---- 保活：Vue 重渲染后按钮/暂存条/拦截不丢失 ----
+  // ---- 对话头像：发送方（你）头像替换（user 消息旁图标 → 用户头像图，未设置则保留图标） ----
+  function applyChatAvatar() {
+    var avatars = document.querySelectorAll('span.message-avatar.user-avatar')
+    if (!avatars.length) return
+    for (var i = 0; i < avatars.length; i++) {
+      var span = avatars[i]
+      if (span.__mioAvatarApplied) continue
+      span.__mioAvatarApplied = true
+      ;(function (s) {
+        var img = new Image()
+        img.onload = function () {
+          if (!s.isConnected) return
+          img.style.cssText = 'width:32px;height:32px;border-radius:50%;object-fit:cover;display:block;'
+          s.innerHTML = ''
+          s.appendChild(img)
+        }
+        img.onerror = function () { /* 未设置用户头像 → 保留原图标 */ }
+        img.src = '/api/settings/user-avatar?v=' + Date.now()
+      })(span)
+    }
+  }
+
+  // ---- 保活：Vue 重渲染后按钮/暂存条/拦截/头像不丢失 ----
   function keepAlive() {
     try { ensureBtn() } catch (e) { /* ignore */ }
     try { interceptSend() } catch (e) { /* ignore */ }
     try { ensurePendingBar() } catch (e) { /* ignore */ }
     try { ensureBadge() } catch (e) { /* ignore */ }
+    try { applyChatAvatar() } catch (e) { /* ignore */ }
   }  var observer = new MutationObserver(keepAlive)
   observer.observe(document.body, { childList: true, subtree: true })
   keepAlive()

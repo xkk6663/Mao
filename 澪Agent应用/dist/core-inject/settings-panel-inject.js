@@ -294,6 +294,67 @@
   }
   function readText(ta) { return ta.value.trim() }
 
+  // 可复用头像设置行：预览 + 上传/恢复默认（用于侧栏头像/对话发送方/对话接收方）
+  // opt: { previewId, src, title, desc, custom, onSelect(dataUrl), onReset() }
+  function makeAvatarRow(opt) {
+    var row = document.createElement('div')
+    row.style.cssText = 'display:flex;align-items:center;gap:14px;padding:12px;background:var(--surface-soft, #f2f6f7);border:1px solid var(--line, #d9e2e6);border-radius:10px;margin-bottom:10px;'
+    var img = document.createElement('img')
+    img.id = opt.previewId
+    img.src = opt.src + '?v=' + Date.now()
+    img.style.cssText = 'width:56px;height:56px;border-radius:50%;object-fit:cover;flex:none;border:1px solid var(--line, #d9e2e6);background:var(--line-strong, #c4d1d7);'
+    var col = document.createElement('div')
+    col.style.cssText = 'flex:1;display:flex;flex-direction:column;gap:4px;align-items:flex-start;min-width:0;'
+    var ttl = document.createElement('div')
+    ttl.style.cssText = 'font-size:12px;font-weight:600;color:var(--ink, #20303a);'
+    ttl.textContent = opt.title || ''
+    var dsc = document.createElement('div')
+    dsc.style.cssText = 'font-size:11px;color:var(--muted, #687984);line-height:1.5;'
+    dsc.textContent = opt.desc || ''
+    var btns = document.createElement('div')
+    btns.style.cssText = 'display:flex;gap:8px;margin-top:4px;'
+    var btnUpload = document.createElement('button')
+    btnUpload.type = 'button'
+    btnUpload.textContent = opt.custom ? '更换头像' : '上传头像'
+    btnUpload.style.cssText = 'border:none;background:var(--accent, #4c8798);color:#fff;border-radius:8px;padding:5px 14px;font-size:12px;cursor:pointer;'
+    var btnReset = document.createElement('button')
+    btnReset.type = 'button'
+    btnReset.textContent = '恢复默认'
+    btnReset.style.cssText = 'border:1px solid var(--line, #d9e2e6);background:transparent;border-radius:8px;padding:5px 14px;font-size:12px;cursor:pointer;color:var(--muted, #687984);'
+    var fileInput = document.createElement('input')
+    fileInput.type = 'file'
+    fileInput.accept = 'image/*'
+    fileInput.style.display = 'none'
+    btnUpload.addEventListener('click', function () { fileInput.click() })
+    fileInput.addEventListener('change', function () {
+      var f = fileInput.files && fileInput.files[0]
+      if (!f) return
+      var reader = new FileReader()
+      reader.onload = function () {
+        opt.onSelect && opt.onSelect(String(reader.result))
+        var prev = $q('#' + opt.previewId, panel)
+        if (prev) prev.src = String(reader.result)
+        btnUpload.textContent = '已选择 · 点保存生效'
+      }
+      reader.readAsDataURL(f)
+    })
+    btnReset.addEventListener('click', function () {
+      opt.onReset && opt.onReset()
+      var prev = $q('#' + opt.previewId, panel)
+      if (prev) prev.src = opt.src + '?v=' + Date.now()
+      btnUpload.textContent = opt.custom ? '更换头像' : '上传头像'
+    })
+    btns.appendChild(btnUpload)
+    btns.appendChild(btnReset)
+    col.appendChild(ttl)
+    col.appendChild(dsc)
+    col.appendChild(btns)
+    row.appendChild(img)
+    row.appendChild(col)
+    row.appendChild(fileInput)
+    return row
+  }
+
   // ---------- 渲染 ----------
   function renderBody(id) {
     var body = $q('#mioSetBody', panel)
@@ -303,53 +364,34 @@
     if (id === 'profile') {
       var pf = state.profile || {}
       body.appendChild(section('头像'))
-      var avatarRow = document.createElement('div')
-      avatarRow.style.cssText = 'display:flex;align-items:center;gap:14px;padding:12px;background:var(--surface-soft, #f2f6f7);border:1px solid var(--line, #d9e2e6);border-radius:10px;margin-bottom:10px;'
-      var avatarImg = document.createElement('img')
-      avatarImg.id = 'mioProfileAvatarPreview'
-      avatarImg.src = '/api/settings/avatar?v=' + (pf.avatarVersion || Date.now())
-      avatarImg.style.cssText = 'width:56px;height:56px;border-radius:50%;object-fit:cover;flex:none;border:1px solid var(--line, #d9e2e6);background:var(--line-strong, #c4d1d7);'
-      var avatarBtns = document.createElement('div')
-      avatarBtns.style.cssText = 'flex:1;display:flex;flex-direction:column;gap:6px;align-items:flex-start;'
-      var btnUpload = document.createElement('button')
-      btnUpload.type = 'button'
-      btnUpload.textContent = pf.custom ? '更换头像' : '上传头像'
-      btnUpload.style.cssText = 'border:none;background:var(--accent, #4c8798);color:#fff;border-radius:8px;padding:5px 14px;font-size:12px;cursor:pointer;'
-      var btnReset = document.createElement('button')
-      btnReset.type = 'button'
-      btnReset.textContent = '恢复默认头像'
-      btnReset.style.cssText = 'border:1px solid var(--line, #d9e2e6);background:transparent;border-radius:8px;padding:5px 14px;font-size:12px;cursor:pointer;color:var(--muted, #687984);'
-      var fileInput = document.createElement('input')
-      fileInput.type = 'file'
-      fileInput.accept = 'image/*'
-      fileInput.style.display = 'none'
-      btnUpload.addEventListener('click', function () { fileInput.click() })
-      fileInput.addEventListener('change', function () {
-        var f = fileInput.files && fileInput.files[0]
-        if (!f) return
-        var reader = new FileReader()
-        reader.onload = function () {
-          state.profile.avatarDataUrl = String(reader.result)
-          state.profile.resetAvatar = false
-          var prev = $q('#mioProfileAvatarPreview', panel)
-          if (prev) prev.src = String(reader.result)
-          btnUpload.textContent = '已选择新头像 · 点保存生效'
-        }
-        reader.readAsDataURL(f)
-      })
-      btnReset.addEventListener('click', function () {
-        state.profile.avatarDataUrl = ''
-        state.profile.resetAvatar = true
-        var prev = $q('#mioProfileAvatarPreview', panel)
-        if (prev) prev.src = '/api/settings/avatar?v=' + Date.now()
-        btnUpload.textContent = (state.profile && state.profile.custom) ? '更换头像' : '上传头像'
-      })
-      avatarBtns.appendChild(btnUpload)
-      avatarBtns.appendChild(btnReset)
-      avatarRow.appendChild(avatarImg)
-      avatarRow.appendChild(avatarBtns)
-      avatarRow.appendChild(fileInput)
-      body.appendChild(avatarRow)
+      body.appendChild(makeAvatarRow({
+        previewId: 'mioProfileAvatarPreview',
+        src: '/api/settings/avatar',
+        title: '侧栏头像',
+        desc: '左侧导航栏与各处的桌宠形象头像',
+        custom: pf.custom,
+        onSelect: function (d) { state.profile.avatarDataUrl = d; state.profile.resetAvatar = false },
+        onReset: function () { state.profile.avatarDataUrl = ''; state.profile.resetAvatar = true },
+      }))
+      body.appendChild(section('对话头像'))
+      body.appendChild(makeAvatarRow({
+        previewId: 'mioUserAvatarPreview',
+        src: '/api/settings/user-avatar',
+        title: '发送方（你）',
+        desc: '对话中你（用户）消息旁的头像',
+        custom: !!pf.userAvatarCustom,
+        onSelect: function (d) { state.profile.userAvatarDataUrl = d; state.profile.userAvatarReset = false },
+        onReset: function () { state.profile.userAvatarDataUrl = ''; state.profile.userAvatarReset = true },
+      }))
+      body.appendChild(makeAvatarRow({
+        previewId: 'mioAssistantAvatarPreview',
+        src: '/api/settings/avatar',
+        title: '接收方（小智）',
+        desc: '对话中小智消息旁的头像（与侧栏头像一个存储）',
+        custom: pf.custom,
+        onSelect: function (d) { state.profile.avatarDataUrl = d; state.profile.resetAvatar = false },
+        onReset: function () { state.profile.avatarDataUrl = ''; state.profile.resetAvatar = true },
+      }))
       body.appendChild(section('名称'))
       // 名称表单卡片：label + 输入框同行，说明文字独立一行（避免长说明在窄列竖排堆叠）
       var nameCard = document.createElement('div')
@@ -497,6 +539,7 @@
         state.profile = {
           name: (j && j.profile && j.profile.identity && j.profile.identity.name) || '',
           custom: !!(j && j.avatar && j.avatar.custom),
+          userAvatarCustom: !!(j && j.user_avatar && j.user_avatar.custom),
           avatarVersion: Date.now(),
         }
       }).catch(function () { state.profile = {} }),
@@ -587,6 +630,8 @@
     if (Object.keys(profileBody).length) proms.push(apiSend('/api/settings/profile', 'PATCH', profileBody))
     if (pf.avatarDataUrl) proms.push(apiSend('/api/settings/avatar', 'POST', { data_url: pf.avatarDataUrl }))
     if (pf.resetAvatar) proms.push(apiSend('/api/settings/avatar', 'DELETE', null))
+    if (pf.userAvatarDataUrl) proms.push(apiSend('/api/settings/user-avatar', 'POST', { data_url: pf.userAvatarDataUrl }))
+    if (pf.userAvatarReset) proms.push(apiSend('/api/settings/user-avatar', 'DELETE', null))
 
     Promise.all(proms.map(function (p) { return p.catch(function (e) { return { __err: String(e && e.message || e) } }) }))
       .then(function (results) {
@@ -594,6 +639,8 @@
         if (st) st.textContent = errs.length ? ('保存完成，但有 ' + errs.length + ' 项失败') : '已保存 ✓'
         state.profile.avatarDataUrl = ''
         state.profile.resetAvatar = false
+        state.profile.userAvatarDataUrl = ''
+        state.profile.userAvatarReset = false
         syncBrandBlock()
         return loadAll()
       })
