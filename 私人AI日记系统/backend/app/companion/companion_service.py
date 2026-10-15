@@ -108,6 +108,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "live2d_disable_gpu": False,
     "live2d_motion_slots": {},
     "live2d_expression_slots": {},
+    # ---- A 档：桌宠"生命感"设置（自带默认值，缺省即开箱可用）----
+    # 音效：按压/释放/切换 Agent 等交互反馈音（0-100 音量，总开关独立）
+    "pet_sound_enabled": True,
+    "pet_sound_volume": 70,
+    # 空闲自语：长时间无人交互时按内容池随机说一句（权重 + 不连续重复）
+    "pet_idle_talk_enabled": True,
+    "pet_idle_talk_min_seconds": 90,
+    "pet_idle_talk_max_seconds": 240,
+    # 按压 Q 弹反馈
+    "pet_press_bounce_enabled": True,
     "position_x": 80,
     "position_y": 420,
 }

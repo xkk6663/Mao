@@ -139,6 +139,16 @@ class ConfigurationService:
         data["live2d_disable_gpu"] = bool(data.get("live2d_disable_gpu", False))
         data["live2d_motion_slots"] = self._normalize_live2d_motion_slots(data.get("live2d_motion_slots"))
         data["live2d_expression_slots"] = self._normalize_live2d_expression_slots(data.get("live2d_expression_slots"))
+        # A 档：桌宠"生命感"设置（区间收敛，防脏值把桌宠刷屏/静音）
+        data["pet_sound_enabled"] = bool(data.get("pet_sound_enabled", True))
+        data["pet_sound_volume"] = max(0, min(100, int(data.get("pet_sound_volume", 70))))
+        data["pet_idle_talk_enabled"] = bool(data.get("pet_idle_talk_enabled", True))
+        data["pet_idle_talk_min_seconds"] = max(30, min(3600, int(data.get("pet_idle_talk_min_seconds", 90))))
+        data["pet_idle_talk_max_seconds"] = max(30, min(7200, int(data.get("pet_idle_talk_max_seconds", 240))))
+        # 上下限防倒挂：max 必须 >= min，否则随机区间会抛错
+        if data["pet_idle_talk_max_seconds"] < data["pet_idle_talk_min_seconds"]:
+            data["pet_idle_talk_max_seconds"] = data["pet_idle_talk_min_seconds"]
+        data["pet_press_bounce_enabled"] = bool(data.get("pet_press_bounce_enabled", True))
         data["position_x"] = max(-10000, min(10000, int(data.get("position_x", 80))))
         data["position_y"] = max(-10000, min(10000, int(data.get("position_y", 420))))
         return data
@@ -167,7 +177,10 @@ class ConfigurationService:
         temporary = self._dep_settings().companion_config_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(self._dep_settings().companion_config_path)
-        from .. import pet_event_service
+        # 域分层后 pet_event_service 与配置同属 companion 域，
+        # 旧的 `from .. import pet_event_service`（按"还在 app/ 顶层"写的）会
+        # ImportError —— 表现为**所有设置写入都 500**，但读取正常，很难一眼看出。
+        from . import pet_event_service
 
         pet_event_service.publish("settings_changed", data)
         return data
@@ -231,6 +244,14 @@ class ConfigurationService:
         normalized["live2d_disable_gpu"] = bool(normalized.get("live2d_disable_gpu", False))
         normalized["live2d_motion_slots"] = self._normalize_live2d_motion_slots(normalized.get("live2d_motion_slots"))
         normalized["live2d_expression_slots"] = self._normalize_live2d_expression_slots(normalized.get("live2d_expression_slots"))
+        normalized["pet_sound_enabled"] = bool(normalized.get("pet_sound_enabled", True))
+        normalized["pet_sound_volume"] = max(0, min(100, int(normalized.get("pet_sound_volume", 70))))
+        normalized["pet_idle_talk_enabled"] = bool(normalized.get("pet_idle_talk_enabled", True))
+        normalized["pet_idle_talk_min_seconds"] = max(30, min(3600, int(normalized.get("pet_idle_talk_min_seconds", 90))))
+        normalized["pet_idle_talk_max_seconds"] = max(30, min(7200, int(normalized.get("pet_idle_talk_max_seconds", 240))))
+        if normalized["pet_idle_talk_max_seconds"] < normalized["pet_idle_talk_min_seconds"]:
+            normalized["pet_idle_talk_max_seconds"] = normalized["pet_idle_talk_min_seconds"]
+        normalized["pet_press_bounce_enabled"] = bool(normalized.get("pet_press_bounce_enabled", True))
         normalized["position_x"] = max(-10000, min(10000, int(normalized.get("position_x", 80))))
         normalized["position_y"] = max(-10000, min(10000, int(normalized.get("position_y", 420))))
         return normalized

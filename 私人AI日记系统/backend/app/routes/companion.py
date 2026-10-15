@@ -200,6 +200,16 @@ class CompanionSettingsRequest(BaseModel):
     live2d_disable_gpu: bool = False
     live2d_motion_slots: dict[str, dict[str, str]] = Field(default_factory=dict)
     live2d_expression_slots: dict[str, dict[str, str]] = Field(default_factory=dict)
+    # A 档：桌宠"生命感"设置。
+    # ⚠️ 本模型就是**写入白名单**：未在此声明的键会被 model_dump(exclude_unset=True)
+    # 静默丢弃（读得到、写不进，表现为"改了没反应"）。新增桌宠设置必须同时改
+    # 这里与 companion_service.DEFAULT_CONFIG，缺一处就"保存无效"。
+    pet_sound_enabled: bool = True
+    pet_sound_volume: int = Field(default=70, ge=0, le=100)
+    pet_idle_talk_enabled: bool = True
+    pet_idle_talk_min_seconds: int = Field(default=90, ge=30, le=3600)
+    pet_idle_talk_max_seconds: int = Field(default=240, ge=30, le=7200)
+    pet_press_bounce_enabled: bool = True
 
 
 class AvatarRequest(BaseModel):

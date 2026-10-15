@@ -274,6 +274,8 @@
   let petFpsDowngraded = false
   function markPetActivity() {
     lastPetActivityAt = performance.now()
+    // 任何用户交互都算"被打扰过"，重置自语计时
+    try { markPetInteraction() } catch (_) {}
     if (petFpsDowngraded && app && app.ticker) {
       app.ticker.maxFPS = 0  // 恢复默认（不限帧）
       petFpsDowngraded = false
@@ -484,6 +486,7 @@
     // Agent 徽标跟随模型头顶（角色移动/点头时同步）
     app.ticker.add(() => {
       updateAgentBadgePosition()
+      updatePressBounce()
     }, undefined, -30)
     // 上报模型区域/UI 状态给主进程（穿透策略）
     app.ticker.add(() => {
@@ -1294,6 +1297,93 @@
   }
   refreshAgentAccents()
 
+  // ---- A 档：交互反馈音 + 空闲自语 + 按压 Q 弹 ----
+  // 三个能力都在 pet-sound.js / pet-idle-talk.js 里自足实现，这里只做**接线**：
+  // 桌宠主文件不关心音色怎么合成、台词池有什么，只决定"何时触发"。
+
+  // 播放交互音效（尊重桌面设置开关与音量）
+  function petSound(name) {
+    try {
+      const api = window.__mioPetSound
+      if (!api) return false
+      api.setEnabled(settings.pet_sound_enabled !== false)
+      if (settings.pet_sound_volume !== undefined) api.setVolume(Number(settings.pet_sound_volume))
+      return api.play(name)
+    } catch (_) {
+      return false
+    }
+  }
+
+  // 按压 Q 弹：只缩放模型（不移动底部坐标），松手自然回弹
+  let pressBounceUntil = 0
+  function playPressBounce() {
+    if (settings.pet_press_bounce_enabled === false) return
+    pressBounceUntil = Date.now() + 160
+  }
+
+  // 空闲自语：长时间无交互时按内容池随机说一句
+  // busy = 当前有 Agent 在工作（决定选哪个内容池，避免"干活时说闲着"）
+  let idleTalkTimer = null
+  let lastInteractionAt = Date.now()
+  let lastActiveAgentId = ''
+
+  function markPetInteraction() {
+    lastInteractionAt = Date.now()
+    // 有交互就重置计时，避免"刚点完又被自言自语打断"
+    if (idleTalkTimer) {
+      window.clearTimeout(idleTalkTimer)
+      idleTalkTimer = null
+    }
+    scheduleIdleTalk()
+  }
+
+  function anyAgentBusy() {
+    let busy = false
+    agentBadgeStates.forEach((st) => {
+      if (!st || st.enabled === false || st.status === 'offline') return
+      const p = String(st.phase || 'idle')
+      if (p && p !== 'idle' && p !== 'complete' && p !== 'heartbeat') busy = true
+    })
+    return busy
+  }
+
+  function scheduleIdleTalk() {
+    if (settings.pet_idle_talk_enabled === false) return
+    if (idleTalkTimer) window.clearTimeout(idleTalkTimer)
+    const minS = Math.max(30, Number(settings.pet_idle_talk_min_seconds) || 90)
+    const maxS = Math.max(minS, Number(settings.pet_idle_talk_max_seconds) || 240)
+    const waitMs = (minS + Math.random() * (maxS - minS)) * 1000
+    idleTalkTimer = window.setTimeout(() => {
+      idleTalkTimer = null
+      try {
+        // 说话气泡被关掉 / 正在说话 → 本轮跳过，重新排期
+        if (settings.live2d_speech_bubble_enabled === false || !speechBubble?.hidden) {
+          scheduleIdleTalk()
+          return
+        }
+        const api = window.__mioPetIdleTalk
+        if (!api) { scheduleIdleTalk(); return }
+        showSpeechBubble(api.pick(anyAgentBusy()), 0, `idle-talk-${Date.now()}`)
+      } catch (_) {}
+      scheduleIdleTalk()
+    }, waitMs)
+  }
+
+  // 按压 Q 弹：在 ticker 里按剩余时间做 y 轴压缩，**底部坐标不变**
+  // （用 model.scale.y 而非 model.y —— 改 y 会整体上移，看起来像"跳起来"而非"被按扁"）
+  function updatePressBounce() {
+    if (!model) return
+    const now = Date.now()
+    if (now >= pressBounceUntil) {
+      if (model.scale.y !== model.scale.x) model.scale.y = model.scale.x
+      return
+    }
+    const remain = (pressBounceUntil - now) / 160       // 1 → 0
+    // 压缩幅度：最深 6%，用正弦让"下压→回弹"平滑
+    const squash = 1 - 0.06 * Math.sin(remain * Math.PI)
+    model.scale.y = model.scale.x * squash
+  }
+
   function renderAgentBadge() {
     if (!agentBadgeEnabled()) {
       const badge = document.getElementById('agent-badge')
@@ -1415,6 +1505,11 @@
     if (active) {
       activityIndicator.title = `${agentName} · ${label}`
     }
+    // A 档音效：Agent 交接（活跃者换人）时给一声"换人了"，只在真的换手时响
+    if (active && lastActiveAgentId && agentId && lastActiveAgentId !== agentId) {
+      petSound('switch')
+    }
+    if (active && agentId) lastActiveAgentId = agentId
     // 多 agent 并行时，只有当前活跃者驱动桌宠"身体"（表情/动作），互不抢占
     if (!active) return
     const activity = PHASE_TO_ACTIVITY[phase]
@@ -1520,6 +1615,14 @@
       try { await window.pywebview.api.resize_window(percent) } catch (_) {}
     }
     populateModelSelect()
+    // A 档：设置变化后同步音效开关/音量（自语排期由 markPetInteraction 维护）
+    try {
+      const sound = window.__mioPetSound
+      if (sound) {
+        sound.setEnabled(settings.pet_sound_enabled !== false)
+        sound.setVolume(Number(settings.pet_sound_volume ?? 70))
+      }
+    } catch (_) {}
   }
 
   async function pollStatus() {
@@ -2548,6 +2651,9 @@
     root.classList.add('dragging')
     canvas.setPointerCapture(event.pointerId)
     setInteractive(true)
+    // A 档交互反馈：按压音 + Q 弹（点击模型本体，非拖动开始）
+    petSound('press')
+    playPressBounce()
     const bridge = await waitForBridge()
     await bridge.begin_drag(event.screenX, event.screenY)
   })
@@ -2578,6 +2684,8 @@
     pointerDown = null
     dragged = false
     root.classList.remove('dragging')
+    // A 档交互反馈：释放音（与按压音成对，构成"咔哒"手感）
+    petSound('release')
     const bridge = await waitForBridge()
     await bridge.end_drag()
     if (electronRuntime && wasDragged) {
@@ -2885,6 +2993,8 @@
     if (!electronRuntime) setInterval(pollFeed, 900)
     setInterval(trackCursor, 80)
     setInterval(idleTick, 1000)
+    // A 档：启动空闲自语排期（设置已由上面的 pollStatus 加载完成）
+    scheduleIdleTalk()
   }
 
   window.__mioPetDebug = {
