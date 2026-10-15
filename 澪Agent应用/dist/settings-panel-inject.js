@@ -351,15 +351,32 @@
       avatarRow.appendChild(fileInput)
       body.appendChild(avatarRow)
       body.appendChild(section('名称'))
+      // 名称表单卡片：label + 输入框同行，说明文字独立一行（避免长说明在窄列竖排堆叠）
+      var nameCard = document.createElement('div')
+      nameCard.style.cssText = 'display:flex;flex-direction:column;gap:8px;padding:14px;background:var(--surface-soft, #f2f6f7);border:1px solid var(--line, #d9e2e6);border-radius:10px;margin-bottom:10px;'
+      var nameTop = document.createElement('div')
+      nameTop.style.cssText = 'display:flex;align-items:center;gap:12px;'
+      var nameLbl = document.createElement('div')
+      nameLbl.style.cssText = 'font-size:12px;font-weight:600;color:var(--ink, #20303a);flex:none;'
+      nameLbl.textContent = '显示名称'
       var nameInput = document.createElement('input')
       nameInput.type = 'text'
       nameInput.maxLength = '80'
       nameInput.value = pf.name || ''
       nameInput.placeholder = '应用显示名称'
-      nameInput.style.cssText = 'width:100%;box-sizing:border-box;border:1px solid var(--line, #d9e2e6);border-radius:8px;background:var(--surface-soft, #f2f6f7);color:var(--ink, #20303a);font-size:12px;padding:8px 10px;'
+      nameInput.style.cssText = 'flex:1;min-width:0;box-sizing:border-box;border:1px solid var(--line, #d9e2e6);border-radius:8px;background:#fff;color:var(--ink, #20303a);font-size:12px;padding:8px 10px;outline:none;transition:border-color .15s;'
+      nameInput.addEventListener('focus', function () { nameInput.style.borderColor = 'var(--accent, #4c8798)' })
+      nameInput.addEventListener('blur', function () { nameInput.style.borderColor = 'var(--line, #d9e2e6)' })
       nameInput.addEventListener('input', function () { state.profile.name = nameInput.value.trim() })
       nameInput.addEventListener('change', function () { state.profile.name = nameInput.value.trim() })
-      body.appendChild(row('显示名称', '左侧导航栏与各处显示的 Mio 名字，保存后立即生效', nameInput, 'profile_name'))
+      nameTop.appendChild(nameLbl)
+      nameTop.appendChild(nameInput)
+      nameCard.appendChild(nameTop)
+      var nameDesc = document.createElement('div')
+      nameDesc.style.cssText = 'font-size:11px;color:var(--muted, #687984);line-height:1.6;'
+      nameDesc.textContent = '左侧导航栏与各处显示的 Mio 名字，保存后立即生效。'
+      nameCard.appendChild(nameDesc)
+      body.appendChild(nameCard)
       var hint = document.createElement('div')
       hint.style.cssText = 'font-size:11px;color:var(--muted, #687984);line-height:1.8;padding:0 4px;'
       hint.textContent = '头像与名称保存在后端设置中；桌宠立绘头像走另一通道（桌面端右键菜单「更换立绘」）。'
