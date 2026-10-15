@@ -102,10 +102,10 @@
       '.integrated-right-rail.expanded #mioRailFull{display:flex;}' +
       '.integrated-right-rail:not(.expanded) #mioRailFull{display:none;}' +
       '.integrated-right-rail:not(.expanded) #mioRailCompact{display:flex;}' +
-      '.integrated-right-rail:not(.expanded) .mio-rail-agenticon{display:block;}' +
+      '.integrated-right-rail:not(.expanded) .mio-rail-agenticon{display:block!important;}' +
       '.integrated-right-rail:not(.expanded) .mio-rail-header strong{display:none;}' +
-      '.integrated-right-rail:not(.expanded) .mio-rail-lockbtn{display:none;}' +
-      '.integrated-right-rail.expanded .mio-rail-lockbtn{display:block;}'
+      '.integrated-right-rail:not(.expanded) .mio-rail-lockbtn{display:none!important;}' +
+      '.integrated-right-rail.expanded .mio-rail-lockbtn{display:block!important;}'
     document.head.appendChild(st)
   }
 
@@ -243,7 +243,9 @@
     }
     var errEl = $q('#mioRailErr')
     if (errEl) errEl.style.display = 'none'
-    for (var k = 0; k < agents.length; k++) list.appendChild(renderAgentRow(agents[k]))
+    for (var k = 0; k < agents.length; k++) {
+      try { list.appendChild(renderAgentRow(agents[k])) } catch (e) { /* 单卡渲染失败不中断整列 */ }
+    }
   }
 
   function refresh() {
