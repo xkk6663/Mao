@@ -607,8 +607,9 @@ def _apply_companion_settings(changes: dict[str, object]) -> None:
     if selected_model_id:
         companion_service.select_live2d_model(selected_model_id)
     companion_service.save_config(changes)
-    if was_running and selected_model_id and selected_model_id != previous_model_id:
-        companion_service.restart_pet()
+    # 模型切换不再重启桌宠进程：save_config 已向在线渲染器推送 settings_changed，
+    # 渲染器侧 applySettings 会检测 live2d_model_id 变化并原地 loadModel 热切换，
+    # 桌宠窗口保持不闪退、切换即时。桌宠离线时保存即可，下次启动按新模型加载。
     audio_settings_changed = bool(
         {"screen_audio_enabled", "screen_audio_model", "screen_audio_language", "screen_audio_chunk_seconds"}
         & changes.keys()
