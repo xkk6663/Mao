@@ -732,10 +732,33 @@ def test_plugin_api() -> None:
     # 路由前缀必须是本插件专属，不得侵入其它插件命名空间
     check_eq("路由前缀专属", plugin_routes.router.prefix, "/api/plugin/dsh")
     paths = sorted({r.path for r in plugin_routes.router.routes})
-    check_eq("暴露 3 个只读端点", paths,
-             ["/api/plugin/dsh/diagnostics", "/api/plugin/dsh/phases", "/api/plugin/dsh/status"])
+    # 端点清单是**故意断言**的：新增端点必须同时更新这里，
+    # 以免有人顺手加了个写接口却没人注意到"本插件只读"这条约束。
+    check_eq("暴露 5 个只读端点", paths, [
+        "/api/plugin/dsh/about",
+        "/api/plugin/dsh/diagnostics",
+        "/api/plugin/dsh/phases",
+        "/api/plugin/dsh/status",
+        "/api/plugin/dsh/update-check",
+    ])
     methods = sorted({m for r in plugin_routes.router.routes for m in (r.methods or set())})
     check_eq("端点全部只读（GET）", methods, ["GET"])
+
+    # A5：关于面板必须脱敏（绝不回传真实用户名）
+    try:
+        about = plugin_routes.about_service.about_payload()
+        import json as _json
+        dumped = _json.dumps(about, ensure_ascii=False)
+        check("关于面板不含真实用户名", "xiao1" not in dumped)
+        check("关于面板带脱敏占位符", "%MIO_ROOT%" in dumped)
+        check("关于面板能读到版本号", bool(about.get("about", {}).get("version")),
+              repr(about.get("about", {}).get("version")))
+        # 更新检查的版本比较（宽松、可预期）
+        check("版本比较：新版>旧版", plugin_routes.about_service._is_newer("3.6", "3.5"))
+        check("版本比较：同版不比新版大", not plugin_routes.about_service._is_newer("3.5", "3.5"))
+        check("版本比较：旧版不比新版大", not plugin_routes.about_service._is_newer("3.4", "3.5"))
+    except Exception as exc:  # noqa: BLE001
+        check("关于面板自检", False, str(exc))
 
     # phase 语义表必须覆盖全部 12 态（缺一个前端就会显示英文原值）
     check("语义表覆盖全部 12 态",

@@ -210,13 +210,6 @@ class CompanionSettingsRequest(BaseModel):
     pet_idle_talk_min_seconds: int = Field(default=90, ge=30, le=3600)
     pet_idle_talk_max_seconds: int = Field(default=240, ge=30, le=7200)
     pet_press_bounce_enabled: bool = True
-    # A4：边缘吸附（每侧独立；空串=该侧不吸附）。ratio:x / px:n / 空
-    pet_snap_enabled: bool = True
-    pet_snap_left: str = Field(default="ratio:0.03", max_length=20)
-    pet_snap_right: str = Field(default="ratio:0.03", max_length=20)
-    pet_snap_top: str = Field(default="", max_length=20)
-    pet_snap_bottom: str = Field(default="ratio:0.03", max_length=20)
-    pet_snap_threshold: int = Field(default=24, ge=0, le=200)
 
 
 class AvatarRequest(BaseModel):

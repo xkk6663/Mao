@@ -118,13 +118,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "pet_idle_talk_max_seconds": 240,
     # 按压 Q 弹反馈
     "pet_press_bounce_enabled": True,
-    # 边缘吸附：每侧独立配置，空串=该侧不吸附（与 whale-widget 的"上侧默认 0=关闭"同义）
-    "pet_snap_enabled": True,
-    "pet_snap_left": "ratio:0.03",
-    "pet_snap_right": "ratio:0.03",
-    "pet_snap_top": "",
-    "pet_snap_bottom": "ratio:0.03",
-    "pet_snap_threshold": 24,
     "position_x": 80,
     "position_y": 420,
 }

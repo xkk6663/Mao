@@ -228,12 +228,26 @@ class Live2DAssetsService:
 
     def _live2d_preview_candidate(self, source_root: Path, files: list[Path]) -> Path | None:
         image_suffixes = {".png", ".jpg", ".jpeg", ".webp"}
+
+        def is_texture(path: Path) -> bool:
+            """贴图判定：看**目录名**也看**文件名**。
+
+            ⚠️ 历史 bug：原实现只检查 `relative_parts`（目录名），
+               模型根目录下的 `texture_00.png` / `texture_01.png` 会被当成"普通图片"
+               进入候选；随后按文件体积排序，反而选中了更大的 texture_01。
+               即"把贴图当立绘"——显示出来是张三视图而不是角色半身。
+            """
+            low_dirs = [part.lower() for part in path.relative_to(source_root).parts[:-1]]
+            if any("texture" in part or "贴图" in part for part in low_dirs):
+                return True
+            name = path.name.lower()
+            return "texture" in name or "贴图" in name
+
         candidates = []
         for path in files:
             if path.suffix.lower() not in image_suffixes:
                 continue
-            relative_parts = [part.lower() for part in path.relative_to(source_root).parts[:-1]]
-            if any("texture" in part or "贴图" in part for part in relative_parts):
+            if is_texture(path):
                 continue
             name = path.stem.lower()
             exact_preview = path.name.lower() in {"preview.png", "preview.jpg", "preview.jpeg", "preview.webp"}
@@ -243,7 +257,34 @@ class Live2DAssetsService:
             except OSError:
                 size = 0
             candidates.append((0 if exact_preview else 1 if keyword else 2, -size, len(path.parts), path))
-        return min(candidates, default=(0, 0, 0, None))[-1]
+        best = min(candidates, default=(0, 0, 0, None))[-1]
+        if best is not None:
+            return best
+        # 兜底：没有任何"预览图"类文件时，退回模型的**贴图**当缩略图。
+        # 为什么需要：部分导入模型（实测 5 个 MyGO 系列）只有 texture_00/01.png，
+        # 没有 preview.png，于是管理页与角色图库都会显示空白卡片——用户会以为模型坏了。
+        # 贴图就是角色本人的画，用它当缩略图是如实呈现，不是伪造图片。
+        # 只取编号最靠前的那张贴图（texture_00 通常是脸/半身主图）。
+        # ⚠️ 不能拿 `"texture0" in name` 判优先级：`"texture_01"` 里也含 `"texture0"`，
+        #    两者会被判成同级，再按体积排序就会选到 texture_01（实测踩过）。
+        #    这里显式解析出编号再比较。
+        textures: list[tuple[int, int, Path]] = []
+        for path in files:
+            if path.suffix.lower() not in image_suffixes:
+                continue
+            low = path.name.lower()
+            if "texture" not in low and "贴图" not in low:
+                continue
+            index_match = re.search(r"texture[_\-]?(\d+)", low)
+            index = int(index_match.group(1)) if index_match else 999
+            try:
+                size = path.stat().st_size
+            except OSError:
+                size = 0
+            textures.append((index, -size, path))
+        if textures:
+            return min(textures, key=lambda item: (item[0], item[1]))[2]
+        return None
 
 
     def _custom_live2d_models(self) -> list[dict[str, Any]]:
@@ -274,13 +315,29 @@ class Live2DAssetsService:
                         encoding="utf-8",
                     )
                 metadata["capabilities"] = refreshed_capabilities
-                if not str(metadata.get("previewPath") or "").strip():
+                # 预览图解析：**不能只信 metadata 里的 previewPath**。
+                # 历史 bug：metadata 记着 "mio-preview.png"，但该文件后来不在了
+                # （缓存被清/导入时没真正复制），于是：
+                #   · 第 318 行的 `if not previewPath` 判定"已有预览"→ 永不重算；
+                #   · 第 336 行解析又发现文件不存在 → preview_url 留空。
+                # 结果就是"元数据说有、实际取不到"，卡片空白。
+                # 正确做法：把"文件真的存在"作为唯一判据，不存在就重新解析并落盘。
+                stored_relative = str(metadata.get("previewPath") or "").replace("\\", "/").strip()
+                stored_exists = False
+                if stored_relative:
+                    try:
+                        stored_exists = self._safe_child(model_root, stored_relative).is_file()
+                    except ValueError:
+                        stored_exists = False
+                if not stored_exists:
                     preview_candidate = self._live2d_preview_candidate(model_root, model_files)
                     if preview_candidate is not None:
                         metadata["previewPath"] = str(
                             preview_candidate.relative_to(model_root)
                         ).replace("\\", "/")
-                        metadata_changed = True
+                    else:
+                        metadata.pop("previewPath", None)
+                    metadata_changed = True
                 if metadata_changed:
                     metadata_path.write_text(
                         json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",

@@ -2,9 +2,12 @@
  * 数据：GET /api/plugin/dsh/status      （插件状态摘要，主数据源）
  *       GET /api/plugin/dsh/phases      （本插件能下发的全部 phase + 语义）
  *       GET /api/plugin/dsh/diagnostics （自检条目）
+ *       GET /api/plugin/dsh/about       （关于/自检：版本、环境、脱敏路径）
+ *       GET /api/plugin/dsh/update-check（仅点击时联网）
  * 说明：本页是 DSH 插件包**自带**的界面，只读自己的接口；不引用其它插件的任何资源。
  *       配色走原框架 CSS 变量（跟随主题），并用本插件专属强调色 #4F6BED 与其它插件区分。
  * v20261015a：首版——实时状态卡 / 12 态 phase 图例 / 事实面板 / 自检。
+ * v20261015b：A5——新增「关于/自检」卡与「检查更新」（仅点击联网，路径由后端脱敏下发）。
  */
 (function () {
   if (window.__mioDshPanelLoaded) return
@@ -103,7 +106,7 @@
     return panel
   }
 
-  function render(data, phases, diag) {
+  function render(data, phases, diag, about) {
     var body = $q('#dshBody', panel)
     if (!body) return
     var rt = (data && data.runtime) || {}
@@ -163,7 +166,33 @@
         '共 ' + (counts.registered || 0) + ' 个状态注册在总线；其中 ' + (counts.work || 0) + ' 个为工作细分态（桌宠头顶显示徽标），' +
         (counts.fact_reachable || 0) + ' 个可由实时事件直接产出。</div>')
 
-    // 4) 自检
+    // 4) 关于 / 自检（A5）
+    //    版本号唯一来源是 CHANGELOG 顶部；路径全部由后端脱敏后下发（前端不再自行拼接，
+    //    避免把真实用户名带进页面）。
+    var ab = (about && about.about) || {}
+    var paths = (about && about.paths) || {}
+    var files = (about && about.files) || []
+    var fileRows = files.map(function (f) {
+      return '<div style="display:flex;gap:10px;font-size:11px;line-height:1.8;">' +
+        '<span style="flex:none;min-width:110px;color:var(--muted,#687984);font-family:Consolas,monospace;">' + f.name + '</span>' +
+        '<span style="color:var(--ink,#20303a);">' + (f.bytes ? (f.bytes / 1024).toFixed(1) + ' KB' : '—') + '</span></div>'
+    }).join('')
+    html += card('关于 / 自检',
+      kv('产品', (ab.product || '') + '　<b style="color:' + ACCENT + ';">' + (ab.version || '') + '</b>') +
+      kv('运行环境', (ab.platform || '') + ' · ' + (ab.arch || '') + ' · Python ' + (ab.python || '')) +
+      kv('后端进程', 'pid ' + ((about && about.runtime && about.runtime.pid) || '—') +
+         '　桌宠 WS ' + (((about && about.runtime && about.runtime.pet_ws && about.runtime.pet_ws.connected) ? '已连接' : '未连接'))) +
+      kv('仓库根', paths.repo_root || '') +
+      kv('配置', paths.config || '') +
+      '<div style="margin-top:8px;">' + fileRows + '</div>' +
+      '<div style="margin-top:10px;display:flex;align-items:center;gap:10px;">' +
+        '<button type="button" id="dshUpdateCheck" style="border:1px solid ' + ACCENT + '55;background:' + ACCENT + '12;color:' + ACCENT + ';border-radius:7px;padding:5px 12px;font-size:12px;cursor:pointer;">检查更新</button>' +
+        '<span id="dshUpdateResult" style="font-size:11px;color:var(--muted,#687984);">只在点击时联网</span>' +
+      '</div>' +
+      '<div style="margin-top:8px;font-size:10px;line-height:1.6;color:var(--muted,#687984);">' +
+        (about && about.privacy ? about.privacy : '') + '</div>')
+
+    // 5) 自检
     var chk = (diag && diag.check) || {}
     html += card('自检',
       kv('状态', (chk.state || '') + ' · ' + (chk.detail || '')) +
@@ -172,9 +201,37 @@
       kv('配置', chk.config_path || ''))
 
     body.innerHTML = html
+    bindUpdateCheck()
 
     var sub = $q('#dshSub', panel)
-    if (sub) sub.textContent = 'DSH · ' + (rt.phase_label || rt.phase || '—') + ' · ' + st
+    if (sub) sub.textContent = 'DSH · ' + (rt.phase_label || rt.phase || '—') + ' · ' + st + (ab.version ? ' · ' + ab.version : '')
+  }
+
+  // 检查更新：**只在用户点击时发请求**（面板本身不轮询、不预取）
+  function bindUpdateCheck() {
+    var btn = $q('#dshUpdateCheck', panel)
+    var out = $q('#dshUpdateResult', panel)
+    if (!btn || !out) return
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation()
+      btn.disabled = true
+      out.textContent = '检查中…'
+      fetch('/api/plugin/dsh/update-check', { headers: { 'Cache-Control': 'no-cache' } })
+        .then(function (r) { return r.json() })
+        .then(function (j) {
+          if (!j || !j.ok) { out.textContent = (j && j.note) || '检查失败'; return }
+          if (!j.checked) { out.textContent = j.note || '已跳过'; return }
+          if (j.has_update) {
+            out.innerHTML = '有新版本 <b style="color:' + ACCENT + ';">' + j.latest + '</b>（当前 ' + j.current + '）'
+          } else if (j.latest) {
+            out.textContent = '已是最新（' + j.current + '）'
+          } else {
+            out.textContent = j.note || '已是最新'
+          }
+        })
+        .catch(function () { out.textContent = '网络不可用，已跳过' })
+        .then(function () { btn.disabled = false })
+    })
   }
 
   function refresh(showBusy) {
@@ -182,8 +239,9 @@
       fetch('/api/plugin/dsh/status', { headers: { 'Cache-Control': 'no-cache' } }).then(function (r) { return r.json() }).catch(function () { return null }),
       fetch('/api/plugin/dsh/phases', { headers: { 'Cache-Control': 'no-cache' } }).then(function (r) { return r.json() }).catch(function () { return null }),
       fetch('/api/plugin/dsh/diagnostics', { headers: { 'Cache-Control': 'no-cache' } }).then(function (r) { return r.json() }).catch(function () { return null }),
+      fetch('/api/plugin/dsh/about', { headers: { 'Cache-Control': 'no-cache' } }).then(function (r) { return r.json() }).catch(function () { return null }),
     ]).then(function (res) {
-      if (panel && panel.style.display !== 'none') render(res[0], res[1], res[2])
+      if (panel && panel.style.display !== 'none') render(res[0], res[1], res[2], res[3])
     })
   }
 

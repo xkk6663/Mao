@@ -153,17 +153,6 @@ body,
 .agent-badge-chip.p-heartbeat { background: #4f7ba8; }
 .agent-badge-chip.p-connecting { background: #6b7f96; }
 
-/* A4：贴左吸附时水平镜像，让角色面朝屏幕内侧。
-   翻转放在 #pet-root 上（整个舞台），Live2D 的模型矩阵/动作不受影响；
-   徽标与气泡是被镜像的，故单独再翻回来，保证文字始终可读。 */
-#pet-root.pet-flipped {
-  transform: scaleX(-1);
-}
-#pet-root.pet-flipped #agent-badge,
-#pet-root.pet-flipped #speech-bubble {
-  transform: scaleX(-1);
-}
-
 /* 插件身份识别：声明了 bubble.accent 的插件，其 chip 左侧加一条专属色竖条。
    保留原有 phase 配色（仍能看出"在干什么"），同时能看出"谁在干"——
    多 Agent 并排时一眼区分来源，且新增插件零改动（色值来自插件自己的 manifest）。 */
@@ -172,27 +161,35 @@ body,
   border-left: 3px solid var(--agent-accent, transparent);
 }
 
-/* DSH 气泡：与其它插件的气泡用颜色区分（DSH 专属靛蓝 #4F6BED）。
-   bubble.accent 由插件 manifest 声明，渲染层只按 data 属性套用，不硬编码插件身份。 */
-.speech-bubble[data-agent-accent] {
-  border-color: color-mix(in srgb, var(--bubble-accent, #4F6BED) 45%, transparent);
-  box-shadow:
-    0 8px 24px rgb(24 43 50 / 16%),
-    inset 0 3px 0 0 var(--bubble-accent, #4F6BED);
-}
-
+/* 气泡调色板：默认 = 项目原本的观感。
+   插件可通过 data-agent-accent 覆盖这几个变量来换色——**框本身完全复用**
+   （同样的圆角、尾巴、投影、内边距），不另起一套样式。 */
 .speech-bubble {
+  --bubble-bg: rgb(255 255 255 / 94%);
+  --bubble-border: rgb(105 132 140 / 26%);
+  --bubble-ink: #2d4148;
+  --bubble-shadow: 0 8px 24px rgb(24 43 50 / 16%);
   position: absolute;
   z-index: 12;
   width: max-content;
   max-width: min(260px, calc(100vw - 16px));
   padding: 9px 12px;
-  color: #2d4148;
-  background: rgb(255 255 255 / 94%);
-  border: 1px solid rgb(105 132 140 / 26%);
+  color: var(--bubble-ink);
+  background: var(--bubble-bg);
+  border: 1px solid var(--bubble-border);
   border-radius: 7px;
-  box-shadow: 0 8px 24px rgb(24 43 50 / 16%);
+  box-shadow: var(--bubble-shadow);
   pointer-events: none;
+}
+
+/* DSH 气泡：复用同一个框，只换**蓝色**调色板。
+   色值由插件 manifest 的 bubble.accent 提供（DSH = 靛蓝 #4F6BED），
+   渲染层不硬编码任何插件身份——新增插件声明 accent 即自动换色。 */
+.speech-bubble[data-agent-accent] {
+  --bubble-bg: color-mix(in srgb, var(--bubble-accent, #4F6BED) 7%, rgb(255 255 255 / 97%));
+  --bubble-border: color-mix(in srgb, var(--bubble-accent, #4F6BED) 48%, transparent);
+  --bubble-ink: color-mix(in srgb, var(--bubble-accent, #4F6BED) 52%, #17202b);
+  --bubble-shadow: 0 8px 24px rgb(24 43 50 / 16%), 0 0 0 2px color-mix(in srgb, var(--bubble-accent, #4F6BED) 10%, transparent);
 }
 
 .speech-bubble[hidden] {
@@ -217,8 +214,9 @@ body,
   width: 10px;
   height: 10px;
   background: inherit;
-  border-right: 1px solid rgb(105 132 140 / 26%);
-  border-bottom: 1px solid rgb(105 132 140 / 26%);
+  /* 尾巴的描边必须跟气泡本体同一个变量，否则换蓝色后尾巴还是灰边（会看出接缝） */
+  border-right: 1px solid var(--bubble-border);
+  border-bottom: 1px solid var(--bubble-border);
   content: "";
   transform: rotate(45deg);
 }
@@ -308,6 +306,144 @@ body,
 
 .size-panel[hidden] {
   display: none;
+}
+
+/* ---- A7 角色图库：沿用 size-panel 的视觉语言（同一套圆角/描边/投影）---- */
+.pet-gallery {
+  position: absolute;
+  z-index: 22;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(300px, calc(100% - 20px));
+  max-height: min(360px, calc(100% - 20px));
+  padding: 8px 10px;
+  color: #283b42;
+  background: rgb(249 251 252 / 97%);
+  border: 1px solid rgb(105 132 140 / 28%);
+  border-radius: 16px;
+  box-shadow: 0 10px 28px rgb(24 43 50 / 20%);
+  user-select: none;
+}
+
+.pet-gallery[hidden] {
+  display: none;
+}
+
+.pet-gallery header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.pet-gallery header strong {
+  flex: 1;
+  font-size: 12px;
+}
+
+.pet-gallery header output {
+  flex: none;
+  font-size: 11px;
+  color: #6b7f8a;
+}
+
+.pet-gallery header button {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: #6b7f8a;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.pet-gallery-list {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  overflow-y: auto;
+  padding-right: 2px;
+  scrollbar-width: thin;
+}
+
+.pet-gallery-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid rgb(105 132 140 / 22%);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 85%);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.pet-gallery-card:hover {
+  border-color: rgb(79 107 237 / 55%);
+}
+
+/* 当前形象：蓝色高亮（与 DSH 插件强调色同源，便于一眼找到"现在用的哪个"） */
+.pet-gallery-card.is-current {
+  border-color: #4f6bed;
+  box-shadow: 0 0 0 2px rgb(79 107 237 / 18%);
+}
+
+.pet-gallery-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 52px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: rgb(233 240 244 / 70%);
+}
+
+.pet-gallery-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.pet-gallery-name {
+  width: 100%;
+  font-size: 10px;
+  line-height: 1.3;
+  text-align: center;
+  color: #33474f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pet-gallery-tag {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  padding: 0 4px;
+  border-radius: 5px;
+  background: rgb(59 113 129 / 82%);
+  color: #fff;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.pet-gallery-empty {
+  grid-column: 1 / -1;
+  padding: 14px 0;
+  text-align: center;
+  font-size: 11px;
+  color: #6b7f8a;
+}
+
+.pet-gallery-foot {
+  font-size: 10px;
+  line-height: 1.5;
+  color: #6b7f8a;
 }
 
 .size-panel header {

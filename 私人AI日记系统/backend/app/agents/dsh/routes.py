@@ -17,10 +17,12 @@
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter
 
+from ...companion import about_service
 from . import dsh_adapter
 
 router = APIRouter(prefix="/api/plugin/dsh", tags=["plugin:dsh"])
@@ -147,6 +149,37 @@ async def plugin_diagnostics() -> dict[str, Any]:
             "phase": info.get("phase") or "",
         },
     }
+
+
+@router.get("/about")
+async def plugin_about() -> dict[str, Any]:
+    """「关于 / 自检」面板数据（A5）。
+
+    复用 companion 域的 about_service（**不复制它的脱敏逻辑**）：
+    脱敏与白名单只有一处实现，避免两边口径漂移。
+    """
+    payload = about_service.about_payload()
+    # 补上本插件自己的信息
+    payload["plugin"] = {
+        "agent_id": dsh_adapter.AGENT_ID,
+        "name": dsh_adapter.AGENT_NAME,
+        "adapter": "dsh_adapter",
+        "endpoints": [
+            "/api/plugin/dsh/status",
+            "/api/plugin/dsh/phases",
+            "/api/plugin/dsh/diagnostics",
+            "/api/plugin/dsh/about",
+            "/api/plugin/dsh/update-check",
+        ],
+    }
+    return payload
+
+
+@router.get("/update-check")
+async def plugin_update_check() -> dict[str, Any]:
+    """更新检查。**只在用户点击时调用**（本端点不缓存、不轮询）。"""
+    current = about_service.read_mio_version()
+    return await asyncio.to_thread(about_service.check_update, current)
 
 
 def _bus_status(info: dict[str, Any]) -> str:

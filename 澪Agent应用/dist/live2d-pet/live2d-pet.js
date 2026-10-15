@@ -1314,15 +1314,6 @@
     }
   }
 
-  // A4：贴左吸附时水平镜像（角色面朝屏内）。用 CSS transform 翻转整个舞台，
-  // 这样 Live2D 的模型矩阵与动作都不受影响，也不会与物理/动作系统打架。
-  function applyPetFlip(flip) {
-    try {
-      const stage = document.getElementById('pet-root') || document.body
-      stage.classList.toggle('pet-flipped', !!flip)
-    } catch (_) {}
-  }
-
   // 按压反馈：**用动作+表情**而不是缩放形变。
   // 曾经试过改 model.scale.y 做"Q 弹"，但实测观感很怪（模型横向不变、纵向被压扁，
   // 看起来像渲染出错而非"被按扁"），且与 Live2D 自身的物理/动作系统打架。
@@ -2698,31 +2689,8 @@
       const marginX = Math.min(72, Math.max(32, vw * 0.08))
       const marginY = Math.min(96, Math.max(48, vh * 0.1))
       // 完全放开上下与水平限位：位置原样保存，不做任何回弹
-      let nextX = Math.round(interaction.positionX + dx)
-      let nextY = Math.round(interaction.positionY + dy)
-      // A4：拖拽结束按设置做边缘吸附 + 贴左水平翻转（纯几何，pet-snap.js 负责算）
-      try {
-        const snapApi = window.__mioPetSnap
-        if (snapApi && settings.pet_snap_enabled !== false) {
-          const r = snapApi.resolve(
-            { x: nextX, y: nextY },
-            { width: vw, height: vh },
-            { width: vw, height: vh },
-            {
-              edges: {
-                left: settings.pet_snap_left ?? 'ratio:0.03',
-                right: settings.pet_snap_right ?? 'ratio:0.03',
-                top: settings.pet_snap_top ?? '',
-                bottom: settings.pet_snap_bottom ?? 'ratio:0.03',
-              },
-              threshold: Number(settings.pet_snap_threshold ?? 24),
-            },
-          )
-          nextX = r.x
-          nextY = r.y
-          applyPetFlip(r.flip)
-        }
-      } catch (_) {}
+      const nextX = Math.round(interaction.positionX + dx)
+      const nextY = Math.round(interaction.positionY + dy)
       settings.position_x = nextX
       settings.position_y = nextY
       request('/api/companion/position', {
@@ -2793,6 +2761,55 @@
     sizePanel.style.top = `${Math.max(8, Math.min(window.innerHeight - rect.height - 8, py))}px`
   }
 
+  // A7 角色图库：条目来自既有 models 接口（含 preview_url），本函数只做定位
+  let galleryModels = []
+
+  function positionGalleryNear(event) {
+    const panelEl = document.getElementById('pet-gallery')
+    if (!panelEl) return
+    const rect = panelEl.getBoundingClientRect()
+    const px = Number(event?.clientX ?? window.innerWidth - rect.width - 16)
+    const py = Number(event?.clientY ?? window.innerHeight - rect.height - 16)
+    panelEl.style.left = `${Math.max(8, Math.min(window.innerWidth - rect.width - 8, px))}px`
+    panelEl.style.top = `${Math.max(8, Math.min(window.innerHeight - rect.height - 8, py))}px`
+  }
+
+  function initGallery() {
+    const g = window.__mioPetGallery
+    if (!g) return
+    g.mount(root)
+    // 选中即切模型；切完关掉面板，避免挡住角色
+    g.onPick(async (id) => {
+      try {
+        const ok = await switchModel(id)
+        if (!ok) showSpeechBubble('这个形象暂时用不了', 3000)
+      } catch (err) {
+        showSpeechBubble(`切换形象失败：${String(err && err.message || err)}`, 4000)
+      }
+      g.hide()
+    })
+  }
+
+  // 图库数据源：既有 /api/companion/live2d/models（含 preview_url 与 imported 标记）。
+  // 不新增接口、不在这里重复实现模型发现逻辑。
+  async function refreshGalleryModels() {
+    try {
+      const data = await request('/api/companion/live2d/models')
+      const list = Array.isArray(data?.models) ? data.models : []
+      galleryModels = list
+        .map((m) => ({
+          id: String(m?.id || ''),
+          name: String(m?.name || m?.id || ''),
+          preview_url: String(m?.preview_url || ''),
+          imported: Boolean(m?.imported),
+        }))
+        .filter((m) => m.id)
+    } catch (_) {
+      // 拿不到就沿用上次缓存；首次失败时图库显示"没有可用形象"，不弹错误打扰
+    }
+    return galleryModels
+  }
+
   contextMenu.addEventListener('click', async (event) => {
     const action = event.target.closest('button')?.dataset.action
     if (!action) return
@@ -2802,6 +2819,21 @@
     if (action === 'size') {
       sizePanel.hidden = false
       positionSizePanelNear(event)
+    }
+    if (action === 'gallery') {
+      // A7：桌宠内直接换形象（不必打开管理页）
+      const g = window.__mioPetGallery
+      if (g) {
+        g.mount(root)
+        g.setCurrent(selectedModelId())
+        g.show()                       // 先打开（有缓存立即可用），再刷新列表
+        positionGalleryNear(event)
+        refreshGalleryModels().then(() => {
+          g.setModels(galleryModels)
+          g.setCurrent(selectedModelId())
+          positionGalleryNear(event)   // 列表变长后重新定位，避免超出窗口
+        })
+      }
     }
     if (action === 'screenshot-ask') {
       // 截图提问：截全屏 → 小智视觉分析 → 直接显示气泡（后端已写 pet 历史+syslog）
@@ -2847,22 +2879,29 @@
     updateMousePassThrough(true, event)
   })
 
-  modelSelect?.addEventListener('change', async () => {
-    const modelId = String(modelSelect.value || '')
-    if (!modelDefinitions[modelId]) return
-    if (electronRuntime && modelDefinitions[modelId].source === 'imported') {
-      await window.mioDesktop.selectModel(modelId)
-      desktopSelectedModelId = modelId
+  // 切换 Live2D 形象（下拉框与角色图库**共用同一个入口**，避免两处逻辑漂移）
+  async function switchModel(modelId) {
+    const id = String(modelId || '')
+    if (!modelDefinitions[id]) return false
+    if (electronRuntime && modelDefinitions[id].source === 'imported') {
+      await window.mioDesktop.selectModel(id)
+      desktopSelectedModelId = id
     } else if (electronRuntime) {
       await window.mioDesktop.selectModel('')
       desktopSelectedModelId = ''
-      settings.live2d_model_id = modelId
+      settings.live2d_model_id = id
       await request('/api/companion/settings', {
         method: 'PATCH',
-        body: JSON.stringify({ ...settings, live2d_model_id: modelId }),
+        body: JSON.stringify({ ...settings, live2d_model_id: id }),
       })
     }
-    await loadModel(modelId)
+    await loadModel(id)
+    return true
+  }
+
+  modelSelect?.addEventListener('change', async () => {
+    const modelId = String(modelSelect.value || '')
+    await switchModel(modelId)
   })
 
   const sizePanelHeader = document.getElementById('size-panel-header')
@@ -3021,6 +3060,8 @@
     setInterval(idleTick, 1000)
     // A 档：启动空闲自语排期（设置已由上面的 pollStatus 加载完成）
     scheduleIdleTalk()
+    // A7：初始化角色图库（数据在首次打开时才拉，不占用启动时间）
+    initGallery()
   }
 
   window.__mioPetDebug = {
