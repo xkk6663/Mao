@@ -492,7 +492,6 @@
     app.ticker.add(() => {
       reportModelBounds()
       reportUiOpen()
-      reportUiBounds()
     }, undefined, -25)
   }
 
@@ -696,32 +695,15 @@
     watermarkParamMap = null
     watermarkExpressionName = ''
     if (!definition || !model?.expression) return
-    const expressions = Array.isArray(definition.capabilities?.expressions)
-      ? definition.capabilities.expressions
-      : []
-    const entry = expressions.find((item) => /水印|watermark|去水印/i.test(String(item?.Name || '')))
-    if (!entry) return
+    // 仅大肥鱼（da-feiyu）模型需要消除水印：写死参数映射（Paramcol_3=1，等价官方「13 水印消除」表情），
+    // 初始化时直接置参，不依赖表达式文件网络 fetch——避免路径解析/请求失败导致水印残留
+    if (String(definition.id || '') !== 'da-feiyu') return
+    watermarkParamMap = { Paramcol_3: 1 }
+    watermarkExpressionName = '13 水印消除'
     try {
-      // definition.url 可能是相对路径（内置模型 ./models/...）：new URL 的 base 必须是绝对 URL，
-      // 否则抛 TypeError 被 catch 吞掉导致水印永远不消除。先基于页面地址解析成绝对再拼表达式文件。
-      const base = new URL(definition.url, window.location.href).toString()
-      const fileUrl = new URL(String(entry.File), base).toString()
-      const response = await fetch(fileUrl)
-      if (!response.ok) return
-      const payload = await response.json()
-      const params = Array.isArray(payload?.Parameters) ? payload.Parameters : []
-      const map = {}
-      for (const item of params) {
-        if (item && typeof item.Id === 'string' && item.Id) {
-          map[item.Id] = Number(item.Value ?? 0)
-        }
-      }
-      if (!Object.keys(map).length) return
-      watermarkParamMap = map
-      watermarkExpressionName = String(entry.Name || '')
       // 立即同步置参一次：不等下一帧 ticker，也不依赖 model.expression 的淡入时序，
       // 保证 applyWatermarkRemoval 返回时水印参数已经生效（初始化第一帧就无水印）
-      for (const paramId in map) setParameter(paramId, map[paramId])
+      for (const paramId in watermarkParamMap) setParameter(paramId, watermarkParamMap[paramId])
       Promise.resolve(model.expression(watermarkExpressionName)).catch(() => {})
     } catch (error) {
       console.debug('[MioLive2D] watermark expression load failed', error)
@@ -1379,20 +1361,6 @@
         }
         const api = window.__mioPetIdleTalk
         if (!api) { scheduleIdleTalk(); return }
-        // A组 随机图片：部分自语轮次改为展示图片泡泡（有池才展示；池子拉取失败回退文本）
-        const imgApi = window.__mioPetRandomImage
-        if (imgApi && settings.pet_random_image_enabled !== false && Math.random() < 0.35) {
-          imgApi.refresh().then((list) => {
-            const shown = Array.isArray(list) && list.length && speechBubble?.hidden
-              ? imgApi.show()
-              : false
-            if (!shown) showSpeechBubble(api.pick(anyAgentBusy()), 0, `idle-talk-${Date.now()}`)
-          }).catch(() => {
-            showSpeechBubble(api.pick(anyAgentBusy()), 0, `idle-talk-${Date.now()}`)
-          })
-          scheduleIdleTalk()
-          return
-        }
         showSpeechBubble(api.pick(anyAgentBusy()), 0, `idle-talk-${Date.now()}`)
       } catch (_) {}
       scheduleIdleTalk()
@@ -1451,8 +1419,6 @@
     if (visible) updateAgentBadgePosition(true)
     // 兼容旧引用（右键菜单重新开启徽标时恢复展示）
     window.__lastAgentBadgeText = chips.map((c) => `${c.name} · ${c.label}`).join('，')
-    // A组 模块化泡泡：status 模块随徽标刷新（徽标本身由状态事件驱动，节流已足够）
-    try { window.__mioPetBubbleModules && window.__mioPetBubbleModules.refreshStatus() } catch (_) {}
   }
 
   // 徽标定位：手动拖动位置优先；否则锚定模型头顶上方居中。锁定时不可交互。
@@ -1624,15 +1590,11 @@
     if (nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, 'live2d_model_id')) {
       desktopSelectedModelId = ''
     }
-    // 泡泡工坊：皮肤 + 模块化泡泡配置（Mio「泡泡」页 → settings → 这里热应用）
+    // 泡泡工坊：皮肤热应用（配置在 Mio「泡泡」页，settings_changed 下发）
     try {
       const bs = window.__mioPetBubbleStyles
       if (bs && nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, 'live2d_bubble_style')) {
         bs.setStyle(nextSettings.live2d_bubble_style, speechBubble)
-      }
-      const bm = window.__mioPetBubbleModules
-      if (bm && nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, 'live2d_bubble_modules')) {
-        bm.applyConfig(nextSettings.live2d_bubble_modules)
       }
     } catch (_) {}
     if (electronRuntime) {
@@ -2544,6 +2506,8 @@
     }
     // 气泡身份色：不同插件的气泡用各自专属色区分
     applyBubbleAgentAccent(agentId, accent)
+    // 退出图片模式（点击互动的图片泡泡与文本共用同一个框）
+    speechBubble.classList.remove('image-mode')
     const normalizedResponseId = String(responseId || '')
     const normalizedText = String(text).trim()
     if (!speechBubble.hidden && normalizedResponseId && normalizedResponseId === speechBubbleResponseId) {
@@ -2593,6 +2557,7 @@
     speechBubble.hidden = true
     speechBubble.style.visibility = ''
     speechBubble.style.width = ''
+    speechBubble.classList.remove('image-mode')
     speechBubbleText.textContent = ''
   }
 
@@ -2602,6 +2567,40 @@
       method: 'PATCH',
       body: JSON.stringify({ [key]: value }),
     })
+  }
+
+  // A组 点击互动：点桌宠 → 随机语句 / 随机图片，都显示在**说话气泡框**里
+  // （复用小智消息的同一个气泡：同框/同尾巴/同位置/同打字机节奏的图片变体）。
+  function showImageInBubble(entry) {
+    if (settings.live2d_speech_bubble_enabled === false) return
+    const imgEl = document.getElementById('speech-bubble-img')
+    if (!imgEl || !entry?.url) return
+    window.clearTimeout(speechBubbleTimer)
+    window.clearTimeout(speechBubbleHideTimer)
+    speechBubbleHideTimer = null
+    speechBubbleResponseId = `click-image-${Date.now()}`
+    speechBubble.classList.add('image-mode')
+    imgEl.src = entry.url + '?v=' + String(entry.mtime || Date.now())
+    speechBubble.style.width = '232px'
+    speechBubble.hidden = false
+    updateSpeechBubblePosition(true)
+    speechBubbleHideTimer = window.setTimeout(hideSpeechBubble, 7000)
+  }
+
+  async function showClickTalk() {
+    // 素材库有图时 45% 概率出图片，否则出随机语句（复用空闲自语内容池）
+    try {
+      const imgApi = window.__mioPetRandomImage
+      if (imgApi) {
+        const list = await imgApi.refresh()
+        if (Array.isArray(list) && list.length && Math.random() < 0.45) {
+          const im = imgApi.pick()
+          if (im) { showImageInBubble(im); return }
+        }
+      }
+    } catch (_) {}
+    const talk = window.__mioPetIdleTalk
+    if (talk) showSpeechBubble(talk.pick(anyAgentBusy()), 0, `click-talk-${Date.now()}`)
   }
 
   async function setClickThroughLocked(enabled, persist = true) {
@@ -2657,46 +2656,6 @@
     window.mioDesktop.setUiOpen(open)
   }
 
-  // 常驻可交互 UI（模块卡片/图库面板/图片泡泡）的矩形上报：主进程轮询穿透判定
-  // 需要"鼠标是否悬在这些 UI 上"。面板类走 uiOpen；常驻元素走这里（500ms 节流）。
-  function collectUiBounds() {
-    const rects = []
-    const gallery = document.getElementById('pet-gallery')
-    if (gallery && !gallery.hidden) rects.push(gallery.getBoundingClientRect())
-    try {
-      const bm = window.__mioPetBubbleModules
-      if (bm) bm.collectBounds().forEach((r) => rects.push(r))
-    } catch (_) {}
-    const img = document.getElementById('pet-image-bubble')
-    if (img && !img.hidden) rects.push(img.getBoundingClientRect())
-    return rects
-      .filter((r) => r.width > 2 && r.height > 2)
-      .map((r) => ({ x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) }))
-  }
-  let lastUiBoundsSentAt = 0
-  function reportUiBounds(force = false) {
-    if (!electronRuntime || !window.mioDesktop || !window.mioDesktop.setUiBounds) return
-    const now = performance.now()
-    let dirty = false
-    try { dirty = Boolean(window.__mioPetBubbleModules && window.__mioPetBubbleModules.isBoundsDirty()) } catch (_) {}
-    if (!force && !dirty && now - lastUiBoundsSentAt < 500) return
-    lastUiBoundsSentAt = now
-    try {
-      window.mioDesktop.setUiBounds(collectUiBounds())
-      window.__mioPetBubbleModules && window.__mioPetBubbleModules.clearBoundsDirty()
-    } catch (_) {}
-  }
-
-  // 智能穿透的 UI 白名单：悬停在这些元素上时窗口必须可交互（可点击/可拖动）。
-  // 历史 bug：此前只认右键菜单+大小面板，图库/泡泡图库/模块库悬浮时点击全部
-  // 穿透到桌面——面板"看得到点不着"。用 elementFromPoint 做通用命中检测，
-  // 新增 UI 只要把选择器加进来即可。
-  const INTERACTIVE_UI_SELECTOR = [
-    '#context-menu', '#size-panel', '#pet-gallery',
-    '#pet-style-gallery', '#pet-bubble-lib',
-    '.pet-bubble-mod', '#pet-image-bubble', '#agent-badge',
-  ].join(', ')
-
   function updateMousePassThrough(force = false, event = null) {
     if (clickThroughLocked()) {
       setInteractive(false)
@@ -2712,14 +2671,7 @@
       const menuOpen = !contextMenu.hidden || !sizePanel.hidden
       const x = Number(event?.clientX ?? -10000)
       const y = Number(event?.clientY ?? -10000)
-      let uiHover = false
-      if (Number.isFinite(x) && Number.isFinite(y) && x > 0 && y > 0) {
-        try {
-          const hit = document.elementFromPoint(x, y)
-          uiHover = Boolean(hit && hit.closest(INTERACTIVE_UI_SELECTOR))
-        } catch (_) {}
-      }
-      setInteractive(menuOpen || uiHover || Boolean(pointerDown) || pointHitsModel(x, y))
+      setInteractive(menuOpen || Boolean(pointerDown) || pointHitsModel(x, y))
     })
   }
 
@@ -2815,6 +2767,10 @@
     } else if (!wasDragged) {
       if (settings.live2d_click_motion) playMotion(semanticMotion('touch'), undefined, { force: true })
       sendSocket('clicked', { x: event?.screenX || 0, y: event?.screenY || 0, emotion: 'gentle' })
+      // A组 点击互动：点桌宠 → 随机语句（复用说话气泡）或随机图片（气泡图片模式）
+      if (settings.pet_click_talk_enabled !== false && speechBubble?.hidden) {
+        showClickTalk()
+      }
     }
     // 拖动/点击结束：强制刷新一次气泡与锁定锚点位置（拖动中走节流，收尾必须精确）
     updateSpeechBubblePosition(true)
@@ -3176,11 +3132,10 @@
     scheduleIdleTalk()
     // A7：初始化角色图库（数据在首次打开时才拉，不占用启动时间）
     initGallery()
-    // A组：随机图片 + 气泡皮肤/模块化泡泡（配置在 Mio「泡泡」页，settings 下发热应用）
+    // A组：随机图片（点击互动素材池）+ 气泡皮肤（配置在 Mio「泡泡」页，settings 下发热应用）
     try {
       window.__mioPetRandomImage && window.__mioPetRandomImage.mount(root)
       window.__mioPetBubbleStyles && window.__mioPetBubbleStyles.apply(speechBubble)
-      window.__mioPetBubbleModules && window.__mioPetBubbleModules.init()
     } catch (_) {}
   }
 
@@ -3331,15 +3286,6 @@
       parts.push(`${st.name || id}·${PHASE_LABELS[p] || p}`)
     })
     return parts.join(' / ')
-  }
-  // 泡泡模块卡片上的本地变更（拖动排版/✕隐藏）回写 settings（泡泡工坊同源）
-  window.__mioPetPersistModules = (cfg) => {
-    try {
-      request('/api/companion/settings', {
-        method: 'PATCH',
-        body: JSON.stringify({ live2d_bubble_modules: (cfg && cfg.modules) || {} }),
-      }).catch(() => {})
-    } catch (_) {}
   }
 
   start().catch((error) => {

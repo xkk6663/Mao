@@ -200,9 +200,9 @@ class CompanionSettingsRequest(BaseModel):
     live2d_disable_gpu: bool = False
     live2d_motion_slots: dict[str, dict[str, str]] = Field(default_factory=dict)
     live2d_expression_slots: dict[str, dict[str, str]] = Field(default_factory=dict)
-    # 泡泡工坊：说话气泡皮肤 + 模块化泡泡配置（Mio「泡泡」页管理，桌宠热应用）
+    # 泡泡工坊：说话气泡皮肤 + 点击互动开关（Mio「泡泡」页管理，桌宠热应用）
     live2d_bubble_style: str = Field(default="default", max_length=40)
-    live2d_bubble_modules: dict = Field(default_factory=dict)
+    pet_click_talk_enabled: bool = True
     # A 档：桌宠"生命感"设置。
     # ⚠️ 本模型就是**写入白名单**：未在此声明的键会被 model_dump(exclude_unset=True)
     # 静默丢弃（读得到、写不进，表现为"改了没反应"）。新增桌宠设置必须同时改

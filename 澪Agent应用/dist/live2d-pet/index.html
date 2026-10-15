@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Mio Live2D 桌宠</title>
-    <link rel="stylesheet" href="./live2d-pet.css?v=20261015-a9" />
+    <link rel="stylesheet" href="./live2d-pet.css?v=20261015-a12" />
   </head>
   <body>
     <main id="pet-root" aria-label="Mio Live2D 桌宠">
@@ -17,6 +17,7 @@
       <div id="activity-indicator" class="activity-indicator" title="Mio 当前状态"></div>
       <section id="speech-bubble" class="speech-bubble" aria-live="polite" hidden>
         <span id="speech-bubble-text"></span>
+        <img id="speech-bubble-img" class="speech-bubble-img" alt="" hidden />
       </section>
       <nav id="context-menu" class="context-menu" hidden>
         <button type="button" data-action="chat">打开/关闭对话窗口</button>
@@ -47,9 +48,8 @@
     <!-- A组 渲染增强：随机图片池 + 泡泡图库（气泡皮肤） + 模块化泡泡系统（6 类模块） -->
     <script src="./pet-random-image.js?v=20261015-a9"></script>
     <script src="./pet-bubble-styles.js?v=20261015-a9"></script>
-    <script src="./pet-bubble-modules.js?v=20261015-a9"></script>
     <script src="./xiaozhi-plugin.js?v=20261015-plugin"></script>
-    <script src="./live2d-pet.js?v=20261015-a11"></script>
+    <script src="./live2d-pet.js?v=20261015-a12"></script>
     <script src="./pet-xz-audio.js?v=20261015-plugin"></script>
   </body>
 </html>

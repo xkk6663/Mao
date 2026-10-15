@@ -65,9 +65,6 @@ let rendererInteractive = false
 let chatWindowOpen = false
 let modelBounds = null
 let uiOpen = false
-// 常驻可交互 UI 矩形（模块卡片/图库面板/图片泡泡，窗口坐标）：渲染层 500ms 上报，
-// 穿透策略用"光标是否落在任一矩形内"判定——面板类走 uiOpen，常驻元素走这里。
-let uiBounds = []
 let mousePolicyTimer = null
 let lastIgnoreMouseEvents = null
 // 插件化：xiaozhi agent enabled 状态（由渲染层 IPC 同步），未启用时禁用所有小智入口
@@ -473,20 +470,7 @@ function applyMainWindowMousePolicy() {
     && pt.x >= wb.x + modelBounds.x && pt.x <= wb.x + modelBounds.x + modelBounds.width
     && pt.y >= wb.y + modelBounds.y && pt.y <= wb.y + modelBounds.y + modelBounds.height
   const inWindow = pt.x >= wb.x && pt.x <= wb.x + wb.width && pt.y >= wb.y && pt.y <= wb.y + wb.height
-  // 常驻可交互 UI（模块卡片等）：光标落在任一上报矩形内即保持可交互。
-  // 这些元素不是"面板"（不会开 uiOpen），但必须可点/可拖——否则又是看得到点不着。
-  let inUiRect = false
-  if (Array.isArray(uiBounds) && uiBounds.length) {
-    for (const r of uiBounds) {
-      if (!r || !Number.isFinite(r.x) || !Number.isFinite(r.width)) continue
-      if (pt.x >= wb.x + r.x && pt.x <= wb.x + r.x + r.width
-        && pt.y >= wb.y + r.y && pt.y <= wb.y + r.y + r.height) {
-        inUiRect = true
-        break
-      }
-    }
-  }
-  setMainWindowIgnoreMouseEvents(!(inModel || rendererInteractive || inUiRect || (uiOpen && inWindow)))
+  setMainWindowIgnoreMouseEvents(!(inModel || rendererInteractive || (uiOpen && inWindow)))
 }
 
 // 全局鼠标位置推送（渲染层坐标 = 屏幕坐标 - 虚拟边界原点）：
@@ -881,7 +865,7 @@ function createWindow() {
   setMouseInteractive(false)
   try { mainWindow.webContents.session.clearCache() } catch (_e) {}
   try { mainWindow.webContents.session.setCacheSizeLimit(0) } catch (_e) {}
-  mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron&v=20261015-windowstable`)
+  mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron&v=20261015-windowstable2`)
   log('window.load', `${API_BASE}/agent-app/live2d-pet/index.html`)
   // 主进程轮询鼠标位置驱动穿透/交互（不依赖渲染层 forward 转发）
   // 60ms ≈ 16Hz：穿透策略与视线跟随共用，兼顾响应度与开销
@@ -970,10 +954,6 @@ function registerIpc() {
   })
   ipcMain.on('mio-desktop:ui-open', (_event, open) => {
     uiOpen = Boolean(open)
-  })
-  ipcMain.on('mio-desktop:ui-bounds', (_event, rects) => {
-    uiBounds = Array.isArray(rects) ? rects : []
-    applyMainWindowMousePolicy()
   })
   ipcMain.on('mio-desktop:set-click-through-locked', (_event, enabled) => {
     setClickThroughLocked(Boolean(enabled), false)

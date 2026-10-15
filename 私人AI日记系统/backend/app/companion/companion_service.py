@@ -108,9 +108,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "live2d_disable_gpu": False,
     "live2d_motion_slots": {},
     "live2d_expression_slots": {},
-    # 泡泡工坊：气泡皮肤 id + 模块化泡泡配置（开关/位置/配色/文本/倒计时目标）
+    # 泡泡工坊：气泡皮肤 id + 点击互动（点桌宠随机语句/图片，复用说话气泡）
     "live2d_bubble_style": "default",
-    "live2d_bubble_modules": {},
+    "pet_click_talk_enabled": True,
     # ---- A 档：桌宠"生命感"设置（自带默认值，缺省即开箱可用）----
     # 音效：按压/释放/切换 Agent 等交互反馈音（0-100 音量，总开关独立）
     "pet_sound_enabled": True,

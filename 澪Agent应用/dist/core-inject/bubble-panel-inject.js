@@ -31,20 +31,11 @@
     { id: 'comic', name: '漫画描边', swatch: '#ffffff' },
   ]
 
-  var MODULE_DEFS = [
-    { type: 'status', name: 'Agent 状态', hint: '跨 Agent 总线实时状态（12 态）' },
-    { type: 'quote', name: '随机语句', hint: '来自桌宠空闲自语内容池' },
-    { type: 'image', name: '随机图片', hint: '来自下方素材库' },
-    { type: 'text', name: '自定义文本', hint: '显示一段固定文字' },
-    { type: 'clock', name: '时钟', hint: '时间与日期' },
-    { type: 'countdown', name: '倒计时', hint: '设定目标时间，到点提醒' },
-  ]
-  var ACCENTS = ['#4f6bed', '#e8618c', '#3aa675', '#e8973a', '#7a5fd0', '#2d4148']
 
   var panel = null
   var navBtn = null
   var pollTimer = null
-  var modules = {}        // 本地编辑副本（保存时整包 PATCH）
+  var clickTalk = true    // 点击互动开关（点桌宠随机语句/图片）
   var styleId = 'default'
   var images = []
 
@@ -146,29 +137,14 @@
       '<div style="margin-top:9px;font-size:10px;color:var(--muted,#687984);">插件身份色（如 DSH 蓝）优先于皮肤——气泡颜色跟"谁在说话"走。</div>')
   }
 
-  function renderModules() {
-    var rows = MODULE_DEFS.map(function (m) {
-      var cfg = modules[m.type] || {}
-      var checked = !!cfg.enabled
-      var accent = cfg.accent || ACCENTS[0]
-      var row = '<div style="display:flex;align-items:center;gap:9px;padding:7px 9px;border:1px solid var(--line,#d9e2e6);border-radius:9px;background:var(--surface,#fff);flex-wrap:wrap;">' +
-        '<input type="checkbox" data-mod="' + m.type + '"' + (checked ? ' checked' : '') + ' style="flex:none;" />' +
-        '<label style="flex:1;min-width:110px;display:flex;flex-direction:column;cursor:pointer;">' +
-          '<strong style="font-size:12px;">' + m.name + '</strong>' +
-          '<small style="font-size:10px;color:var(--muted,#687984);">' + m.hint + '</small></label>' +
-        '<button type="button" data-mod-accent="' + m.type + '" title="换颜色" style="flex:none;width:18px;height:18px;border-radius:50%;border:1px solid #94a7ad;background:' + accent + ';cursor:pointer;"></button>'
-      if (m.type === 'text') {
-        row += '<input type="text" data-mod-text maxlength="120" placeholder="写点什么…" value="' + String(cfg.text || '').replace(/"/g, '&quot;') + '" style="flex:1 1 100%;min-height:24px;padding:0 8px;border:1px solid #d5e0e3;border-radius:6px;font-size:11px;" />'
-      }
-      if (m.type === 'countdown') {
-        row += '<input type="datetime-local" data-mod-target value="' + String(cfg.target || '') + '" style="flex:1 1 100%;min-height:24px;padding:0 8px;border:1px solid #d5e0e3;border-radius:6px;font-size:11px;" />'
-      }
-      row += '</div>'
-      return row
-    }).join('')
-    return card('模块化泡泡',
-      '<div style="display:flex;flex-direction:column;gap:7px;">' + rows + '</div>' +
-      '<div style="margin-top:9px;font-size:10px;color:var(--muted,#687984);">开关/编辑即时保存；拖动卡片排版在桌宠上直接进行（双击卡片复位）。</div>')
+  function renderClickTalk() {
+    return card('点击互动',
+      '<div style="display:flex;align-items:center;gap:9px;padding:7px 9px;border:1px solid var(--line,#d9e2e6);border-radius:9px;background:var(--surface,#fff);">' +
+        '<input type="checkbox" id="bpClickTalk"' + (clickTalk ? ' checked' : '') + ' style="flex:none;" />' +
+        '<label for="bpClickTalk" style="flex:1;display:flex;flex-direction:column;cursor:pointer;">' +
+          '<strong style="font-size:12px;">点击桌宠时随机互动</strong>' +
+          '<small style="font-size:10px;color:var(--muted,#687984);">点一下桌宠：素材库有图时约 45% 概率出随机图片，否则说一句随机语句——都显示在说话气泡框里</small></label>' +
+      '</div>')
   }
 
   function renderImages() {
@@ -192,7 +168,7 @@
   function renderAll(settings) {
     var body = $q('#bpBody', panel)
     if (!body) return
-    body.innerHTML = renderStyles() + renderModules() + renderImages()
+    body.innerHTML = renderStyles() + renderClickTalk() + renderImages()
     bindAll()
   }
 
@@ -210,39 +186,13 @@
       })
     })
 
-    body.querySelectorAll('input[data-mod]').forEach(function (cb) {
-      cb.addEventListener('change', function () {
-        var type = cb.getAttribute('data-mod')
-        if (!modules[type]) modules[type] = {}
-        modules[type].enabled = cb.checked
-        saveSettings({ live2d_bubble_modules: modules }, (cb.checked ? '已开启 ' : '已关闭 ') + type)
+    var clickCb = $q('#bpClickTalk', body)
+    if (clickCb) {
+      clickCb.addEventListener('change', function () {
+        clickTalk = clickCb.checked
+        saveSettings({ pet_click_talk_enabled: clickTalk }, clickTalk ? '点击互动已开启' : '点击互动已关闭')
       })
-    })
-    body.querySelectorAll('[data-mod-accent]').forEach(function (btn) {
-      btn.addEventListener('click', function (e) {
-        e.stopPropagation()
-        var type = btn.getAttribute('data-mod-accent')
-        var cfg = modules[type] || (modules[type] = {})
-        var i = ACCENTS.indexOf(cfg.accent)
-        cfg.accent = ACCENTS[(i + 1) % ACCENTS.length]
-        btn.style.background = cfg.accent
-        saveSettings({ live2d_bubble_modules: modules }, '配色已更新')
-      })
-    })
-    body.querySelectorAll('[data-mod-text]').forEach(function (input) {
-      input.addEventListener('change', function () {
-        if (!modules.text) modules.text = {}
-        modules.text.text = input.value
-        saveSettings({ live2d_bubble_modules: modules }, '文本已保存')
-      })
-    })
-    body.querySelectorAll('[data-mod-target]').forEach(function (input) {
-      input.addEventListener('change', function () {
-        if (!modules.countdown) modules.countdown = {}
-        modules.countdown.target = input.value
-        saveSettings({ live2d_bubble_modules: modules }, '倒计时已保存')
-      })
-    })
+    }
 
     var upBtn = $q('#bpUploadBtn', body)
     var upFile = $q('#bpUploadFile', body)
@@ -307,8 +257,7 @@
       if (!panel || panel.style.display === 'none') return
       var st = (res[0] && res[0].pet && res[0].pet.settings) || {}
       styleId = String(st.live2d_bubble_style || 'default')
-      var raw = st.live2d_bubble_modules
-      modules = (raw && typeof raw === 'object' && raw.modules) ? JSON.parse(JSON.stringify(raw.modules)) : {}
+      clickTalk = st.pet_click_talk_enabled !== false
       images = (res[1] && res[1].images) || []
       renderAll(st)
       var sub = $q('#bpSub', panel)
