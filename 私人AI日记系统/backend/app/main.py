@@ -9,21 +9,20 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import (
-    agent_bus_service,
-    agent_task_service,
     companion_service,
     creation_service,
     db,
-    dsh_adapter,
     maintenance_service,
     migration_service,
-    octop_adapter,
     onboarding_service,
     pet_event_service,
     runtime_diagnostics,
     screen_observation_service,
     subservice_health,
 )
+from .kernel import agent_bus_service, agent_task_service
+from .agents.dsh import dsh_adapter
+from .agents.octop import octop_adapter
 from . import model_runtime
 from .runtime_identity import runtime_identity
 from .config import settings

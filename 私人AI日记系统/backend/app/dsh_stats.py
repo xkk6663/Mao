@@ -15,7 +15,7 @@ from __future__ import annotations
 import sys
 from collections import Counter
 
-from . import dsh_adapter as dsh
+from .agents.dsh import dsh_adapter as dsh
 
 
 def main() -> int:

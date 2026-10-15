@@ -327,7 +327,7 @@ async def generate_today_diary_payload() -> dict[str, str]:
 
 @operation("record", automatic=True)
 async def generate_diary_for_date_payload(date: str, overwrite: bool = True) -> dict[str, str]:
-    from ..agent_task_service import automatic_work_paused
+    from ..kernel.agent_task_service import automatic_work_paused
     if automatic_work_paused():
         raise HTTPException(status_code=409, detail="隐私暂停中，日记生成已停止。")
     date = normalize_diary_date(date)

@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 
 from . import db, system_audio_service
 from .model_runtime import operation
-from .agent_loop_service import (
+from .kernel.agent_loop_service import (
     AgentLoopResult,
     CREATION_GENERATION_TOOLS,
     begin_final_response,
@@ -808,7 +808,7 @@ async def _complete_chat_reply(
     async def invoke(messages, **kwargs):
         if agent_execution is None:
             return await call_chat_completion_result(messages, **kwargs)
-        from .agent_loop_service import final_model_call
+        from .kernel.agent_loop_service import final_model_call
         return await final_model_call(agent_execution, call_chat_completion_result, messages, **kwargs)
 
     completion = await invoke(
@@ -1634,8 +1634,8 @@ async def _chat_with_ai_unlocked(
         if handoff_enabled and completion.tool_calls:
             handoff_call = next((item for item in completion.tool_calls if item.name == "handoff_to_agent"), None)
             if handoff_call is not None:
-                from .agent_handoff_service import create_handoff
-                from .agent_tool_service import ToolExecutionContext
+                from .kernel.agent_handoff_service import create_handoff
+                from .kernel.agent_tool_service import ToolExecutionContext
                 handoff_info = create_handoff(
                     json.loads(handoff_call.arguments_json),
                     ToolExecutionContext(

@@ -30,7 +30,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from . import dsh_adapter as dsh
+from .agents.dsh import dsh_adapter as dsh
 
 OUT = Path(__file__).with_name("dsh_events_fixture.json")
 

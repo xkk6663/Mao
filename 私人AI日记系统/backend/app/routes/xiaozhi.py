@@ -781,7 +781,7 @@ _load_chat_history()
 def _xz_register() -> None:
     """把"小智"注册进跨 Agent 总线（桌宠是跨 Agent 的"脸"，小智是语音主通道）。"""
     try:
-        from .. import agent_bus_service as _abs
+        from ..kernel import agent_bus_service as _abs
         _abs.register(
             "xiaozhi",
             "小智",
@@ -795,7 +795,7 @@ def _xz_register() -> None:
 def _xz_emit(phase: str, **state) -> None:
     """小智适配器 → 统一总线：把官方云事件翻译成标准 phase（有就翻译，丢异常不中断链路）。"""
     try:
-        from .. import agent_bus_service as _abs
+        from ..kernel import agent_bus_service as _abs
         _abs.heartbeat("xiaozhi")
         _abs.emit("xiaozhi", phase, state=state or None, meta={"source": "xiaozhi"})
     except Exception:  # noqa: BLE001
@@ -805,7 +805,7 @@ def _xz_emit(phase: str, **state) -> None:
 def _xz_status(status: str, *, error: str | None = None) -> None:
     """上报小智状态到总线。error=None 保留旧值；传空串清除（重连成功时）。"""
     try:
-        from .. import agent_bus_service as _abs
+        from ..kernel import agent_bus_service as _abs
         _abs.set_status("xiaozhi", status, error=error)
     except Exception:  # noqa: BLE001
         pass

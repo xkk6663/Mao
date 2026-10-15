@@ -558,7 +558,7 @@ def create_job(
             ),
         )
         if parent_job_id:
-            from .agent_task_service import attach_retry
+            from .kernel.agent_task_service import attach_retry
             attach_retry(conn, parent_job_id, job_id)
     if not needs_confirmation:
         schedule_job(job_id)
@@ -1116,7 +1116,7 @@ async def _run_comfy_job_inner(
             if prompt_id:
                 history = await _monitor_comfy_job(client, job_id, client_id, prompt_id)
                 current = _get_job_row(job_id) or {}
-                from .agent_task_service import automatic_work_paused
+                from .kernel.agent_task_service import automatic_work_paused
                 if (current.get('status') in {'cancel_requested', 'cancelled', 'unknown'}
                         or automatic_work_paused() or db.conversation_deleted(str(row.get('conversation_id') or ''))):
                     _update_job(job_id, status='cancelled', stage='late_result_discarded', finished_at=db.now_iso())
@@ -1155,7 +1155,7 @@ async def _run_comfy_job_inner(
             _update_job(job_id, status="queued", stage="queued", progress=0.08, prompt_id=prompt_id)
             history = await _monitor_comfy_job(client, job_id, client_id, prompt_id)
             current = _get_job_row(job_id) or {}
-            from .agent_task_service import automatic_work_paused
+            from .kernel.agent_task_service import automatic_work_paused
             if (current.get('status') in {'cancel_requested', 'cancelled', 'unknown'}
                     or automatic_work_paused() or db.conversation_deleted(str(row.get('conversation_id') or ''))):
                 _update_job(job_id, status='cancelled', stage='late_result_discarded', finished_at=db.now_iso())
@@ -1460,7 +1460,7 @@ async def _run_remote_job(job_id: str, row: Mapping[str, Any]) -> None:
         timeout=settings.creation_image_timeout_seconds,
     )
     current = _get_job_row(job_id) or {}
-    from .agent_task_service import automatic_work_paused
+    from .kernel.agent_task_service import automatic_work_paused
     if (current.get("status") in {"cancel_requested", "cancelled", "unknown"}
             or automatic_work_paused() or db.conversation_deleted(str(row.get("conversation_id") or ""))):
         _mark_remote_unknown(job_id, "本地停止后收到迟到响应，未发布输出或恢复任务；请核对供应商记录。")

@@ -80,7 +80,7 @@ async def get_work(task_id: str):
 
 @router.get("/handoff/source/{conversation_id}")
 async def get_source_handoff(conversation_id: str):
-    from ..agent_handoff_service import latest_handoff
+    from ..kernel.agent_handoff_service import latest_handoff
     return {"handoff": latest_handoff(conversation_id)}
 
 

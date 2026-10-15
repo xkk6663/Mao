@@ -60,7 +60,7 @@ async def rename_conversation(conversation_id: str, payload: ConversationUpdateR
 async def delete_conversation(conversation_id: str):
     if not conversation_id.startswith("desktop_"):
         raise HTTPException(status_code=400, detail="QQ 共享对话不能删除。")
-    from .. import agent_task_service, creation_service
+    from ..kernel import agent_task_service, creation_service
     # Persist the gate before the first await so late writers cannot recreate messages.
     with db.get_conn() as conn:
         if conn.execute("SELECT 1 FROM agent_conversations WHERE id=?", (conversation_id,)).fetchone() is None:

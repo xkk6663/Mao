@@ -1078,7 +1078,7 @@ async def execute_companion_actions(
 
 
 async def approve_companion_action(action_id: int) -> dict[str, str]:
-    from . import agent_task_service as tasks
+    from .kernel import agent_task_service as tasks
     tasks.initialize()
     with db.get_conn() as conn:
         conn.execute("BEGIN IMMEDIATE")

@@ -19,12 +19,10 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .. import (
-    agent_bus_service,
     audio_diag,
     call_session_service,
     companion_service,
     db,
-    dsh_adapter,
     local_vision_service,
     pet_event_service,
     route_observation_service,
@@ -32,6 +30,8 @@ from .. import (
     system_audio_service,
     window_topology_service,
 )
+from ..kernel import agent_bus_service
+from ..agents.dsh import dsh_adapter
 from ..auto_router import AutoRoute, build_task_profile, select_auto_route
 from ..chat_idempotency import (
     claim_request,
@@ -40,7 +40,7 @@ from ..chat_idempotency import (
     pending_error,
     request_fingerprint,
 )
-from ..agent_loop_service import abandon_deferred_final_response
+from ..kernel.agent_loop_service import abandon_deferred_final_response
 from ..chat_service import chat_with_ai, persist_generated_chat_result
 from ..conversation_runtime import ChatRunCancelledError, chat_run_coordinator
 from ..config import settings

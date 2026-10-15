@@ -106,7 +106,7 @@ def _record_check(target_date: str, result: str, error: str = "") -> None:
 
 async def run_daily_diary_once(now: datetime | None = None, *, force: bool = False) -> int:
     global _active, _retry_at, _failures, _retry_signature
-    from .agent_task_service import automatic_work_paused
+    from .kernel.agent_task_service import automatic_work_paused
     current = now or _now()
     date = _target_date(current)
     if _active is not None:

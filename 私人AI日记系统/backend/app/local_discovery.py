@@ -10,7 +10,7 @@ from pathlib import Path
 import stat
 import time
 
-from . import agent_file_service as files, creation_custom
+from .kernel import agent_file_service as files, creation_custom
 from .config import settings
 
 SKIP = {'.git', 'node_modules', '__pycache__', '.venv', 'venv', 'models', 'python', 'python_embeded', 'python_embedded'}

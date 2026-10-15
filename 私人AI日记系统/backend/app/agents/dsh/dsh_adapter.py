@@ -97,7 +97,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from . import agent_bus_service
+from ...kernel import agent_bus_service
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +169,7 @@ def config_search_paths() -> list[Path]:
     与 ``agent_bus_config.json`` 同级）和 ``settings.workspace_root``（仓库根，
     ``README.md`` / ``xiaozhi_device.json`` 所在）。两种叫法都有人用，故两处都找。
     """
-    from .config import settings
+    from ...config import settings
 
     paths: list[Path] = []
     for base in (

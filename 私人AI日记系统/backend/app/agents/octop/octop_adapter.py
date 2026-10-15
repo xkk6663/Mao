@@ -25,7 +25,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from . import agent_bus_service
+from ...kernel import agent_bus_service
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ DEFAULT_OCTOP_BASE_URL = os.environ.get("MAO_OCTOP_URL", "http://127.0.0.1:8000"
 
 
 def octop_config_path() -> Path:
-    from .config import settings
+    from ...config import settings
     return settings.project_root / "octop_config.json"
 
 

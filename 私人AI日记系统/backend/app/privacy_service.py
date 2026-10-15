@@ -205,7 +205,7 @@ async def pause_sensitive_capabilities() -> dict[str, Any]:
     run("screen_session", screen_observation_service.end_session)
     run("system_audio", system_audio_service.stop)
     run("autonomy_policy", lambda: autonomy_service.update_policy({"paused": True}))
-    from . import agent_task_service, monthly_review_service, daily_diary_service, model_runtime
+    from .kernel import agent_task_service, monthly_review_service, daily_diary_service, model_runtime
     for action, callback in (
         ("model_operations", lambda: model_runtime.cancel_operations(automatic_only=True, reason="privacy")),
         ("agent_tasks", lambda: agent_task_service.stop_tasks(stop_linked_jobs=True)),

@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Deque
 
-from . import pet_event_service
+from .. import pet_event_service
 
 # ---------------------------------------------------------------------------
 # 统一 phase 枚举（10 基础 + 2 扩展）

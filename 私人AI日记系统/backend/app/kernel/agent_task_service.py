@@ -9,8 +9,8 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
-from . import db
-from .model_runtime import operation
+from .. import db
+from ..model_runtime import operation
 
 
 TERMINAL = {"completed", "cancelled"}
@@ -55,7 +55,7 @@ def _public(row) -> dict[str, Any] | None:
     item = dict(row)
     for key in ("snapshot", "allowed_tools", "context", "waiting_jobs"):
         item[key] = json.loads(item.pop(key + "_json"))
-    from .creation_service import current_attempt
+    from ..creation_service import current_attempt
     item['waiting_jobs'] = list(dict.fromkeys((current_attempt(job_id) or {'id': job_id})['id'] for job_id in item['waiting_jobs']))
     return item
 
@@ -185,7 +185,7 @@ def observations(task_id: str) -> list[dict]:
             payload = {}
         result.append({"tool_name": row["tool_name"], "status": row["status"], "result": payload,
                        "error": row["error"], "step_id": row["id"], "action_id": row["action_id"]})
-    from .creation_service import current_attempt
+    from ..creation_service import current_attempt
     for item in result:
         job = item["result"].get("job", {})
         if job.get("id"):
@@ -229,7 +229,7 @@ async def pause(task_id: str, *, cancel_jobs: bool = False, stop_linked_jobs: bo
             conn.execute(f"UPDATE agent_run_steps SET status='cancelled' WHERE run_id IN ({run_ids}) AND status IN ('needs_confirmation','running')", (task_id,))
             conn.execute(f"UPDATE tool_execution_receipts SET status='cancelled' WHERE agent_run_id IN ({run_ids}) AND status IN ('needs_confirmation','running')", (task_id,))
     if cancel_jobs or stop_linked_jobs:
-        from . import creation_service
+        from .. import creation_service
         job_ids = set(task["waiting_jobs"])
         for item in observations(task_id):
             job = item["result"].get("job", {})
@@ -248,7 +248,7 @@ def resume(task_id: str) -> dict[str, Any]:
         raise ValueError("已完成或取消的任务不能继续，请创建新任务。")
     if task_id in _active and not _active[task_id].done():
         return task
-    from .creation_service import current_attempt, TERMINAL_STATUSES
+    from ..creation_service import current_attempt, TERMINAL_STATUSES
     jobs = [current_attempt(job_id) for job_id in task['waiting_jobs']]
     if any(job and job['status'] == 'unknown' for job in jobs):
         raise ValueError('关联生成结果仍未知，请先核对回执；不要通过继续任务重复生成。')
@@ -299,7 +299,7 @@ def ready_to_continue(task: dict[str, Any]) -> bool:
     if last is not None and last["status"] not in {"completed", "failed", "interrupted", "awaiting_response"}:
         return False
     items = observations(task["id"])
-    from .creation_service import current_attempt, TERMINAL_STATUSES
+    from ..creation_service import current_attempt, TERMINAL_STATUSES
     jobs = [current_attempt(job_id) for job_id in task["waiting_jobs"]]
     if any(job and job["status"] == "unknown" for job in jobs):
         update(task["id"], status="waiting_user", snapshot={
@@ -315,8 +315,8 @@ def ready_to_continue(task: dict[str, Any]) -> bool:
 @operation("agent", automatic=True)
 async def continue_task(task_id: str) -> None:
     from .agent_loop_service import run_agent_loop, begin_final_response, finish_final_response, final_model_call
-    from .llm import call_chat_completion_result
-    from .chat_service import clean_chat_reply, _guard_agent_creation_completion_claim
+    from ..llm import call_chat_completion_result
+    from ..chat_service import clean_chat_reply, _guard_agent_creation_completion_claim
 
     task = get(task_id)
     if automatic_work_paused() or task is None or task["status"] not in {"ready", *WAITING}:
@@ -361,7 +361,7 @@ async def continue_task(task_id: str) -> None:
 
 
 def automatic_work_paused() -> bool:
-    from .privacy_service import _load_state
+    from ..privacy_service import _load_state
     state = _load_state()
     return bool(state.get("paused") or state.get("transition") in {"pausing", "pause_incomplete", "resume_incomplete", "state_uncertain"})
 

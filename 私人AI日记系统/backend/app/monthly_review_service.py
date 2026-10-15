@@ -106,7 +106,7 @@ async def cancel_active() -> None:
 
 @operation("record", automatic=True)
 async def generate_monthly_review(month: str, overwrite: bool = True) -> MonthlyReviewResult:
-    from .agent_task_service import automatic_work_paused
+    from .kernel.agent_task_service import automatic_work_paused
     if automatic_work_paused():
         raise ValueError("敏感能力已暂停，月记生成已停止。")
     task = asyncio.create_task(_generate_monthly_review(month, overwrite))
@@ -169,7 +169,7 @@ async def _notify_monthly_review_ready(month: str) -> None:
 
 
 async def run_monthly_review_once(now: datetime | None = None) -> int:
-    from .agent_task_service import automatic_work_paused
+    from .kernel.agent_task_service import automatic_work_paused
     if automatic_work_paused() or not settings.monthly_review_enabled:
         return 0
     current = now or _now()

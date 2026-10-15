@@ -15,8 +15,8 @@ from urllib.parse import quote
 from docx import Document
 import pypdfium2
 
-from . import db
-from .config import settings
+from .. import db
+from ..config import settings
 
 TEXT = {".txt", ".md", ".json", ".csv", ".tsv", ".yaml", ".yml"}
 READABLE = TEXT | {".docx", ".pdf", ".png", ".jpg", ".jpeg", ".webp", ".mp4", ".webm", ".mov"}
@@ -156,7 +156,7 @@ def write_document(name: str, content: str, task_id: str) -> dict:
     verified = read_document(str(output), max_chars=300)
     if verified["sha256"] != digest:
         raise ValueError("输出文件内容校验失败。")
-    from . import artifact_service
+    from .. import artifact_service
     artifact = artifact_service.import_file(output, source_root=directory, producer="agent_document",
         expected_sha256=digest, task_id=task_id, name=name)
     return {"path": str(output), "name": output.name, "size": output.stat().st_size,

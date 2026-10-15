@@ -6,10 +6,11 @@ import json
 import uuid
 from contextlib import closing
 
-from . import db, agent_task_service as tasks
+from .. import db
+from . import agent_task_service as tasks
 from .agent_tool_service import ToolExecutionContext
-from .model_runtime import model_selection
-from .tool_registry import tool_registry
+from ..model_runtime import model_selection
+from ..tool_registry import tool_registry
 
 
 def create_handoff(arguments: dict, context: ToolExecutionContext, *, conversation_context: list[dict] | None = None) -> dict[str, object]:

@@ -10,19 +10,19 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from . import db
-from .model_runtime import operation, bind_task
+from .. import db
+from ..model_runtime import operation, bind_task
 from .agent_tool_service import (
     ToolExecutionContext,
     ToolExecutionResult,
     execute_tool_call,
     tool_availability,
 )
-from .companion_action_service import ALLOWED_ACTION_TYPES, enrich_companion_actions
-from .creation_lora_catalog import IMAGE_LORA_CATALOG
-from .llm import CompletionResult, ModelRequestError, ToolCall, call_chat_completion_result
-from .tool_registry import ToolPermission, tool_registry
-from .web_search_service import WebLookup
+from ..companion_action_service import ALLOWED_ACTION_TYPES, enrich_companion_actions
+from ..creation_lora_catalog import IMAGE_LORA_CATALOG
+from ..llm import CompletionResult, ModelRequestError, ToolCall, call_chat_completion_result
+from ..tool_registry import ToolPermission, tool_registry
+from ..web_search_service import WebLookup
 
 
 logger = logging.getLogger("mio.agent_loop")
@@ -65,7 +65,7 @@ def _normalize_short_reply(value: str) -> str:
 def _latest_creation_job(conversation_id: str) -> dict[str, Any] | None:
     if not conversation_id.startswith("desktop_agent_"):
         return None
-    from .creation_service import get_job
+    from ..creation_service import get_job
 
     with db.get_conn() as conn:
         row = conn.execute(
@@ -153,7 +153,7 @@ def _continuation_message(user_message: str, job: dict[str, Any]) -> str:
     }
     if target_label == "视频" and str(job.get("media_type")) == "image":
         try:
-            from .creation_service import save_job_output_as_asset
+            from ..creation_service import save_job_output_as_asset
 
             asset = save_job_output_as_asset(str(job.get("id") or ""))
         except (OSError, ValueError):
@@ -288,7 +288,7 @@ def _creation_preflight_calls(
         and video_definition.has_explicit_intent(str(user_message or ""))
     )
     local_tool = "comfyui_generate_video" if wants_video else "comfyui_generate_image"
-    from .creation_custom import default_ids
+    from ..creation_custom import default_ids
     selected_workflow = default_ids()["video_workflow_id" if wants_video else "image_workflow_id"]
     if not wants_video and selected_workflow == "anima-2.9b-image" and (
         allowed_tool_names is None or "creation_list_loras" in allowed_tool_names
@@ -458,7 +458,7 @@ def _inherit_continuation_arguments(
             arguments["character_preset_id"] = spec["character_preset_id"]
         if call.name == "comfyui_generate_video" and not arguments.get("reference_asset_id"):
             try:
-                from .creation_service import save_job_output_as_asset
+                from ..creation_service import save_job_output_as_asset
 
                 asset = save_job_output_as_asset(str(base.get("id") or ""))
             except (OSError, ValueError):
@@ -483,7 +483,7 @@ def _fallback_image_lora_choices(prompt: str) -> list[str]:
 
 
 def _uses_anima(arguments: dict[str, Any]) -> bool:
-    from .creation_custom import default_ids
+    from ..creation_custom import default_ids
     return (arguments.get("workflow_id") or default_ids()["image_workflow_id"]) == "anima-2.9b-image"
 
 
@@ -654,7 +654,7 @@ def source_context_messages(context_snapshot: list[dict]) -> list[dict]:
 
 
 def _planner_history(conversation_id: str, source_message_id: int) -> str:
-    from .context_service import _rows_by_recent_user_turns, _trim_turn_rows_to_token_budget
+    from ..context_service import _rows_by_recent_user_turns, _trim_turn_rows_to_token_budget
     rows = _trim_turn_rows_to_token_budget(_rows_by_recent_user_turns(
         list(db.get_recent_messages(limit=160, conversation_id=conversation_id)), 12), 6000)
     lines: list[str] = []
@@ -967,7 +967,7 @@ async def run_agent_loop(
     context_snapshot: list[dict] | None = None,
     task_id: str = "",
 ) -> AgentLoopResult:
-    from . import agent_task_service as tasks
+    from .. import agent_task_service as tasks
 
     run_id = _run_id(request_id)
     if tasks.automatic_work_paused():
@@ -1224,8 +1224,8 @@ async def run_agent_loop(
 
 @operation("agent")
 async def final_model_call(agent: AgentLoopResult, callback, messages, **kwargs):
-    from . import agent_task_service as tasks
-    from .llm import CompletionResult
+    from .. import agent_task_service as tasks
+    from ..llm import CompletionResult
     limits = tasks.limits()
     run = db.get_agent_run(agent.run_id)
     task = tasks.get(agent.task_id) if agent.task_id else None
@@ -1243,7 +1243,7 @@ async def final_model_call(agent: AgentLoopResult, callback, messages, **kwargs)
 
 
 def begin_final_response(agent: AgentLoopResult) -> int:
-    from . import agent_task_service as tasks
+    from .. import agent_task_service as tasks
     if agent.task_id:
         tasks.bind(agent.task_id)
         task = tasks.get(agent.task_id)
@@ -1269,7 +1269,7 @@ def finish_final_response(
     error: str = "",
     model_calls: int | None = None,
 ) -> None:
-    from . import agent_task_service as tasks
+    from .. import agent_task_service as tasks
     tasks.unbind(agent.task_id)
     task = tasks.get(agent.task_id) if agent.task_id else None
     if task and task["status"] == "responding":
@@ -1300,7 +1300,7 @@ def finish_final_response(
 
 
 def defer_final_response(agent: AgentLoopResult, step_id: int, *, reply: str) -> None:
-    from . import agent_task_service as tasks
+    from .. import agent_task_service as tasks
     tasks.unbind(agent.task_id)
     run = db.get_agent_run(agent.run_id)
     model_calls = max(0, int(run["model_calls"] or 0) if run is not None else 0)
@@ -1320,7 +1320,7 @@ def defer_final_response(agent: AgentLoopResult, step_id: int, *, reply: str) ->
 
 
 def commit_deferred_final_response(run_id: str, source_message_id: int) -> None:
-    from . import agent_task_service as tasks
+    from .. import agent_task_service as tasks
     task = tasks.for_run(run_id)
     if task and task["status"] in {"cancelled", "paused"}:
         raise ValueError("任务已停止，暂存回复不能提交。")
@@ -1356,7 +1356,7 @@ def commit_deferred_final_response(run_id: str, source_message_id: int) -> None:
 
 
 def cancel_final_response(agent: AgentLoopResult, step_id: int, *, error: str) -> None:
-    from . import agent_task_service as tasks
+    from .. import agent_task_service as tasks
     tasks.unbind(agent.task_id)
     task = tasks.get(agent.task_id) if agent.task_id else None
     if task and task["status"] not in {"cancelled", "paused"}:
@@ -1367,7 +1367,7 @@ def cancel_final_response(agent: AgentLoopResult, step_id: int, *, error: str) -
 
 
 def abandon_deferred_final_response(run_id: str, *, error: str) -> None:
-    from . import agent_task_service as tasks
+    from .. import agent_task_service as tasks
     task = tasks.for_run(run_id)
     if task and task["status"] == "responding":
         tasks.update(task["id"], status="paused")

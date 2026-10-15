@@ -39,7 +39,7 @@ def input_file(*, asset_id: str = "", job_id: str = "", output_index: int = 0, p
     elif job_id:
         source = creation.output_file(job_id, output_index)[0]
     else:
-        from .agent_file_service import resolve_read
+        from .kernel.agent_file_service import resolve_read
         source = resolve_read(path)
     if source.suffix.lower() not in creation.IMAGE_SUFFIXES | creation.VIDEO_SUFFIXES:
         raise ValueError("抠图输入必须是图片或视频。")
@@ -105,7 +105,7 @@ def retry_cutout(row: dict, spec: dict) -> dict:
             (job_id, row["conversation_id"], row["source"], row["media_type"], WORKFLOW_ID,
              json.dumps(clean, ensure_ascii=False), "从原始输入重新抠图，重做全部指定帧，需要确认。",
              f"retry:{row['id']}:{uuid.uuid4().hex}", row["id"], db.now_iso(), db.now_iso()))
-        from .agent_task_service import attach_retry
+        from .kernel.agent_task_service import attach_retry
         attach_retry(conn, row['id'], job_id)
     return creation.get_job(job_id)
 
