@@ -744,6 +744,59 @@ async def companion_live2d_models():
     return {"models": await asyncio.to_thread(companion_service.available_live2d_models)}
 
 
+# ---- 桌宠随机图片池（A组 3.2：把图片放进 bubble-imgs 目录即生效，无需重启）----
+# 目录 = 桌宠数据目录（与 Electron 共享的 Live2D桌宠/）下的 bubble-imgs/。
+# 设计与 whale-widget 的"随机图片"对齐：池子里随机抽、不连续重复；权重先不做
+# （文件名级元数据没有落点，后续需要时再以 <name>.weight.json 扩展）。
+_BUBBLE_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+
+def _bubble_images_dir() -> Path:
+    directory = companion_service.live2d_state_dir() / "bubble-imgs"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+@router.get("/bubble-images")
+async def companion_bubble_images():
+    def _list() -> list[dict[str, object]]:
+        root = _bubble_images_dir().resolve()
+        items: list[dict[str, object]] = []
+        for f in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+            if not f.is_file() or f.suffix.lower() not in _BUBBLE_IMAGE_EXTENSIONS:
+                continue
+            stat = f.stat()
+            items.append(
+                {
+                    "name": f.name,
+                    "url": f"/api/companion/bubble-images/{quote(f.name)}",
+                    "bytes": stat.st_size,
+                    "mtime": int(stat.st_mtime),
+                }
+            )
+        return items
+
+    return {"images": await asyncio.to_thread(_list)}
+
+
+@router.get("/bubble-images/{name}")
+async def companion_bubble_image(name: str):
+    # 安全校验与 live2d_assets 的 _safe_child 同思路：文件名白名单 + 越界拒绝
+    if not name or "/" in name or "\\" in name or name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="文件名无效。")
+    if Path(name).suffix.lower() not in _BUBBLE_IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="不支持的图片格式。")
+    root = _bubble_images_dir().resolve()
+    path = (root / name).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="路径越界。") from exc
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="图片不存在。")
+    return FileResponse(path)
+
+
 # ---- Live2D 模型定时自动更换 ----
 _model_schedule_task: asyncio.Task | None = None
 _model_schedule_lock = asyncio.Lock()

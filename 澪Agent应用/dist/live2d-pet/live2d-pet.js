@@ -1378,6 +1378,20 @@
         }
         const api = window.__mioPetIdleTalk
         if (!api) { scheduleIdleTalk(); return }
+        // A组 随机图片：部分自语轮次改为展示图片泡泡（有池才展示；池子拉取失败回退文本）
+        const imgApi = window.__mioPetRandomImage
+        if (imgApi && settings.pet_random_image_enabled !== false && Math.random() < 0.35) {
+          imgApi.refresh().then((list) => {
+            const shown = Array.isArray(list) && list.length && speechBubble?.hidden
+              ? imgApi.show()
+              : false
+            if (!shown) showSpeechBubble(api.pick(anyAgentBusy()), 0, `idle-talk-${Date.now()}`)
+          }).catch(() => {
+            showSpeechBubble(api.pick(anyAgentBusy()), 0, `idle-talk-${Date.now()}`)
+          })
+          scheduleIdleTalk()
+          return
+        }
         showSpeechBubble(api.pick(anyAgentBusy()), 0, `idle-talk-${Date.now()}`)
       } catch (_) {}
       scheduleIdleTalk()
@@ -1436,6 +1450,8 @@
     if (visible) updateAgentBadgePosition(true)
     // 兼容旧引用（右键菜单重新开启徽标时恢复展示）
     window.__lastAgentBadgeText = chips.map((c) => `${c.name} · ${c.label}`).join('，')
+    // A组 模块化泡泡：status 模块随徽标刷新（徽标本身由状态事件驱动，节流已足够）
+    try { window.__mioPetBubbleModules && window.__mioPetBubbleModules.refreshStatus() } catch (_) {}
   }
 
   // 徽标定位：手动拖动位置优先；否则锚定模型头顶上方居中。锁定时不可交互。
@@ -2868,6 +2884,22 @@
         })
       }
     }
+    if (action === 'bubble-styles') {
+      // A组 泡泡图库：换说话气泡皮肤（渲染层 localStorage 持久化）
+      const s = window.__mioPetBubbleStyles
+      if (s) {
+        s.mount(root)
+        s.show()
+      }
+    }
+    if (action === 'bubble-modules') {
+      // A组 模块化泡泡：模块库面板（开关/编辑/配色，卡片拖拽排版）
+      const m = window.__mioPetBubbleModules
+      if (m) {
+        m.mount(root)
+        m.toggle()
+      }
+    }
     if (action === 'screenshot-ask') {
       // 截图提问：截全屏 → 小智视觉分析 → 直接显示气泡（后端已写 pet 历史+syslog）
       // 禁止复述注入：vision 返回文本不再调 /say 当成用户消息重发
@@ -3095,9 +3127,25 @@
     scheduleIdleTalk()
     // A7：初始化角色图库（数据在首次打开时才拉，不占用启动时间）
     initGallery()
+    // A组：随机图片 + 泡泡图库 + 模块化泡泡（全部渲染层自足，启动零开销）
+    try {
+      window.__mioPetRandomImage && window.__mioPetRandomImage.mount(root)
+      const bs = window.__mioPetBubbleStyles
+      if (bs) {
+        bs.mount(root)
+        bs.apply(speechBubble)                       // 启动即恢复上次选的皮肤
+        bs.onPick(() => bs.apply(speechBubble))      // 点选即换
+      }
+      window.__mioPetBubbleModules && window.__mioPetBubbleModules.init()
+    } catch (_) {}
   }
 
   window.__mioPetDebug = {
+    // A组 模块化泡泡系统需要的数据锚点：桌宠头顶坐标（图片泡泡/模块卡片落位）
+    __anchor: () => {
+      if (!model) return null
+      return { x: model.x, y: model.y - model.height / 2 - 24 }
+    },
     speak: (payload) => dispatchSpeech({
       source: 'runtime_verification',
       should_speak: true,
@@ -3223,6 +3271,22 @@
         errorMessage: errorMessage.textContent,
       }
     },
+  }
+
+  // A组 模块化泡泡系统 / 随机图片的宿主注入点：
+  //   __mioPetAnchor         桌宠头顶坐标（模块卡片与图片泡泡落位）
+  //   __mioPetStatusSnapshot 总线状态摘要（status 模块内容，空串=都在休息）
+  window.__mioPetAnchor = () => (window.__mioPetDebug.__anchor ? window.__mioPetDebug.__anchor() : null)
+  window.__mioPetStatusSnapshot = () => {
+    if (!anyAgentBusy()) return ''
+    const parts = []
+    agentBadgeStates.forEach((st, id) => {
+      if (!st || st.enabled === false || st.status === 'offline') return
+      const p = String(st.phase || '')
+      if (!p || p === 'idle' || p === 'heartbeat' || p === 'complete') return
+      parts.push(`${st.name || id}·${PHASE_LABELS[p] || p}`)
+    })
+    return parts.join(' / ')
   }
 
   start().catch((error) => {

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Mio Live2D 桌宠</title>
-    <link rel="stylesheet" href="./live2d-pet.css?v=20261015-a5" />
+    <link rel="stylesheet" href="./live2d-pet.css?v=20261015-a9" />
   </head>
   <body>
     <main id="pet-root" aria-label="Mio Live2D 桌宠">
@@ -21,6 +21,8 @@
       <nav id="context-menu" class="context-menu" hidden>
         <button type="button" data-action="chat">打开/关闭对话窗口</button>
         <button type="button" data-action="gallery">更换形象</button>
+        <button type="button" data-action="bubble-modules">泡泡模块</button>
+        <button type="button" data-action="bubble-styles">泡泡样式</button>
         <button type="button" data-action="size">调整大小</button>
         <button type="button" data-action="screenshot-ask">截图提问</button>
         <button type="button" data-action="speech-bubble">隐藏说话气泡</button>
@@ -44,8 +46,12 @@
     <script src="./pet-idle-talk.js?v=20261015-a6"></script>
     <!-- A7 角色图库：桌宠内直接浏览/更换 Live2D 形象（数据来自既有 models 接口） -->
     <script src="./pet-gallery.js?v=20261015-a6"></script>
+    <!-- A组 渲染增强：随机图片池 + 泡泡图库（气泡皮肤） + 模块化泡泡系统（6 类模块） -->
+    <script src="./pet-random-image.js?v=20261015-a9"></script>
+    <script src="./pet-bubble-styles.js?v=20261015-a9"></script>
+    <script src="./pet-bubble-modules.js?v=20261015-a9"></script>
     <script src="./xiaozhi-plugin.js?v=20261015-plugin"></script>
-    <script src="./live2d-pet.js?v=20261015-a8"></script>
+    <script src="./live2d-pet.js?v=20261015-a9"></script>
     <script src="./pet-xz-audio.js?v=20261015-plugin"></script>
   </body>
 </html>

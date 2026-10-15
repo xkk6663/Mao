@@ -5,6 +5,53 @@
 
 ---
 
+## v3.10（2026-10-15）· A组渲染增强收尾（随机图片 / 泡泡图库 / 模块化泡泡）+ 启动链路加固
+
+**主线**：DSH 融合方案 A 组（渲染层增强，对齐 whale-widget 体验）剩余三项全部落地；
+顺带根治两个启动链路问题（venv 中文路径失效、宿主环境变量毒化桌宠进程）。
+
+### A组 3.2 剩余：随机图片（对标 whale-widget #8）
+- **后端**（`routes/companion.py`）：新增 `GET /api/companion/bubble-images`（列表）与
+  `GET /api/companion/bubble-images/{name}`（图片本体），数据源 = 桌宠数据目录下
+  `bubble-imgs/`——**用户把图放进去即生效，无需重启**；文件名白名单（图片扩展名）+
+  越界拒绝，与 live2d_assets 的 `_safe_child` 同思路。
+- **渲染端**（新文件 `pet-random-image.js`）：加权随机 + 不连续重复（与空闲自语同一
+  策略）；自足图片泡泡（桌宠头顶锚点，9s 自动消失）；空闲自语排期 35% 概率改为
+  展示图片泡泡（池子为空自动回退文本）。
+
+### A组 3.3 剩余：泡泡图库（对标 #11）
+- 新文件 `pet-bubble-styles.js`：8 款气泡皮肤（默认白/墨黑/靛蓝/蜜桃粉/抹茶绿/
+  便利贴/终端绿/漫画描边）。机制与 DSH `data-agent-accent` 完全一致——只覆盖
+  调色板变量，框/尾巴/投影全复用；插件身份色优先于皮肤。localStorage 持久化，
+  右键菜单「泡泡样式」即点即换。
+
+### A组 3.1：模块化泡泡系统（对标 #7，最大项）
+- 新文件 `pet-bubble-modules.js`：**6 类模块**（status=跨 Agent 总线状态摘要 /
+  quote=随机语句 / image=随机图片 / text=自定义文本 / clock / countdown），
+  每模块独立开关、独立 accent（6 色循环）、独立坐标（**拖拽排版**，双击复位）；
+  配置 localStorage，默认全关（不打扰）。
+- 模块库面板（右键菜单「泡泡模块」）：开关即生效；text/countdown 内联编辑；
+  status 模块随徽标事件实时刷新（12 态词汇，whale-widget 只有 4 态等待态——
+  这是方案的代差优势项）。
+- 3.5（Live2D 动作/表情 × 12 态）审计结论：`PHASE_TO_ACTIVITY`/`PHASE_MOTION_HINT`/
+  `emotionParameters`(30+ 情绪)/`semanticMotion`(槽位映射) 已完整覆盖，无需改动。
+
+### 启动链路加固（本次实跑发现的两个真问题）
+- **`start_mio.ps1` venv 兜底**：venv launcher 在含中文的项目路径下读不了
+  `pyvenv.cfg`（窄字符 API 按 ANSI 解析，报 `Cannot read '...??AI????...'`），
+  起的是没有 fastapi 的裸系统 Python——后端永远起不来。现 15s 就绪探测失败即
+  自动改用「系统 Python + venv site-packages(PYTHONPATH)」重拉（实测通过）。
+- **`companion_service.start_pet` 环境防御**：从 WorkBuddy/IDE 宿主里启动后端会继承
+  `ELECTRON_RUN_AS_NODE=1`，它让桌宠 electron.exe 以纯 Node 模式运行、瞬间退出且
+  无日志。启动子进程前强制剥除该变量。
+
+### 验证
+- 后端路由：列表/取图 200（中文文件名编码正确）、越界 404、非法扩展 400；
+- 4 个渲染端文件 `node --check` 通过；headless 渲染整页正常（模型 + 徽标 + 新脚本）；
+- start_mio.ps1 完整链路实测：venv 失败 → 兜底启动 → 后端就绪 → 桌宠 WMI 拉起。
+
+---
+
 ## v3.9（2026-10-15）· 模型切换 UI 断链修复 + 水印消除加固 + 工作区清理
 
 **主线**：修掉"前端 UI 切模型永远回到大肥鱼"的状态覆盖断链，加固大肥鱼启动水印消除时序，

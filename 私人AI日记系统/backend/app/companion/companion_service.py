@@ -293,6 +293,11 @@ def start_pet() -> dict[str, Any]:
         else:
             already_running = False
             env = os.environ.copy()
+            # 宿主环境防御：若后端是从 WorkBuddy/VSCode 等宿主里启动的，会继承
+            # ELECTRON_RUN_AS_NODE=1——它让 electron.exe 以纯 Node 模式运行，
+            # 桌宠窗口瞬间退出且无任何日志（ICU 报错是并发症状）。这里强制剥掉。
+            for poison in ("ELECTRON_RUN_AS_NODE",):
+                env.pop(poison, None)
             env["MIO_RUNTIME_ROOT"] = str(settings.project_root)
             env["MIO_PET_API_BASE"] = os.getenv(
                 "MIO_PET_API_BASE",

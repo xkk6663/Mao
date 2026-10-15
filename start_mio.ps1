@@ -101,9 +101,25 @@ if ($backendUp) {
     $p = Start-Process -FilePath $backendPy -ArgumentList '-u','-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8000' -WorkingDirectory $backendDir -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
     Write-Step "      已启动 (pid=$($p.Id))，数据目录=$petStateDir，等待就绪..."
     $ready = $false
-    for ($i = 0; $i -lt 30; $i++) {
+    for ($i = 0; $i -lt 15; $i++) {
         Start-Sleep -Milliseconds 1000
         try { $null = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 1; $ready = $true; break } catch {}
+    }
+    # venv 兜底：venv launcher 在含中文的路径下可能读不了 pyvenv.cfg（窄字符 API
+    # 按 ANSI 编码解析），导致起的是"裸系统 Python"（没有 fastapi）直接退出。
+    # 就绪失败时改用系统 Python + venv site-packages（PYTHONPATH）重拉一次。
+    if (-not $ready) {
+        Write-Step '      venv 启动未就绪，改用系统 Python + venv site-packages 兜底...'
+        try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
+        $systemPy = "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
+        if (-not (Test-Path $systemPy)) { $systemPy = 'python.exe' }
+        $env:PYTHONPATH = Join-Path $backendDir '.venv\Lib\site-packages'
+        $p = Start-Process -FilePath $systemPy -ArgumentList '-u','-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8000' -WorkingDirectory $backendDir -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
+        Write-Step "      兜底已启动 (pid=$($p.Id))，继续等待就绪..."
+        for ($i = 0; $i -lt 20; $i++) {
+            Start-Sleep -Milliseconds 1000
+            try { $null = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 1; $ready = $true; break } catch {}
+        }
     }
     if ($ready) { Write-Step '      后端就绪 OK' }
     else { Write-Step '      后端启动超时，请查看 backend_err.log' }

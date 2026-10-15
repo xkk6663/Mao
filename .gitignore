@@ -116,3 +116,7 @@ pet-data/pet-instance/
 私人AI日记系统/backend/????????
 私人AI日记系统/xiaozhi_observe.json
 私人AI日记系统/backend/uvicorn_v2*.log
+
+# --- 会话工作现场/工作区记忆（本机自足，不入库） ---
+workspace_patch/
+.workbuddy/
