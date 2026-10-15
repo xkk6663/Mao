@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from ..companion import companion_service
 from ..config import load_runtime_settings, save_runtime_settings, settings, runtime_settings_snapshot, update_runtime_settings_snapshot, SettingsConflictError
-from ..documents import load_manual_statuses
+from ..creation.documents import load_manual_statuses
 from ..llm import config_status
 from ..companion.mio_profile import load_mio_profile, save_mio_profile_from_settings
 from ..web import templates

@@ -5,9 +5,9 @@ import logging
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import db
-from .model_runtime import OperationStopped
-from .config import settings
+from .. import db
+from ..model_runtime import OperationStopped
+from ..config import settings
 from .review_service import generate_review_for_date
 
 

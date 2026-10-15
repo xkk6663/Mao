@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 
 from .. import db
 from ..llm import LLMConfigError
-from ..monthly_review_service import generate_monthly_review, month_bounds, normalize_month
+from ..memory.monthly_review_service import generate_monthly_review, month_bounds, normalize_month
 
 
 router = APIRouter()

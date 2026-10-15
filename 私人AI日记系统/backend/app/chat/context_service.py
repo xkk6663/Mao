@@ -10,8 +10,8 @@ from .. import db
 from ..model_runtime import operation, OperationStopped
 from ..config import settings
 from ..llm import call_chat_completion
-from ..memory_service import build_structured_memory_context, is_group_conversation
-from ..life_loop_service import build_follow_up_result_context
+from ..memory.memory_service import build_structured_memory_context, is_group_conversation
+from ..memory.life_loop_service import build_follow_up_result_context
 
 
 SUMMARY_TYPE = "conversation_summary"
@@ -594,7 +594,7 @@ def build_fast_chat_context_snapshot(
     if recent_diaries:
         context_parts.append(recent_diaries)
     if summary_text:
-        from ..memory_revision_service import sanitize_history
+        from ..memory.memory_revision_service import sanitize_history
         context_parts.append("较早聊天摘要：\n" + sanitize_history(summary_text))
     if memory_context:
         context_parts.append(memory_context)

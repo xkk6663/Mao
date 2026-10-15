@@ -10,7 +10,7 @@ from .. import db
 from ..llm import LLMConfigError
 from ..markdown_rendering import render_safe_markdown
 from ..web import templates
-from ..weekly_review_service import generate_weekly_review, week_end_for
+from ..memory.weekly_review_service import generate_weekly_review, week_end_for
 
 
 router = APIRouter()

@@ -58,7 +58,7 @@ def build_system_prompt(
         else:
             manual_blocks.append(f"## {name}\n来源：{path}\n\n[未读取到内容]")
 
-    from .memory_revision_service import correction_context
+    from .memory.memory_revision_service import correction_context
     manual_blocks.append(correction_context())
     manuals_text = "\n\n---\n\n".join(manual_blocks)
 
@@ -196,7 +196,7 @@ next_min_action: 简短中文，只给一个最小行动
 日记素材暂存箱：
 {material_log or "无"}
 """
-    from .memory_revision_service import correction_context, sanitize_history
+    from .memory.memory_revision_service import correction_context, sanitize_history
     return [
         {"role": "system", "content": system + "\n\n" + correction_context()},
         {"role": "user", "content": sanitize_history(user)},
@@ -269,7 +269,7 @@ def build_diary_messages(
 聊天记录：
 {chat_log}
 """
-    from .memory_revision_service import correction_context, sanitize_history
+    from .memory.memory_revision_service import correction_context, sanitize_history
     return [
         {"role": "system", "content": system + "\n\n" + correction_context()},
         {"role": "user", "content": sanitize_history(user)},
@@ -297,7 +297,7 @@ def build_diary_edit_messages(date: str, current_markdown: str, instruction: str
 {current_markdown}
 
 请输出修改后的完整 Markdown。"""
-    from .memory_revision_service import correction_context, sanitize_history
+    from .memory.memory_revision_service import correction_context, sanitize_history
     return [
         {"role": "system", "content": system + "\n\n" + correction_context()},
         {"role": "user", "content": user},
@@ -344,7 +344,7 @@ def build_weekly_review_messages(
 这一周的记录：
 {day_sections or "无"}
 """
-    from .memory_revision_service import correction_context, sanitize_history
+    from .memory.memory_revision_service import correction_context, sanitize_history
     return [
         {"role": "system", "content": system + "\n\n" + correction_context()},
         {"role": "user", "content": sanitize_history(user)},
@@ -395,7 +395,7 @@ def build_monthly_review_messages(
 这个自然月的记录：
 {day_sections or "无"}
 """
-    from .memory_revision_service import correction_context, sanitize_history
+    from .memory.memory_revision_service import correction_context, sanitize_history
     return [
         {"role": "system", "content": system + "\n\n" + correction_context()},
         {"role": "user", "content": sanitize_history(user)},
@@ -453,7 +453,7 @@ def build_review_messages(
 日记素材暂存箱：
 {material_log or "无"}
 """
-    from .memory_revision_service import correction_context, sanitize_history
+    from .memory.memory_revision_service import correction_context, sanitize_history
     return [
         {"role": "system", "content": system + "\n\n" + correction_context()},
         {"role": "user", "content": sanitize_history(user)},

@@ -240,7 +240,7 @@ def protocol_session_id(scope: str = "") -> str:
 
 
 def privacy_blocked() -> bool:
-    from .privacy_service import _load_state
+    from .memory.privacy_service import _load_state
     state = _load_state()
     return bool(state.get("paused") or state.get("transition") in {
         "pausing", "pause_incomplete", "resume_incomplete", "state_uncertain"})

@@ -7,13 +7,14 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from .. import db, memory_revision_service as revisions
+from .. import db
+from ..memory import memory_revision_service as revisions
 from ..config import settings
 from ..chat.context_service import SUMMARY_TYPE, _strip_summary_marker, _summary_last_message_id, _summary_with_marker
-from ..documents import read_text_with_fallback
-from ..life_loop_service import public_follow_up_result, record_follow_up_result
+from ..creation.documents import read_text_with_fallback
+from ..memory.life_loop_service import public_follow_up_result, record_follow_up_result
 from ..companion.mio_profile import load_mio_profile, save_mio_profile
-from ..memory_service import public_memory_item, save_memory_item
+from ..memory.memory_service import public_memory_item, save_memory_item
 from ..web import templates
 
 
@@ -173,7 +174,7 @@ async def api_update_runtime_summary(payload: MemoryTextRequest):
 @router.post("/api/memory/items")
 async def api_create_memory_item(payload: StructuredMemoryRequest):
     try:
-        from ..memory_service import save_memory_candidate
+        from ..memory.memory_service import save_memory_candidate
         saved = save_memory_candidate(
             layer=payload.layer,
             category=payload.category,

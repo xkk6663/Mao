@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from . import db
+from .. import db
 
 
 def initialize() -> None:

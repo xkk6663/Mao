@@ -10,9 +10,10 @@ from pathlib import Path
 
 import httpx
 
-from . import db, creation_custom, creation_workflows as workflows
-from .config import settings
-from .local_discovery import linked, read_workflow
+from . import creation_custom, creation_workflows as workflows
+from .. import db
+from ..config import settings
+from ..local_discovery import linked, read_workflow
 
 MAX_BYTES = 2_000_000
 
@@ -135,7 +136,7 @@ def initialize():
 
 
 async def read_reference(url: str) -> dict:
-    from .web_search_service import _fetch_page
+    from ..web_search_service import _fetch_page
     if not settings.web_search_enabled:
         raise ValueError('联网搜索已关闭。')
     source = await _fetch_page(url)

@@ -4,7 +4,7 @@ import asyncio
 
 from fastapi import APIRouter, HTTPException
 
-from .. import privacy_service
+from ..memory import privacy_service
 
 
 router = APIRouter(prefix="/api/privacy")

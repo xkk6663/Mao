@@ -4,9 +4,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from . import db, screen_observation_service, system_audio_service
-from .companion import companion_service
-from .config import load_runtime_settings, save_runtime_settings, settings
+from .. import db
+from .. import screen_observation_service
+from .. import system_audio_service
+from ..companion import companion_service
+from ..config import load_runtime_settings, save_runtime_settings, settings
 
 
 RUNTIME_SENSITIVE_KEYS = (
@@ -149,7 +151,7 @@ def _capabilities() -> list[dict[str, object]]:
 
 
 def privacy_status() -> dict[str, Any]:
-    from .model_runtime import live_operations
+    from ..model_runtime import live_operations
     state = _load_state()
     return {
         "paused": bool(state.get("paused")),
@@ -206,7 +208,7 @@ async def pause_sensitive_capabilities() -> dict[str, Any]:
     run("screen_session", screen_observation_service.end_session)
     run("system_audio", system_audio_service.stop)
     run("autonomy_policy", lambda: autonomy_service.update_policy({"paused": True}))
-    from .kernel import agent_task_service, monthly_review_service, daily_diary_service, model_runtime
+    from ..kernel import agent_task_service, monthly_review_service, daily_diary_service, model_runtime
     for action, callback in (
         ("model_operations", lambda: model_runtime.cancel_operations(automatic_only=True, reason="privacy")),
         ("agent_tasks", lambda: agent_task_service.stop_tasks(stop_linked_jobs=True)),

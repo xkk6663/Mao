@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timedelta
 from sqlite3 import Row
 
-from . import db
+from .. import db
 
 
 MEMORY_LAYERS = {"L0", "L1", "L2"}

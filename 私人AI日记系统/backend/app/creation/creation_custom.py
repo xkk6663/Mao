@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .config import save_runtime_settings, settings
+from ..config import save_runtime_settings, settings
 
 
 PARAMETERS = {

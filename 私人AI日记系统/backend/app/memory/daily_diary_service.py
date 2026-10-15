@@ -9,8 +9,8 @@ from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import db
-from .config import settings
+from .. import db
+from ..config import settings
 from .routes.diary import generate_diary_for_date_payload
 
 
@@ -32,7 +32,7 @@ def _configuration_signature() -> tuple:
     # A saved model/key change should release backoff immediately. Never expose keys.
     path = settings.model_profiles_path
     stamp = path.stat().st_mtime_ns if path.exists() else 0
-    from .model_runtime import model_policy
+    from ..model_runtime import model_policy
     return (str(settings.db_path), settings.daily_diary_model_id, stamp,
             json.dumps(model_policy("record"), sort_keys=True))
 

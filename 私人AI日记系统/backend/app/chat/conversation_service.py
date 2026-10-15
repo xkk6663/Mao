@@ -107,7 +107,7 @@ def _agent_tool_receipts(run, steps: list[object] | None = None) -> list[dict[st
             saved_job = result.get("job") if isinstance(result, dict) else None
             job_id = str(saved_job.get("id") or "") if isinstance(saved_job, dict) else ""
             if job_id:
-                from ..creation_service import get_job
+                from ..creation.creation_service import get_job
 
                 if current_job := get_job(job_id):
                     result["job"] = current_job

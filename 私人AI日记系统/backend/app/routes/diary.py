@@ -14,7 +14,7 @@ from .. import db
 from ..model_runtime import operation
 from ..config import settings
 from ..llm import LLMConfigError, call_chat_completion
-from ..life_loop_service import diary_lifecycle
+from ..memory.life_loop_service import diary_lifecycle
 from ..markdown_rendering import render_safe_markdown
 from ..model_registry import list_model_profiles
 from ..prompts import build_diary_edit_messages, build_diary_messages
@@ -396,13 +396,13 @@ async def api_list_diaries(q: str = Query(default="")):
 
 @router.get("/api/diary/automatic")
 async def automatic_diary_status():
-    from ..daily_diary_service import get_daily_diary_status
+    from ..memory.daily_diary_service import get_daily_diary_status
     return get_daily_diary_status()
 
 
 @router.post("/api/diary/automatic/check")
 async def retry_automatic_diary():
-    from ..daily_diary_service import request_check
+    from ..memory.daily_diary_service import request_check
     return request_check()
 
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .config import settings
-from .companion.mio_profile import render_mio_profile_for_prompt
+from ..config import settings
+from ..companion.mio_profile import render_mio_profile_for_prompt
 
 
 def read_text_with_fallback(path: Path) -> str:

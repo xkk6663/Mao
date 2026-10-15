@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import db
-from .model_runtime import operation
-from .llm import call_chat_completion
-from .prompts import build_review_messages
+from .. import db
+from ..model_runtime import operation
+from ..llm import call_chat_completion
+from ..prompts import build_review_messages
 
 
 @dataclass(frozen=True)

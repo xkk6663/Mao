@@ -115,7 +115,7 @@ def tool_availability(definition: ToolDefinition) -> tuple[bool, str]:
             if not settings.web_search_enabled:
                 return False, "联网搜索已关闭。"
         elif dependency == "comfyui_configured":
-            from .. import creation_service
+            from ..creation import creation_service
 
             root = settings.comfyui_root.expanduser().resolve()
             if not root.is_dir() or not (root / "main.py").is_file():
@@ -149,10 +149,10 @@ def _safe_row(row: object, *, max_text: int = 3000) -> dict[str, Any] | None:
 
 async def _dispatch_read_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     if name == 'creation_read_workflow_reference':
-        from ..workflow_research import read_reference
+        from ..creation.workflow_research import read_reference
         return await read_reference(arguments['url'])
     if name in {'creation_inspect_workflow', 'creation_read_workflow_source'}:
-        from .. import workflow_research
+        from ..creation import workflow_research
         callback = workflow_research.inspect if name == 'creation_inspect_workflow' else workflow_research.read_source
         return await callback(**arguments)
     if name == 'creation_read_local_workflow':
@@ -202,7 +202,7 @@ async def _dispatch_read_tool(name: str, arguments: dict[str, Any]) -> dict[str,
             "error": lookup.error,
         }
     if name == "search_memory":
-        from ..memory_service import public_memory_item, retrieve_memory_items
+        from ..memory.memory_service import public_memory_item, retrieve_memory_items
 
         rows = await asyncio.to_thread(
             retrieve_memory_items,
@@ -214,19 +214,19 @@ async def _dispatch_read_tool(name: str, arguments: dict[str, Any]) -> dict[str,
         target_date = str(arguments.get("date") or db.today_string())
         return {"date": target_date, "diary": _safe_row(db.get_diary(target_date), max_text=8000)}
     if name == "creation_list_presets":
-        from ..creation_service import list_presets
+        from ..creation.creation_service import list_presets
 
         return {"presets": list_presets(str(arguments.get("kind") or ""))}
     if name == "creation_list_loras":
-        from ..creation_lora_catalog import list_image_loras
+        from ..creation.creation_lora_catalog import list_image_loras
 
         return list_image_loras(str(arguments.get("workflow_id") or "anima-2.9b-image"))
     if name == "creation_list_assets":
-        from ..creation_service import list_assets
+        from ..creation.creation_service import list_assets
 
         return {"assets": list_assets(int(arguments.get("limit") or 100))}
     if name == "creation_check_workflow":
-        from ..creation_service import comfyui_preflight
+        from ..creation.creation_service import comfyui_preflight
 
         report = await comfyui_preflight(str(arguments.get("workflow_id") or ""))
         # The planner only needs a decision-ready summary.  Do not put local
@@ -251,17 +251,17 @@ async def _dispatch_read_tool(name: str, arguments: dict[str, Any]) -> dict[str,
                     if isinstance(model, dict) and not model.get("available")
                 ][:20],
             })
-        from ..creation_custom import default_ids
+        from ..creation.creation_custom import default_ids
         return {"ok": bool(report.get("ok")), "checked": bool(report.get("checked")), "workflows": workflows, "defaults": default_ids()}
     if name == "creation_get_job":
-        from ..creation_service import get_job
+        from ..creation.creation_service import get_job
 
         job = get_job(str(arguments.get("job_id") or ""))
         if job is None:
             raise ValueError("找不到创作任务。")
         return {"job": job}
     if name == "creation_get_output":
-        from ..creation_service import get_job
+        from ..creation.creation_service import get_job
 
         job = get_job(str(arguments.get("job_id") or ""))
         if job is None:
@@ -280,7 +280,7 @@ async def _dispatch_write_tool(
     context: ToolExecutionContext,
 ) -> dict[str, Any]:
     if name == 'creation_remember_workflow':
-        from ..workflow_research import remember
+        from ..creation.workflow_research import remember
         return await remember(**arguments)
     if name == "creation_import_local_workflow":
         from ..local_discovery import import_local_workflow
@@ -305,8 +305,8 @@ async def _dispatch_write_tool(
             status=decision_status[arguments.get("decision", "continue")])
         return {"task_id": task["id"], "snapshot": updated["snapshot"], "status": updated["status"]}
     if name in {"comfyui_generate_image", "comfyui_generate_video", "remote_generate_image"}:
-        from ..creation_models import CreationJobRequest
-        from ..creation_service import create_job
+        from ..creation.creation_models import CreationJobRequest
+        from ..creation.creation_service import create_job
 
         media_type = "video" if name == "comfyui_generate_video" else "image"
         backend = "remote_api" if name == "remote_generate_image" else "comfyui"
@@ -344,7 +344,7 @@ async def _dispatch_write_tool(
         )
         return {"job": job, "created": created, "message": "创作任务已创建；请根据任务状态等待完成或确认。"}
     if name == "creation_cancel_job":
-        from ..creation_service import cancel_job
+        from ..creation.creation_service import cancel_job
 
         return {"job": await cancel_job(str(arguments.get("job_id") or ""))}
     from ..companion.companion_action_service import execute_companion_action_primitive

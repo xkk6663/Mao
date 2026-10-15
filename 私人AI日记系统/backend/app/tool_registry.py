@@ -7,7 +7,7 @@ from typing import Any, Iterable
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .creation_models import CreationToolRemoteImageRequest, ImageLoraChoice
+from .creation.creation_models import CreationToolRemoteImageRequest, ImageLoraChoice
 
 
 class ToolInput(BaseModel):

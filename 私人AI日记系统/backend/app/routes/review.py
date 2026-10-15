@@ -6,7 +6,7 @@ from fastapi.responses import HTMLResponse
 from .. import db
 from ..llm import LLMConfigError
 from ..markdown_rendering import render_safe_markdown
-from ..review_service import generate_review_for_date
+from ..memory.review_service import generate_review_for_date
 from ..web import templates
 from .diary import _validated_diary_date
 

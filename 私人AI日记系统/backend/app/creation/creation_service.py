@@ -23,8 +23,9 @@ import httpx
 import websockets
 from PIL import Image
 
-from . import db, maintenance_service
-from .config import settings
+from .. import db
+from .. import maintenance_service
+from ..config import settings
 from .creation_models import CreationJobRequest, CreationPresetRequest
 from .creation_workflows import (
     WORKFLOWS,
@@ -34,8 +35,8 @@ from .creation_workflows import (
     workflow_path,
     workflow_catalog,
 )
-from .model_registry import list_model_profiles
-from .provider_compat import auth_headers, normalize_api_base_url
+from ..model_registry import list_model_profiles
+from ..provider_compat import auth_headers, normalize_api_base_url
 
 
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "timed_out", "unknown"}
@@ -210,7 +211,7 @@ def save_job_output_as_asset(job_id: str, index: int = 0) -> dict[str, Any]:
         raise ValueError("上一项任务的图片输出记录已损坏。")
     path = Path(str(output.get("path") or "")).resolve()
     if output.get("artifact_id"):
-        from . import artifact_service
+        from .. import artifact_service
         path, _ = artifact_service.file(str(output["artifact_id"]))
     allowed_roots = [settings.creation_output_dir.resolve()]
     try:
@@ -594,7 +595,7 @@ def retry_job(job_id: str) -> dict[str, Any]:
     spec = _loads(row.get("spec_json"), {})
     if not isinstance(spec, dict):
         raise ValueError("原任务参数已经损坏。")
-    from . import birefnet_service
+    from .. import birefnet_service
     if row["workflow_id"] == birefnet_service.WORKFLOW_ID:
         return birefnet_service.retry_cutout(row, spec)
     # A completed local task stores runtime-only fields (selected fallback
@@ -1073,7 +1074,7 @@ async def _object_info(client: httpx.AsyncClient) -> dict[str, Any]:
 
 async def _run_comfy_job(job_id: str, row: Mapping[str, Any]) -> None:
     if row.get("workflow_id") == "birefnet-portrait-png":
-        from . import birefnet_service
+        from .. import birefnet_service
         await birefnet_service.run_job(job_id, dict(row))
         return
     root = _require_comfy_root()
@@ -1366,7 +1367,7 @@ def _validated_comfy_outputs(
 
 
 def archive_outputs(job_id: str, outputs: list[dict], source_root: Path) -> list[dict]:
-    from . import artifact_service
+    from .. import artifact_service
     row = _get_job_row(job_id) or {}
     for output in outputs:
         if not output.get("artifact_id"):
@@ -1632,7 +1633,7 @@ def output_file(job_id: str, index: int) -> tuple[Path, str, str]:
         raise ValueError("找不到这个输出。")
     output = outputs[index]
     if output.get("artifact_id"):
-        from . import artifact_service
+        from .. import artifact_service
         path, item = artifact_service.file(str(output["artifact_id"]))
         return path, item["mime_type"], item["name"]
     path = Path(str(output.get("path") or "")).resolve()
@@ -1658,7 +1659,7 @@ def output_file(job_id: str, index: int) -> tuple[Path, str, str]:
             _update_job(job_id, outputs_json=_json(outputs))
     except maintenance_service.MaintenanceModeError:
         return path, str(output.get("mime_type") or "application/octet-stream"), str(output.get("name") or path.name)
-    from . import artifact_service
+    from .. import artifact_service
     path, item = artifact_service.file(output["artifact_id"])
     return path, item["mime_type"], item["name"]
 

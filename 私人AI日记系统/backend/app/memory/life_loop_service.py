@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlite3 import Row
 
-from . import db
+from .. import db
 
 
 FOLLOW_UP_OUTCOMES = {"completed", "partial", "not_completed"}

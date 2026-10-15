@@ -38,7 +38,7 @@ from .conversation_runtime import (
     current_runtime_trace_id,
     mark_runtime_stage,
 )
-from ..documents import load_manuals
+from ..creation.documents import load_manuals
 from ..image_service import ImageAttachment
 from ..llm import (
     CompletionResult,
@@ -1223,7 +1223,7 @@ def _annotate_history_content(
     note = f"[内部消息时间：{label}]"
     if isinstance(content, str):
         if current_message_id is None or int(row["id"]) != current_message_id:
-            from ..memory_revision_service import sanitize_history
+            from ..memory.memory_revision_service import sanitize_history
             content = sanitize_history(content)
         return f"{note}\n{content}"
     if isinstance(content, list):
