@@ -330,7 +330,7 @@ class Live2DAssetsService:
             current = {}
         if not isinstance(current, dict):
             current = {}
-        current["selectedModelId"] = model_id if model_id in {str(model["id"]) for model in self._custom_live2d_models()} else ""
+        current["selectedModelId"] = model_id if model_id in self._live2d_model_ids() else ""
         temporary = runtime_path.with_suffix(".tmp.json")
         temporary.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         temporary.replace(runtime_path)

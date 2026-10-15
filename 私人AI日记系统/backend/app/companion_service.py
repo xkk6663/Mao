@@ -94,7 +94,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "bubble_seconds": 9,
     "pet_size_percent": 150,
     "pet_renderer": "live2d",
-    "live2d_model_id": "hiyori",
+    "live2d_model_id": "whale-deepseek",
     "live2d_scale": 1.0,
     "live2d_vertical_offset": 0.0,
     "live2d_follow_cursor": True,
@@ -152,17 +152,31 @@ def _builtin_live2d_models() -> tuple[dict[str, Any], ...]:
             if preview_candidate.is_file():
                 preview_path = f"models/{entry.name}/preview.png"
                 preview_url = f"/agent-app/live2d-pet/models/{entry.name}/preview.png"
+            metadata: dict[str, Any] = {}
+            meta_file = entry / "mio-model.json"
+            if meta_file.is_file():
+                try:
+                    metadata = json.loads(meta_file.read_text(encoding="utf-8")) or {}
+                except (OSError, json.JSONDecodeError):
+                    metadata = {}
+            display_name = str(metadata.get("name") or entry.name)
+            authorization = metadata.get("authorization") if isinstance(metadata.get("authorization"), dict) else {}
+            license_text = str(authorization.get("notice") or "Live2D Free Material License")
+            source_label = str(metadata.get("sourceLabel") or "Live2D/CubismWebSamples")
+            is_official = "CubismWebSamples" in source_label
+            capabilities = metadata.get("capabilities") if isinstance(metadata.get("capabilities"), dict) else {}
             models.append({
                 "id": mid,
-                "name": entry.name,
-                "description": "Live2D 官方免费示例，含待机与点击动作",
+                "name": display_name,
+                "description": "Live2D 官方免费示例，含待机与点击动作" if is_official else "项目内置模型，随仓库分发、克隆即用",
                 "model_path": f"models/{entry.name}/{model_file.name}",
                 "preview_path": preview_path,
                 "preview_url": preview_url,
-                "license": "Live2D Free Material License",
-                "source": "Live2D/CubismWebSamples",
-                "source_url": "https://github.com/Live2D/CubismWebSamples",
+                "license": license_text,
+                "source": source_label,
+                "source_url": "https://github.com/Live2D/CubismWebSamples" if is_official else "",
                 "motion_count": 0,
+                "capabilities": capabilities,
             })
     return tuple(models)
 

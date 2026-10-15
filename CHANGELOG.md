@@ -5,6 +5,119 @@
 
 ---
 
+## v3.5（2026-10-15）· 性能优化收尾 + 语音完整播放修复
+
+**主线**：桌宠性能问题（跟随不灵敏、拖动卡顿漂移）的 P0 方案落地，同时根治两个体验问题——
+Agent 面板覆盖不退出、小智语音"没讲完就结束"。
+
+### 性能优化（P0 方案，穿透去重 + getBounds 收敛）
+- **主进程穿透判定状态去重**（`live2d-desktop/main.js`）：新增 `setMainWindowIgnoreMouseEvents(ignore)`
+  记录 `lastIgnoreMouseEvents`，**仅状态翻转时才调用** `setIgnoreMouseEvents`——根除此前
+  "120ms 轮询 + 无条件调用"导致的**高频 hit-test 切换打断 pointer 事件流**（拖动时 `getBounds`
+  高频刷新、鼠标流被反复打断是"拖动卡顿漂移"的直接原因）。
+- **渲染层 getBounds 收敛**（`dist/live2d-pet/live2d-pet.js`）：三个每帧调用的 `getBounds()`
+  加节流——`updateLockControlAnchor` 80ms、`updateSpeechBubblePosition` 100ms、
+  `updateAgentBadgePosition` 80ms；新增 `force` 参数，只在**真正需要立刻刷新**的场景强制
+  更新（fitModel / 打字机每字符 / 拖动结束 `finishPointerInteraction` / 徽标显隐 / 双击复位），
+  拖动路径 `getBounds` 调用量从约 180 次/秒降到约 12 次/秒。
+- **背景**：性能退化调查（2026-10-14 提交链 `8a9c5aa7`→`f2f51fd4`→`7581c6bc`→`c613bc80`）
+  发现交互链路从"渲染层 mousemove 实时驱动"退化为"主进程 120ms 轮询 + 无条件穿透刷新"，
+  详见 `桌宠性能根因分析.html`。
+
+### 修复
+- **Agent 面板打开后按其他页面仍被覆盖**（`dist/agent-switch-inject.js`）：补齐与设置面板
+  一致的"点击其他导航 `button.nav-item` 即收起"捕获监听——打开 Agent 页后点任意其他页面
+  自动收起，不再需要手动点右上角 ✕。
+- **小智语音"总是结束得很快、没讲完"**（`dist/live2d-pet/pet-xz-audio.js`）：
+  - 根因：官方音频帧（PCM）与 `tts state=stop` 文本在同一 WS 保序到达，但前端 `pump()`
+    会把到达的帧**排程到未来播放时刻**（批量/网络缓冲时超前更多），stop 一到就无条件
+    `stopPlayback()` 把已排程未播完的尾部音频全部截断 →"没讲完"。
+  - 修复：`tts stop` 改为 **drain 模式**——不再立即停止，等已排程音频自然播完后
+    （`activeSources`/`playQueue` 清空）再停口型、复位说话状态；口型随 analyser 能量自然归零；
+    新一段 `tts start` 仍立即打断旧音频（保证打断/换句正常，不串音）。
+- **徽标状态更新延迟排查**（结论性诊断，未改代码）：全链路即时——渲染层 WS 事件直驱、
+  后端 `publish→gather` 直推、总线 phase 变化即时发布（300ms 节流仅限同 agent 同 phase 重复）；
+  用户感知的延迟主要来自 **DSH 徽标的会话日志尾随（架构性，实测约 200ms~1.5s，DSH 写盘节奏支配）**，
+  小智徽标链路无延迟点。
+
+### 模型内置改造（鲸鱼娘 / 大肥鱼 → 内置模型）
+- **模型入库**：把「DeepSeek娘(鲸鱼娘)」（原外部导入 `model-1a11f9ad3f7`）与「大肥鱼」（原 `大肥鱼-2`）迁入内置目录
+  `澪Agent应用\dist\live2d-pet\models\`（新目录 `whale-deepseek` / `da-feiyu`），随仓库 git 分发、克隆即用；
+  迁移时剔除 `.mio-render-cache`、`items_pinned_to_model.json`、`.大肥鱼.mio-render-2048.model3.json`、
+  `大肥鱼.vtube.json` 等运行时产物；旧外部导入副本已从 `pet-data\Live2D桌宠\models\` 移除（避免重复显示）。
+- **默认模型**：`companion_service.py` 设置默认 `live2d_model_id` 由 `hiyori` 改为 `whale-deepseek`（DeepSeek娘）；
+  本地 `runtime.json` 迁移为 `da-feiyu`（保持用户当前选择的大肥鱼）。
+- **前端注册**：`live2d-pet.js` `builtInModels` 登记两个模型（含 44 / 15 个表达式、口型/眨眼参数、motionSlots、
+  expressionSlots），大肥鱼"13 水印消除"表达式自动触发去水印；`index.html` 版本参数 bump 为 `v=20261015-models`。
+- **后端识别**：`companion_service._builtin_live2d_models()` 扫描内置目录时读取 `mio-model.json`
+  （name / preview / capabilities / 授权提示），内置模型显示正确中文名与来源；`live2d_assets._write_live2d_runtime_selected`
+  放开为可用模型全集（含内置 id），内置模型切换后 runtime 记录不再落空。
+- **分区显示**：桌宠管理页「模型」列表与桌宠页形象列表按 `imported` 分区为「内置模型（随项目分发）」与
+  「外部导入（仅本机）」两区，内置区不显示删除/封面管理（不可删），外部导入区保留删除 / 换封面。
+
+### 工程
+- 前端文件版本参数统一为 `v=20261015-*`（live2d-pet.js `calmfocus`、pet-xz-audio.js `drain`、
+  live2d-pet.css `phasecolors`）。
+
+### 验证
+- `node --check` 通过（main.js / live2d-pet.js / pet-xz-audio.js / agent-switch-inject.js）；
+  文件 BOM（EF BB BF）与 CRLF 行尾保留；git diff 干净可追踪。
+
+---
+
+## v3.4（2026-10-15）· 语音引擎切换 + 桌宠表现强化
+
+**主线**：本机 SAPI 语音引擎损坏导致语音全挂，切换 edge-tts 并做预合成缓存；同时强化桌宠
+表现（视线跟随、表情兜底、徽标着色、启动定位稳定）。
+
+### 语音引擎（SAPI → edge-tts）
+- **fix(tts)**：本机 SAPI 引擎损坏（`0x80045040` 全语音失败，疑似 10/01 系统更新导致），
+  改用 **edge-tts 微软在线 TTS（晓晓音色）**：合成 16k mono WAV + opus 转换测试通过，
+  本地播放与官方 ASR 注入链路恢复，不再依赖损坏的 Windows 语音引擎。
+- **perf(tts)**：**edge-tts 预合成缓存**——后端启动后台预热全部视觉/观察触发语（10 条），
+  wav + opus 双层 LRU 缓存，触发语注入从 2-3s 降到 0ms；重复文本零合成延迟。
+
+### 桌宠表现
+- **鼠标视线跟随**：主进程 16Hz 推送鼠标位置（`mio-desktop:mouse-move`）+ 渲染层
+  `model.focus()`——桌宠眼睛跟随鼠标移动；穿透模式下渲染层收不到 mousemove，必须由
+  主进程高频喂数据。
+- **视线跟随幅度压缩**：跟随范围限制在模型周围区域，消除大幅转头/"多动症"。
+- **表情恢复兜底**：找不到自然表情时重置默认表情。
+- **Agent 状态徽标 12 态专属着色**：按 phase 全表着色（思考蓝/工具橙/语音金/错误红/
+  等待审批紫/连接中灰蓝等，深底白字），连接中/异常单独色。
+
+### 稳定与工程
+- **fix: 桌宠启动跳位根治**：窗口虚拟边界修正完成前隐藏模型，修正后统一 `fit` 定位显示
+  （`window-stable` 协议）；窗口稳定事件丢失时 10 秒兜底显示模型。
+- **桌宠数据目录统一**：新增 `MIO_PET_STATE_DIR` 环境变量，后端 `live2d_assets.py` 与
+  Electron `main.js` 解析到**同一个** "Live2D桌宠" 目录——修复此前
+  `MIO_PROJECT_ROOT/Mao/pet-data` 拼错导致的空目录（后端读不到自定义模型、切角色静默失败）。
+- **start_mio.ps1**：就绪探测改用 `/api/companion/agents`（纯读总线，稳定），不再用
+  依赖 Live2D 资源与磁盘写入的 `/api/companion/status`（资源异常时返回 500 会误判后端未运行）。
+
+---
+
+## v3.3（2026-10-14）· 桌宠交互与性能优化
+
+**主线**：解决桌宠卡顿与交互失灵两大问题，并强化状态显示（多 Agent 状态栏、水印消除、调大小面板）。
+
+### 性能与交互
+- **perf: 桌宠卡顿优化**（渲染降帧 + 后端轮询降频）：空闲 8s 自动降帧到 9fps、mousemove
+  不再标记活动（CPU 占用 95% → 21.5%）；代价是 hover 时帧率受限（v3.5 已用穿透去重缓解）。
+- **fix(pet): 交互失灵根因**：`--no-sandbox` 下渲染层鼠标事件转发（`{forward:true}`）失效，
+  窗口永久穿透；改为**主进程轮询鼠标位置 + 渲染层上报模型区域/UI 状态**驱动穿透判定，
+  不再依赖 forward 转发。
+- **fix(pet): 拖动/菜单期间保持可交互**：`rendererInteractive` 参与穿透判断，
+  `pointerup` 后恢复穿透上报。
+- **ui: 调整大小面板整体可拖动**（标题区手柄 + pointer capture）；滑块样式优化。
+
+### 状态显示与模型
+- **Agent 状态徽标升级为多 Agent 状态栏**：每个 agent 一个状态 chip 实时并排显示、
+  即插即用、停用即移除（v3.5 再加 12 态专属着色）。
+- **模型自带水印消除表达式默认自动应用并每帧保持**（大肥鱼去水印）。
+
+---
+
 ## v3.2（2026-10-14）· DSH 实时工作状态接入（真实事件摄取）
 
 **主线**：把 v3.1 里只是"配置就绪占位"的 DSH 适配器，改成**真实事件驱动**——DSH 真的在
@@ -230,3 +343,9 @@
 | ochiru520/Mio（上游） | 原版桌宠：Electron + Vue SPA + FastAPI，含 Agent 工作台/QQ 对话/付费模型等 |
 | Mao v1.0 | 阉割原版无关功能，接入小智免费云（核心融合完成） |
 | Mao v2.0 | 发布版：历史全可视化、双发/气泡修复、内存优化、更名 Mao、独立仓库 |
+| Mao v3.0 | 设置与工具管理重构版：设置页重建、MCP 工具集中管理、完全自由拖拽 |
+| Mao v3.1 | 跨 Agent 桌宠迭代：统一状态总线（12 phase）+ 小智/DSH/Octop 适配器 + Agent 管理页与状态徽标 |
+| Mao v3.2 | DSH 实时工作状态接入（真实事件摄取，日志尾随通道 + Node 边车） |
+| Mao v3.3 | 桌宠交互与性能优化：穿透架构根治、卡顿降帧、多 Agent 状态栏、水印消除 |
+| Mao v3.4 | 语音引擎切换（edge-tts + 预合成缓存）、视线跟随、徽标 12 态着色、启动定位稳定 |
+| Mao v3.5 | 性能优化收尾（穿透去重 + getBounds 收敛）、Agent 面板自动收起、小智语音完整播放修复 |

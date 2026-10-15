@@ -1,7 +1,7 @@
 # Mio 桌宠 · 源码地图（SRC-MAP）
 
 > 本项目的界面导航手册。**改哪个界面，先查这张表。**
-> 更新日期：2026-10-12
+> 更新日期：2026-10-15（v3.5）
 
 ---
 
@@ -20,13 +20,13 @@
 | 项 | 位置 |
 |---|---|
 | 页面入口 | `澪Agent应用\dist\live2d-pet\index.html` |
-| 主逻辑 | `澪Agent应用\dist\live2d-pet\live2d-pet.js`（84KB，含右键菜单/拖拽/模型加载/小智事件） |
-| 样式 | `澪Agent应用\dist\live2d-pet\live2d-pet.css` |
+| 主逻辑 | `澪Agent应用\dist\live2d-pet\live2d-pet.js`（含右键菜单/拖拽/模型加载/phase 映射/状态栏/视线跟随/getBounds 节流） |
+| 样式 | `澪Agent应用\dist\live2d-pet\live2d-pet.css`（含徽标 12 态专属色） |
 | 表情工具 | `澪Agent应用\dist\live2d-pet\expression-utils.js` |
-| 小智音频播放 | `澪Agent应用\dist\live2d-pet\pet-xz-audio.js`（PCM 流 → 口型同步） |
+| 小智音频播放 | `澪Agent应用\dist\live2d-pet\pet-xz-audio.js`（PCM 流 → 口型同步；v3.5 drain 收尾） |
 | 渲染库 | `dist\live2d-pet\libs\`（pixi / cubism4 / live2dcubismcore） |
-| 模型库 | `dist\live2d-pet\models\`（hiyori 等，导入的模型都放这） |
-| Electron 窗口 | `澪Agent应用\live2d-desktop\main.js` 中 `mainWindow` |
+| 模型库 | `dist\live2d-pet\models\`（内置：官方 6 个 Hiyori/Haru/Mao/Mark/Rice/Wanko + 项目内置 DeepSeek娘(`whale-deepseek`)/大肥鱼(`da-feiyu`)，随 git 分发；外部导入放 `pet-data\Live2D桌宠\models\`，仅本机） |
+| Electron 窗口 | `澪Agent应用\live2d-desktop\main.js` 中 `mainWindow`（穿透判定 `setMainWindowIgnoreMouseEvents` + 16Hz 鼠标推送 `sendMouseMoveToRenderer`） |
 
 ### 2.2 对话浮窗（点桌宠弹出，小智聊天）
 
@@ -48,6 +48,10 @@
 | 对话页组件 | `澪Agent应用\dist\assets\ChatPage-DUGVoyFe.js`（小智对话：输入框 `.composer-input`、WS 直连、历史轮询、状态点） |
 | 主入口/路由 | `澪Agent应用\dist\assets\index-BBVquePX.js`（bootstrap/状态管理，勿手改） |
 | **图片上传注入** | `澪Agent应用\dist\xiaozhi-chat-inject.js`（📷 按钮 + 粘贴暂存 + 左下角红/黄/绿调试角标） |
+| **Agent 页注入** | `澪Agent应用\dist\agent-switch-inject.js`（★ 总线快照 + 启用/停用开关 + 点击其他导航自动收起） |
+| **设置面板注入** | `澪Agent应用\dist\settings-panel-inject.js`（★ 桌宠/语音/屏幕观察/提示词/小智 5 tab） |
+| **小智工具页** | `澪Agent应用\dist\mcp-tools-panel.js`（★ 15 项本地 MCP 工具开关） |
+| **对话记录面板** | `澪Agent应用\dist\xiaozhi-history-panel.js`（★ 历史 + WS 实时 + 发送） |
 | Electron 窗口 | `main.js` 中 `petAdminWindow`（打开前强制清缓存） |
 
 ### 2.4 截图提问的选区覆盖层（快捷键触发）
@@ -79,21 +83,26 @@
 
 | 接口/函数 | 用途 |
 |---|---|
-| `WS /api/xiaozhi/ws?role=main\|chat` | 小智官方云长连接（单会话免唤醒、断线重连） |
+| `WS /api/xiaozhi/ws?role=main\|chat` | 小智官方云长连接（单会话免唤醒、断线重连；main=桌宠播音频，chat=对话窗收文本） |
 | `POST /api/xiaozhi/say` | 文字对话：写"你说" + 注入官方音频流（语音回答） |
-| `POST /api/xiaozhi/vision` | 图片识别：小智官方视觉 MCP → **纯文本气泡**（不注入、不唤醒、不拜拜） |
-| `GET /api/xiaozhi/chat-history` | 会话历史（前端 3s 轮询） |
-| `GET /api/xiaozhi/status` | 连接状态（bound/connected/session_id/subscribers） |
+| `POST /api/xiaozhi/vision` | 图片识别：官方视觉 MCP → 文本 + **官方音色语音**（回灌官方 LLM 由 TTS 产出） |
+| `POST /api/xiaozhi/vision-bubble` | 截图提问/屏幕观察：分析广播桌宠气泡 + 写历史 |
+| `POST /api/xiaozhi/mcp/tools/call` | 本地 MCP 工具调用（小智工具页开关控制） |
+| `GET /api/xiaozhi/chat-history` | 会话历史（上限 1000 条） |
+| `GET /api/xiaozhi/status` | 连接状态（bound/connected/session_id/subscribers/机器码） |
+| `GET/PUT /api/xiaozhi/prompts` | 图片/观察提示词配置读写 |
+| `GET/POST /api/xiaozhi/observe/status\|start\|stop` | 自动屏幕观察任务 |
 | `_inject_say` | 音频流注入串行化锁（防断断续续/多回答叠加） |
-| `_observe_loop` | 自动屏幕观察（随机时间种子 → 截图 → 文本评价） |
-| `_pump_upstream` | 官方消息泵（**stt 不回写历史、不广播** = 角色机制级解耦） |
-| `_chat_append(role,...)` | 写历史；role=user 时打诊断日志 `写历史[user]` |
+| `_edge_tts_wav` / `_broadcast_tts_pcm` | v3.4：edge-tts 合成（晓晓音色）+ 触发语预合成缓存（wav+opus 双层 LRU，启动预热） |
+| `_pump_upstream` | 官方消息泵（stt 不回写历史、不广播 = 角色机制级解耦；opus 帧解码为 PCM 广播） |
+| `_broadcast` / `_broadcast_bytes` | 文本广播（所有订阅者）/ 音频帧广播（仅 role=main，防多窗口叠声） |
 
 ### 3.2 桌宠配套
 
 | 文件 | 用途 |
 |---|---|
-| `routes\companion.py` | 桌宠状态 / 截图 / 窗口拓扑 / **Agent 总线接口**（`/agents`、`/agents/{id}/enabled`） |
+| `routes\companion.py` | 桌宠状态 / 截图 / 窗口拓扑 / **Agent 总线接口**（`/agents`、`/agents/{id}/enabled`、`/agents/{id}/inspect`） |
+| `companion\live2d_assets.py` | ★ 桌宠数据目录解析（`MIO_PET_STATE_DIR`，v3.4 与 Electron 统一）+ 模型清单 |
 | `routes\agent.py` | 原版 agent 接口（**bootstrap/messages 仍被前端使用**，勿删） |
 | `app\desktop_pet_live2d.py` 等 | 桌宠/观察/屏幕服务 |
 
@@ -105,9 +114,14 @@
 | `app\dsh_adapter.py` | **DSH 适配器**：facts → phase 策略层；边车管理；`--once` 自检入口 `inspect_current()` |
 | `app\dsh_log_stream.mjs` | **DSH 边车**（Node，零依赖）：逐帧解 zstd 会话日志 → 折叠 facts → NDJSON |
 | `app\octop_adapter.py` | Octop 适配器（占位骨架，配置即启用） |
-| `app\dsh_adapter_selftest.py` | DSH 自检 104 项（映射/解码/真实回放/总线） |
+| `app\dsh_adapter_selftest.py` | DSH 自检 131 项（映射/解码/回放/可达性/总线/回归/前端契约） |
 | `app\dsh_adapter_e2e.py` | DSH 端到端验证（轮询总线看 phase 实时变化） |
 | `app\dsh_fixture_build.py` | 从真实 DSH 日志重建回放夹具 `dsh_events_fixture.json` |
+| `app\dsh_latency.py` | DSH 端到端状态延迟测量（诚实口径，别抄死数字） |
+| `app\dsh_stats.py` | DSH 真实事件语料统计（条数会过期，现取现用） |
+| `app\dsh_gap_analysis.py` | 事件覆盖缺口分析（DSH 升级后跑一次） |
+| `app\dsh_ws_check.py` | 桌宠消费的 WS 通道检查 |
+| `app\dsh_acceptance.py` | 验收报告：12 phase 注册/可达/驱动来源 |
 | `私人AI日记系统\dsh_config.json` | DSH 接入配置（已 gitignore；`enabled` 为部署就绪开关） |
 | `私人AI日记系统\agent_bus_config.json` | 总线启用状态持久化（Agent 页开关；已 gitignore） |
 
@@ -127,7 +141,8 @@
 
 | 项 | 位置 |
 |---|---|
-| 一键启动 | `C:\Users\xiao1\Mao\start_mio.ps1`（后端 + Electron，脱离控制台） |
+| 一键启动 | `C:\Users\xiao1\Mao\start_mio.ps1`（后端 + Electron，脱离控制台；就绪探测用 `/api/companion/agents`；传入 `pet-data\Live2D桌宠` 作为桌宠数据目录） |
+| 桌宠数据目录 | `pet-data\Live2D桌宠`（v3.4 起后端与 Electron 通过 `MIO_PET_STATE_DIR` 解析到同一目录） |
 | 开机自启 | 注册表 `HKCU\...\Run` → `Mio桌宠自启动` → 指向 start_mio.ps1 |
 | 后端日志 | `backend_out.log`（stdout）、`backend_err.log`（应用日志） |
 | 启动日志 | `start_mio.log` |
@@ -181,7 +196,7 @@
 1. **改界面** → 先查第 2 节表，确定改哪个文件；dist 内是**构建产物**，`assets\` 分片不要手改（ChatPage 分片例外——它就是我们的小智对话页，可直接改，改完 `node --check`）。
 2. **改后端** → 改 `routes\` 下对应文件，`py_compile` 校验；小智逻辑全在 `xiaozhi.py`。
 3. **改完必做**：`node --check`（JS）+ `python -m py_compile`（py）+ **git commit**。
-4. **Electron 加载的页面 URL 带版本参数**（`?v=20261012...`）——改了前端文件记得**升版本号**，否则缓存不刷新。
+4. **Electron 加载的页面 URL 带版本参数**（当前 v3.5：live2d-pet.js `v=20261015-models`、pet-xz-audio.js `v=20261015-plugin`、CSS `v=20261015-plugin`）——改了前端文件记得**升版本号**，否则缓存不刷新。
 5. **重启方式**：`taskkill /F /IM electron.exe` 后跑 `start_mio.ps1`（start_mio.ps1 检测到 electron 在跑会跳过启动）。
 6. **MIO 管理窗口红点**：看左下角角标颜色定位注入状态；inject.js 每次 keepAlive 都会更新角标颜色。
 7. **git 仓库**：根目录 `C:\Users\xiao1\Mao`（本地 main 分支），每次改动都提交，防写坏。

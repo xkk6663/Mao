@@ -92,6 +92,17 @@ status.json
 # 本机 MCP 工具开关状态（用户自己的配置，不进远程仓库）
 xiaozhi_mcp_tools.json
 
+# --- 临时/中间产物（打包、pip、诊断残留，防再堆积） ---
+tmp*
+pip-build-tracker-*/
+pip-ephem-wheel-cache-*/
+pip-install-*/
+pip-unpack-*/
+_pet_*.log*
+_env_probe.ps1
+_env_probe.py
+本地视觉/
+
 \.Bin/
 xiaozhi_memo.json
 # 跨 Agent 总线运行状态 + DSH/Octop 接入配置（含 token，本机私密，不入库）
