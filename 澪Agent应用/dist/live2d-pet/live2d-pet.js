@@ -699,7 +699,10 @@
     const entry = expressions.find((item) => /水印|watermark|去水印/i.test(String(item?.Name || '')))
     if (!entry) return
     try {
-      const fileUrl = new URL(String(entry.File), definition.url).toString()
+      // definition.url 可能是相对路径（内置模型 ./models/...）：new URL 的 base 必须是绝对 URL，
+      // 否则抛 TypeError 被 catch 吞掉导致水印永远不消除。先基于页面地址解析成绝对再拼表达式文件。
+      const base = new URL(definition.url, window.location.href).toString()
+      const fileUrl = new URL(String(entry.File), base).toString()
       const response = await fetch(fileUrl)
       if (!response.ok) return
       const payload = await response.json()
@@ -1270,10 +1273,15 @@
 
   const AGENT_STATUS_LABELS = { online: '在线', connecting: '连接中', error: '异常', offline: '离线' }
 
-  // ---- 插件身份色：从插件注册表读取，桌宠侧不硬编码任何插件 ----
-  // 各插件在 manifest.bubble.accent 里声明自己的专属色；这里只做查询，
-  // 保证"谁在工作一眼可辨"，且新增插件零改动（未声明的走原有 phase 配色）。
-  function agentAccentOf(agentId) {
+  // ---- 插件身份色 ----
+  // 优先级：**总线透传的 payload.accent** > 插件注册表 manifest.bubble.accent > 无（回落默认配色）
+  // 为什么总线透传优先：桌宠窗口与管理页是**两个不同的 HTML 页面**，桌宠这边
+  // 并没有加载 kernel/plugin-registry.js 与各插件 manifest，所以早先"从注册表
+  // 读色值"的做法在桌宠窗口里永远拿到空串——气泡明明是 DSH 发的却不变蓝（实测踩过）。
+  // 现在由插件在 register() 时声明自己的色值，经 agent_phase / agent_bubble
+  // 透传下来，桌宠零额外依赖即可着色。
+  function agentAccentOf(agentId, payloadAccent) {
+    if (payloadAccent) return String(payloadAccent)
     try {
       const reg = window.__mioPluginRegistry
       const m = reg && reg.get ? reg.get(String(agentId)) : null
@@ -1289,7 +1297,7 @@
       const reg = window.__mioPluginRegistry
       const ids = reg && reg.list ? reg.list() : []
       for (const id of ids) {
-        const c = agentAccentOf(id)
+        const c = agentAccentOf(id, '')
         if (c) next[id] = c
       }
     } catch (_) {}
@@ -1399,15 +1407,16 @@
       } else {
         label = PHASE_LABELS[phase] || phase
       }
-      chips.push({ id, name: String(st.name || id), label, phase })
+      chips.push({ id, name: String(st.name || id), label, phase, accent: st.accent || '' })
     })
     badge.replaceChildren()
     for (const chip of chips) {
       const el = document.createElement('span')
       el.className = `agent-badge-chip p-${chip.phase}`
-      // 插件身份色：不同来源的 Agent 用各自专属色，一眼区分谁在工作
-      // （色值来自各插件 manifest 的 bubble.accent；未声明则不着色，走原有 phase 配色）
-      const accent = AGENT_ACCENTS[chip.id]
+      // 插件身份色：不同来源的 Agent 用各自专属色，一眼区分谁在工作。
+      // 色值优先取总线随 agent_phase 透传的 payload.accent（桌宠窗口本身
+      // 不加载插件注册表），其次回落 manifest 查询。
+      const accent = chip.accent || AGENT_ACCENTS[chip.id] || ''
       if (accent) {
         el.classList.add('agent-accented')
         el.style.setProperty('--agent-accent', accent)
@@ -1488,6 +1497,8 @@
         enabled: prev.enabled !== false,
         phase,
         active,
+        // 插件身份色（总线透传，见 agentAccentOf 注释）
+        accent: payload.accent || prev.accent || '',
       })
     }
     renderAgentBadge()
@@ -1536,6 +1547,7 @@
         enabled: payload.enabled !== undefined ? Boolean(payload.enabled) : (prev.enabled !== false),
         phase: prev.phase || 'idle',
         active: prev.active || false,
+        accent: prev.accent || '',
       })
     }
     renderAgentBadge()
@@ -1562,6 +1574,8 @@
           enabled: a.enabled !== false,
           phase: String(a.phase || 'idle'),
           active: Boolean(a.active),
+          // 插件身份色：来自总线快照（插件 register 时自己声明的）
+          accent: String(a.accent || ''),
         })
       }
       agentBadgeStates.clear()
@@ -1584,6 +1598,10 @@
   async function applySettings(nextSettings) {
     const previousModel = selectedModelId()
     settings = { ...settings, ...(nextSettings || {}) }
+    // 后端设置变更(settings_changed)以 settings.live2d_model_id 为准，清空桌面侧覆盖，避免热切换不触发
+    if (nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, 'live2d_model_id')) {
+      desktopSelectedModelId = ''
+    }
     if (electronRuntime) {
       window.mioDesktop.setAlwaysOnTop(Boolean(settings.live2d_always_on_top ?? true))
       window.mioDesktop.setClickThroughLocked(Boolean(settings.live2d_click_through_locked))
@@ -2290,9 +2308,18 @@
         fetchAgentsSnapshot()
       } else if (message.type === 'agent_bubble') {
         // 插件向桌宠发文本（走气泡）——按插件身份着色，与其它插件气泡区分。
-        // 只读 payload.agent_id 决定颜色，桌宠侧不认识任何具体插件。
+        // 色值走 payload.accent（插件在 register 时声明、总线透传），
+        // 这样桌宠窗口无需加载管理页的插件注册表也能正确着色。
         const text = String(payload.text || payload.content || '').trim()
-        if (text) showSpeechBubble(text, Number(payload.duration_ms) || 0, messageResponseId(payload), String(payload.agent_id || ''))
+        if (text) {
+          showSpeechBubble(
+            text,
+            Number(payload.duration_ms) || 0,
+            messageResponseId(payload),
+            String(payload.agent_id || ''),
+            String(payload.accent || ''),
+          )
+        }
       } else if (message.type === 'speak') {
         if (!xzPluginOn) return
         const text = String(payload.text || payload.content || '').trim()
@@ -2461,10 +2488,11 @@
 
   // 气泡身份色：把插件声明的 accent 写到气泡上（CSS 按 data 属性套用）。
   // 未声明 accent 的插件/小智默认气泡 → 清掉标记，回到原样式。
-  function applyBubbleAgentAccent(agentId) {
+  // accentFromPayload 是总线随 agent_bubble 透传下来的色值（优先级最高）。
+  function applyBubbleAgentAccent(agentId, accentFromPayload) {
     if (!speechBubble) return
     const id = String(agentId || '')
-    const accent = id ? (AGENT_ACCENTS[id] || agentAccentOf(id)) : ''
+    const accent = id ? agentAccentOf(id, accentFromPayload || AGENT_ACCENTS[id] || '') : ''
     if (accent) {
       speechBubble.dataset.agentId = id
       speechBubble.dataset.agentAccent = accent
@@ -2476,13 +2504,13 @@
     }
   }
 
-  function showSpeechBubble(text, durationMs = 0, responseId = '', agentId = '') {
+  function showSpeechBubble(text, durationMs = 0, responseId = '', agentId = '', accent = '') {
     if (settings.live2d_speech_bubble_enabled === false || !String(text || '').trim()) {
       hideSpeechBubble()
       return
     }
-    // 气泡身份色：不同插件的气泡用各自专属色区分（色值来自插件 manifest，不硬编码）
-    applyBubbleAgentAccent(agentId)
+    // 气泡身份色：不同插件的气泡用各自专属色区分
+    applyBubbleAgentAccent(agentId, accent)
     const normalizedResponseId = String(responseId || '')
     const normalizedText = String(text).trim()
     if (!speechBubble.hidden && normalizedResponseId && normalizedResponseId === speechBubbleResponseId) {
@@ -2875,15 +2903,6 @@
       }
     }
     if (action === 'agent') await bridge.open_agent()
-    if (action === 'sound-check') {
-      // 音效自检：把结论直接画在屏上（无边框小窗不便开 DevTools）
-      try {
-        if (window.__mioPetSoundReport) await window.__mioPetSoundReport()
-        else showSpeechBubble('音效自检模块未加载', 4000)
-      } catch (err) {
-        showSpeechBubble(`自检失败：${String(err && err.message || err)}`, 4000)
-      }
-    }
     if (action === 'close') await bridge.close_pet()
     updateMousePassThrough(true, event)
   })
