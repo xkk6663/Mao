@@ -13,7 +13,8 @@ import json
 import sys
 import urllib.request
 
-from .kernel import agent_bus_service, dsh_adapter as dsh
+from ..kernel import agent_bus_service
+from . import dsh_adapter as dsh
 
 # phase → (驱动来源, 桌宠表现)
 DRIVERS: dict[str, tuple[str, str]] = {

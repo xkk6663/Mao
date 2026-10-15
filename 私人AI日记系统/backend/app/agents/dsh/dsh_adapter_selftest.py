@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .agents.dsh import dsh_adapter as dsh
+from . import dsh_adapter as dsh
 
 
 PASS = 0

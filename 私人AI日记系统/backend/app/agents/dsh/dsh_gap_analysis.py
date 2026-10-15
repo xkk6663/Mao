@@ -15,7 +15,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from .agents.dsh import dsh_adapter as dsh
+from . import dsh_adapter as dsh
 
 
 def handled_types_from_sidecar() -> set[str]:

@@ -22,6 +22,7 @@ from .screen import screen_observation_service
 from .kernel import agent_bus_service, agent_task_service
 from .agents.dsh import dsh_adapter
 from .agents.octop import octop_adapter
+from .agents.xiaozhi import routes as xiaozhi
 from . import model_runtime
 from .runtime_identity import runtime_identity
 from .config import settings
@@ -43,7 +44,6 @@ from .routes import (
     settings as settings_routes,
     stats,
     weekly,
-    xiaozhi,
 )
 
 

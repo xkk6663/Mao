@@ -551,7 +551,7 @@ def _pick_next_observe_at() -> float:
 
 async def _observe_loop() -> None:
     global _observe_next_at, _observe_last_result, _pending_vision, _last_vision_image
-    from ..screen.screen_capture import MssCapture
+    from ...screen.screen_capture import MssCapture
     while True:
         try:
             if _observe_cfg.get("enabled") and _in_quiet_hours():
@@ -608,7 +608,7 @@ async def _broadcast_observe_bubble(text: str) -> None:
     """把视觉分析文本广播为 speech-bubble 事件 → 桌宠显示气泡并自动消失（与截图提问一致）。
     不注入官方（视觉仅返回文本；注入会触发唤醒/官方主动结束，且官方无独立 TTS 朗读分析文本）。"""
     try:
-        from .. import pet_event_service  # 延迟导入避免循环依赖
+        from ...companion import pet_event_service  # 延迟导入避免循环依赖
 
         pet_event_service.publish("speech-bubble", {
             "text": str(text or ""),
@@ -781,7 +781,7 @@ _load_chat_history()
 def _xz_register() -> None:
     """把"小智"注册进跨 Agent 总线（桌宠是跨 Agent 的"脸"，小智是语音主通道）。"""
     try:
-        from ..kernel import agent_bus_service as _abs
+        from ...kernel import agent_bus_service as _abs
         _abs.register(
             "xiaozhi",
             "小智",
@@ -795,7 +795,7 @@ def _xz_register() -> None:
 def _xz_emit(phase: str, **state) -> None:
     """小智适配器 → 统一总线：把官方云事件翻译成标准 phase（有就翻译，丢异常不中断链路）。"""
     try:
-        from ..kernel import agent_bus_service as _abs
+        from ...kernel import agent_bus_service as _abs
         _abs.heartbeat("xiaozhi")
         _abs.emit("xiaozhi", phase, state=state or None, meta={"source": "xiaozhi"})
     except Exception:  # noqa: BLE001
@@ -805,7 +805,7 @@ def _xz_emit(phase: str, **state) -> None:
 def _xz_status(status: str, *, error: str | None = None) -> None:
     """上报小智状态到总线。error=None 保留旧值；传空串清除（重连成功时）。"""
     try:
-        from ..kernel import agent_bus_service as _abs
+        from ...kernel import agent_bus_service as _abs
         _abs.set_status("xiaozhi", status, error=error)
     except Exception:  # noqa: BLE001
         pass
@@ -1379,7 +1379,7 @@ async def _exec_screen_explain(question: str) -> str:
         if pending_q:
             q = pending_q
     if not image_base64:
-        from ..screen.screen_capture import MssCapture
+        from ...screen.screen_capture import MssCapture
         image_base64 = await asyncio.to_thread(_full_screen_jpeg, MssCapture)
     if not image_base64:
         raise RuntimeError("截图失败：无法获取屏幕画面")
@@ -1775,7 +1775,7 @@ async def _mcp_companion_switch_model(args: dict) -> str:
     与小智对话链路打通：官方 LLM 调 tools/call 或本地意图兜底命中时执行，
     切换后重启桌宠换装，返回结果文本由官方 LLM 组织回答 → 官方 TTS 播报。
     """
-    from ..companion import companion_service
+    from ...companion import companion_service
 
     import random as _random
 
@@ -2430,7 +2430,7 @@ async def _pump_upstream(conn) -> None:
                                     # 附加 emotion：以用户真实输入为上下文推断（支持"哭一下/笑一个"等情绪指令联动桌宠表情动作）
                                     _xz_emotion = ""
                                     try:
-                                        from ..companion.companion_service import infer_speech_emotion as _infer_xz_emo
+                                        from ...companion.companion_service import infer_speech_emotion as _infer_xz_emo
                                         _xz_emotion = _infer_xz_emo(_txt, _last_user_input)
                                     except Exception:
                                         _xz_emotion = ""
