@@ -60,6 +60,20 @@
     activeSources.clear()
     playQueue = []; playing = false; nextStartTime = 0
   }
+  // 正常结束（tts stop）：不强制停止，等已排程音频自然播完后收尾。
+  // 官方音频帧与 stop 文本在同一 WS 保序到达，但前端 pump 会把到达的帧排程到
+  // 未来播放时刻（批量/网络缓冲时超前更多），立即 stopPlayback 会截断尾部 → "没讲完"。
+  var drainTimer = null
+  function scheduleDrain() {
+    if (drainTimer) return
+    drainTimer = window.setInterval(function () {
+      if (activeSources.size > 0 || playQueue.length > 0) return
+      window.clearInterval(drainTimer)
+      drainTimer = null
+      stopMouthFeed()
+      setSpeaking(false)
+    }, 40)
+  }
   function handlePcm(data) {
     var ctx = ensureAudioCtx()
     if (!ctx || data.byteLength < 8) return
@@ -165,16 +179,18 @@
         break
       case 'tts':
         if (j.state === 'start') {
+          // 新一段语音：立即打断旧的（含清理 drain），重新开始口型
           stopPlayback()
+          if (drainTimer) { window.clearInterval(drainTimer); drainTimer = null }
           startMouthFeed()
           setSpeaking(true, 5000)
         } else if (j.state === 'sentence_start' && j.text) {
           showBubble(j.text)
           setSpeaking(true, Math.max(4000, j.text.length * 190))
         } else if (j.state === 'stop') {
-          stopMouthFeed()
-          stopPlayback()
-          setSpeaking(false)
+          // 正常结束：让已排程音频自然播完（drain），播完后自动停口型/说话态；
+          // 不立即 stopPlayback，避免截断"还没播完"的尾部语音
+          scheduleDrain()
           hideBubble()
         }
         break
@@ -210,5 +226,31 @@
     } catch (e) {}
   }
 
-  connect()
+  // ---- 插件化生命周期：不再加载即连接，由 xiaozhi 插件 onMount/onUnmount 驱动 ----
+  function disconnect() {
+    try {
+      window.clearInterval(mouthTimer); mouthTimer = null
+    } catch (_) {}
+    try {
+      window.clearTimeout(reconnectTimer); reconnectTimer = null
+    } catch (_) {}
+    try {
+      window.clearInterval(drainTimer); drainTimer = null
+    } catch (_) {}
+    try { window.clearTimeout(bubbleHideTimer); bubbleHideTimer = null } catch (_) {}
+    try { window.clearInterval(pumpTimer); pumpTimer = null } catch (_) {}
+    if (ws) {
+      try { ws.onclose = null; ws.close() } catch (_) {}
+      ws = null
+    }
+    stopPlayback()
+    setSpeaking(false, 0)
+    stopMouthFeed()
+  }
+
+  window.__mioPetXzAudio = {
+    connect: function () { connect() },
+    disconnect: disconnect,
+    get connected() { return !!ws },
+  }
 })()

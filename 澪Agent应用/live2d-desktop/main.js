@@ -67,6 +67,8 @@ let modelBounds = null
 let uiOpen = false
 let mousePolicyTimer = null
 let lastIgnoreMouseEvents = null
+// 插件化：xiaozhi agent enabled 状态（由渲染层 IPC 同步），未启用时禁用所有小智入口
+let xiaozhiEnabled = false
 let topmostWatchdog = null
 let lockControlAnchor = null
 let parentWatchdog = null
@@ -604,11 +606,15 @@ function createChatWindow(anchor) {
 }
 
 function createXiaozhiWindow() {
+  // 插件化守卫：xiaozhi 未启用时禁止打开小智对话
+  if (!xiaozhiEnabled) return
   // 打开小智对话（横条输入窗）
   toggleChatWindow()
 }
 
 function showChatWindow(anchor) {
+  // 插件化守卫：xiaozhi 未启用时禁止打开小智对话窗
+  if (!xiaozhiEnabled) return { ok: false, visible: false, disabled: true }
   if (!chatWindow || chatWindow.isDestroyed()) {
     createChatWindow(anchor)
     return { ok: true, visible: true, created: true }
@@ -622,8 +628,16 @@ function showChatWindow(anchor) {
 }
 
 function toggleChatWindow(anchor) {
+  if (!xiaozhiEnabled) return { ok: false, visible: false, disabled: true }
   if (chatWindow && !chatWindow.isDestroyed() && chatWindow.isVisible()) return hideChatWindow()
   return showChatWindow(anchor)
+}
+
+// 插件停用小智时关闭已打开的小智对话窗
+function closeChatWindowIfOpen() {
+  if (chatWindow && !chatWindow.isDestroyed() && chatWindow.isVisible()) {
+    hideChatWindow()
+  }
 }
 
 function restoreWindowVisibility() {
@@ -719,7 +733,7 @@ function createLockControlWindow() {
 
 function updateTrayMenu() {
   if (!tray || tray.isDestroyed()) return
-  tray.setContextMenu(Menu.buildFromTemplate([
+  const items = [
     {
       label: '固定并穿透',
       type: 'checkbox',
@@ -727,12 +741,18 @@ function updateTrayMenu() {
       click: (item) => setClickThroughLocked(Boolean(item.checked), true),
     },
     { label: '显示桌宠', click: () => restoreWindowVisibility() },
-    { label: '打开小智对话', click: () => toggleChatWindow() },
+  ]
+  // 插件化：xiaozhi 未启用时不提供"打开小智对话"入口
+  if (xiaozhiEnabled) {
+    items.push({ label: '打开小智对话', click: () => toggleChatWindow() })
+  }
+  items.push(
     { label: '导入 Live2D 模型', click: () => importModel() },
     { label: '桌宠管理', click: () => openPetAdmin() },
     { type: 'separator' },
     { label: '退出桌宠', click: () => { quitting = true; app.quit() } },
-  ]))
+  )
+  tray.setContextMenu(Menu.buildFromTemplate(items))
 }
 
 function setClickThroughLocked(enabled, notifyRenderer = false) {
@@ -949,6 +969,15 @@ function registerIpc() {
     restoreWindowVisibility()
   })
   ipcMain.on('mio-desktop:set-chat-window-open', (_event, open) => setChatWindowOpen(open))
+  ipcMain.on('mio-desktop:set-agent-plugin', (_event, payload) => {
+    const agentId = String(payload?.agentId || '')
+    if (agentId !== 'xiaozhi') return
+    const enabled = Boolean(payload?.enabled)
+    if (xiaozhiEnabled === enabled) return
+    xiaozhiEnabled = enabled
+    if (!enabled) closeChatWindowIfOpen()
+    updateTrayMenu()
+  })
   ipcMain.handle('mio-desktop:toggle-chat-window', (_event, anchor) => toggleChatWindow(anchor))
   ipcMain.handle('mio-desktop:show-chat-window', (_event, anchor) => showChatWindow(anchor))
   ipcMain.on('mio-pet-chat:hide', () => hideChatWindow())

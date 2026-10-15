@@ -10,6 +10,26 @@
   if (window.__mioXzChatInjectLoaded) return
   window.__mioXzChatInjectLoaded = true
 
+  // 插件化：小智未启用（后端 xiaozhi agent enabled=false）时不注入任何小智 UI
+  ;(async function gateByAgentEnabled() {
+    try {
+      const res = await fetch('/api/companion/agents', { headers: { 'Cache-Control': 'no-cache' } })
+      const data = await res.json()
+      const agents = data && Array.isArray(data.agents) ? data.agents : []
+      const xz = agents.find((a) => a && String(a.agent_id) === 'xiaozhi')
+      if (xz && xz.enabled === false) {
+        window.__mioXzChatInjectPaused = true
+        return
+      }
+      window.__mioXzChatInjectPaused = false
+    } catch (_) {
+      // 后端暂不可达时不阻塞注入（保持原行为）
+      window.__mioXzChatInjectPaused = false
+    }
+    boot()
+  })()
+
+  function boot() {
   var svgIcon = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>'
 
   var pendingImages = [] // [{dataUrl, name}]
@@ -218,4 +238,5 @@
   setInterval(keepAlive, 2000)
   // 角标颜色独立高频刷新（不依赖 keepAlive，确保 Vue 渲染后及时变绿）
   setInterval(function () { try { ensureBadge() } catch (e) {} }, 500)
+  }  // end boot
 })()

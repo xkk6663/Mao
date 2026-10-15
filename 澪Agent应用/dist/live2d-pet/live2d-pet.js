@@ -1297,6 +1297,12 @@
   function applyAgentStatus(payload) {
     // 连接/在线/离线/停用状态变化实时刷新状态栏：即插即用（上线即出现、停用/离线即移除）
     if (!payload) return
+    // 插件总线增量同步：停用/启用 agent 时实时挂载/卸载对应插件
+    try {
+      if (window.__mioPluginBus && payload.enabled !== undefined) {
+        window.__mioPluginBus.setAgentEnabled(payload.agent_id, payload.enabled !== false)
+      }
+    } catch (_) {}
     const agentId = String(payload.agent_id || '')
     const status = String(payload.status || 'offline')
     const agentName = String(payload.agent_name || payload.agent_id || 'Agent')
@@ -1320,6 +1326,10 @@
     try {
       const snapshot = await request('/api/companion/agents')
       const agents = snapshot.agents || []
+      // 插件总线全量同步：agent enabled → 插件挂载/卸载（即插即用，以服务端 enabled 为准）
+      try {
+        if (window.__mioPluginBus) window.__mioPluginBus.updateAgents(agents)
+      } catch (_) {}
       // 全量同步：以服务端快照为准，停用(enabled=false)/未注册的 agent 从状态栏移除
       const next = new Map()
       for (const a of agents) {
@@ -2032,6 +2042,8 @@
       let message
       try { message = JSON.parse(event.data) } catch (_) { return }
       const payload = message?.payload || {}
+      // 插件化 gating：小智未启用（插件未挂载）时不响应小智业务消息（气泡/语音/视觉全不触发）
+      const xzPluginOn = !!(window.__mioPluginBus && window.__mioPluginBus.isMounted('xiaozhi'))
       if (message.type === 'ready') {
         await applySettings(payload.settings || {})
         applyActivity(payload.activity || {})
@@ -2047,6 +2059,7 @@
       } else if (message.type === 'agents_snapshot') {
         fetchAgentsSnapshot()
       } else if (message.type === 'speak') {
+        if (!xzPluginOn) return
         const text = String(payload.text || payload.content || '').trim()
         applySpeakEmotionAndMotion(text, payload.emotion || 'neutral')
         showSpeechBubble(text, 0, messageResponseId(payload))
@@ -2057,14 +2070,17 @@
           await dispatchSpeech(payload)
         }
       } else if (message.type === 'speech_interrupt') {
+        if (!xzPluginOn) return
         const reason = String(payload.reason || 'interrupted')
         const targetResponseId = String(payload.response_id || '')
         if (!targetResponseId || !activeResponseId || targetResponseId === activeResponseId) {
           stopSpeech(['user_started_speaking', 'call_ended'].includes(reason) ? 'interrupted' : reason)
         }
       } else if (message.type === 'visual_event') {
+        if (!xzPluginOn) return
         handleVisualEvent(payload)
       } else if (message.type === 'speech-bubble') {
+        if (!xzPluginOn) return
         // 视觉分析文本气泡（观察/立即观察）：显示并自动消失，不播语音
         const bubbleText = String(payload.text || '').trim()
         if (bubbleText) {
@@ -2434,6 +2450,8 @@
 
   canvas.addEventListener('dblclick', async (event) => {
     if (clickThroughLocked() || !pointHitsModel(event.clientX, event.clientY)) return
+    // 小智未启用（插件未挂载）时双击不打开对话窗
+    if (!(window.__mioPluginBus && window.__mioPluginBus.isMounted('xiaozhi'))) return
     event.preventDefault()
     sendSocket('double_clicked', { x: event.screenX, y: event.screenY })
     const bridge = await waitForBridge()
@@ -2445,6 +2463,16 @@
     if (clickThroughLocked()) return
     if (electronRuntime && !pointHitsModel(event.clientX, event.clientY)) return
     updateContextMenuLabels()
+    // 插件化菜单：只显示"已挂载插件"声明的条目（小智未启用 → chat/截图提问/气泡入口不存在）
+    if (window.__mioPluginBus) {
+      const pluginItems = new Set(window.__mioPluginBus.getMenuItems().map((item) => item.action))
+      contextMenu.querySelectorAll('button[data-action]').forEach((btn) => {
+        const action = btn.dataset.action
+        btn.hidden = window.__mioPluginBus.isPluginAction(action)
+          ? !pluginItems.has(action)
+          : false
+      })
+    }
     contextMenu.hidden = false
     contextMenu.style.visibility = 'hidden'
     contextMenu.style.left = '4px'
