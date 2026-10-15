@@ -153,6 +153,23 @@ body,
 .agent-badge-chip.p-heartbeat { background: #4f7ba8; }
 .agent-badge-chip.p-connecting { background: #6b7f96; }
 
+/* 插件身份识别：声明了 bubble.accent 的插件，其 chip 左侧加一条专属色竖条。
+   保留原有 phase 配色（仍能看出"在干什么"），同时能看出"谁在干"——
+   多 Agent 并排时一眼区分来源，且新增插件零改动（色值来自插件自己的 manifest）。 */
+.agent-badge-chip.agent-accented {
+  padding-left: 6px;
+  border-left: 3px solid var(--agent-accent, transparent);
+}
+
+/* DSH 气泡：与其它插件的气泡用颜色区分（DSH 专属靛蓝 #4F6BED）。
+   bubble.accent 由插件 manifest 声明，渲染层只按 data 属性套用，不硬编码插件身份。 */
+.speech-bubble[data-agent-accent] {
+  border-color: color-mix(in srgb, var(--bubble-accent, #4F6BED) 45%, transparent);
+  box-shadow:
+    0 8px 24px rgb(24 43 50 / 16%),
+    inset 0 3px 0 0 var(--bubble-accent, #4F6BED);
+}
+
 .speech-bubble {
   position: absolute;
   z-index: 12;

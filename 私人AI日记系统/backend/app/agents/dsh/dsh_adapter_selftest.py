@@ -591,9 +591,21 @@ def test_frontend_contract() -> None:
     """
     print("\n[6] 前端契约（桌宠渲染端 phase 映射覆盖）")
 
-    pet_js = Path(dsh.__file__).resolve().parents[3] / "澪Agent应用" / "dist" / "live2d-pet" / "live2d-pet.js"
-    if not pet_js.exists():
-        print(f"      未找到 {pet_js}，跳过前端契约检查")
+    # 桌宠渲染端路径：插件目录化后本文件位于 app/agents/dsh/，
+    # 到仓库根要上溯 4 级。旧代码写死 parents[3]（按"文件在 app/"算的层级），
+    # 目录搬迁后会**静默跳过**整个前端契约检查——那等于这条断言白写了。
+    # 故逐个层级探测，找到即用。
+    _here = Path(dsh.__file__).resolve()
+    pet_js = None
+    for _up in (4, 3, 2, 5):
+        if _up >= len(_here.parents):
+            continue
+        cand = _here.parents[_up] / "澪Agent应用" / "dist" / "live2d-pet" / "live2d-pet.js"
+        if cand.exists():
+            pet_js = cand
+            break
+    if pet_js is None:
+        print("      未找到桌宠渲染端 live2d-pet.js，跳过前端契约检查")
         return
 
     src = pet_js.read_text(encoding="utf-8", errors="replace")
@@ -700,9 +712,111 @@ def test_bus_integration() -> None:
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
+def test_plugin_api() -> None:
+    """[8] 插件包自足性：路由契约 + 独有信号 + 气泡身份色。
+
+    这节守的是"插件化"这件事本身：
+      - 插件只暴露自己的前缀 /api/plugin/dsh/*
+      - 独有信号（审批/提问）能产出气泡且带去重
+      - 总线 announce 只透传 agent_id，不认识任何具体插件
+    """
+    print("\n[8] 插件包自足性（路由契约 / 独有信号 / 气泡身份色）")
+    try:
+        from . import routes as plugin_routes
+        from . import dsh_signals
+    except Exception as exc:  # noqa: BLE001
+        check("导入插件路由与信号模块", False, str(exc))
+        return
+    check("导入插件路由与信号模块", True)
+
+    # 路由前缀必须是本插件专属，不得侵入其它插件命名空间
+    check_eq("路由前缀专属", plugin_routes.router.prefix, "/api/plugin/dsh")
+    paths = sorted({r.path for r in plugin_routes.router.routes})
+    check_eq("暴露 3 个只读端点", paths,
+             ["/api/plugin/dsh/diagnostics", "/api/plugin/dsh/phases", "/api/plugin/dsh/status"])
+    methods = sorted({m for r in plugin_routes.router.routes for m in (r.methods or set())})
+    check_eq("端点全部只读（GET）", methods, ["GET"])
+
+    # phase 语义表必须覆盖全部 12 态（缺一个前端就会显示英文原值）
+    check("语义表覆盖全部 12 态",
+          set(plugin_routes.PHASE_META) == set(dsh.DSH_PHASES),
+          f"缺 {sorted(set(dsh.DSH_PHASES) - set(plugin_routes.PHASE_META))}")
+
+    # ---- 独有信号：气泡播报 ----
+    from ...kernel import agent_bus_service as bus
+    captured: list[tuple[str, str]] = []
+    original = bus.announce
+    bus.announce = lambda aid, text, **kw: (captured.append((aid, text)), True)[1]
+    try:
+        dsh_signals.reset_announce_state()
+        first = dsh_signals.maybe_announce_waiting("dsh", {"awaiting_approval": True, "approval_tool": "pwsh"})
+        second = dsh_signals.maybe_announce_waiting("dsh", {"awaiting_approval": True, "approval_tool": "pwsh"})
+        check("审批等待产出气泡", bool(first) and "授权" in first, repr(first))
+        check("同一等待不重复播报（去重）", second == "", repr(second))
+
+        dsh_signals.reset_announce_state()
+        q = dsh_signals.maybe_announce_waiting("dsh", {"awaiting_question": True, "question_text": "要继续吗？"})
+        check("提问等待产出气泡", q == "要继续吗？", repr(q))
+
+        dsh_signals.reset_announce_state()
+        none = dsh_signals.maybe_announce_waiting("dsh", {})
+        check("无等待时不打扰", none == "", repr(none))
+
+        check("播报都带本插件 agent_id",
+              all(a == "dsh" for a, _ in captured),
+              repr(captured))
+    finally:
+        bus.announce = original
+        dsh_signals.reset_announce_state()
+
+    # ---- 气泡身份色：色值归插件 manifest，总线只透传 id ----
+    import json as _json
+    from pathlib import Path as _Path
+    pet_dir = None
+    _here = _Path(dsh.__file__).resolve()
+    for _up in (4, 3, 2, 5):
+        if _up >= len(_here.parents):
+            continue
+        cand = _here.parents[_up] / "澪Agent应用" / "dist" / "plugins" / "dsh" / "manifest.js"
+        if cand.exists():
+            pet_dir = cand
+            break
+    if pet_dir is None:
+        check("找到 dsh 插件 manifest.js", False, "未找到")
+    else:
+        check("找到 dsh 插件 manifest.js", True)
+        src = pet_dir.read_text(encoding="utf-8", errors="replace")
+        m = re.search(r"accent:\s*'(#[0-9A-Fa-f]{6})'", src)
+        check("manifest 声明了 accent 色", m is not None, "未匹配到 accent")
+        if m:
+            api_accent = plugin_routes.PHASE_META and None
+            # 插件 API 里上报的 accent 必须与 manifest 一致（否则气泡/界面两套色）
+            api_src = Path(__file__).with_name("routes.py").read_text(encoding="utf-8", errors="replace")
+            m2 = re.search(r'"accent":\s*"(#[0-9A-Fa-f]{6})"', api_src)
+            check("API 与 manifest 的 accent 一致",
+                  m2 is not None and m2.group(1).lower() == m.group(1).lower(),
+                  f"api={m2.group(1) if m2 else None} manifest={m.group(1)}")
+        # 渲染端必须按 data 属性着色（不硬编码插件名）
+        pet_js = None
+        for _up in (4, 3, 2, 5):
+            if _up >= len(_here.parents):
+                continue
+            cand = _here.parents[_up] / "澪Agent应用" / "dist" / "live2d-pet" / "live2d-pet.js"
+            if cand.exists():
+                pet_js = cand
+                break
+        if pet_js is not None:
+            js = pet_js.read_text(encoding="utf-8", errors="replace")
+            check("渲染端支持 agent_bubble 消息", "agent_bubble" in js)
+            check("渲染端按插件身份着色（非硬编码 DSH）",
+                  "applyBubbleAgentAccent" in js and "AGENT_ACCENTS" in js)
+            check("渲染端不硬编码 dsh 字面量",
+                  "'dsh'" not in js.split("function applyBubbleAgentAccent")[1].split("function showSpeechBubble")[0])
+
+
 def main() -> int:
     print("=" * 68)
-    print("DSH 适配器自检（app.dsh_adapter_selftest）")
+    print("DSH 适配器自检（app.agents.dsh.dsh_adapter_selftest）")
     print("=" * 68)
     test_phase_mapping()
     test_parse_event()
@@ -712,6 +826,7 @@ def main() -> int:
     test_bus_integration()
     test_step_start_resets_output_flags()
     test_frontend_contract()
+    test_plugin_api()
 
     print("\n" + "=" * 68)
     print(f"结果：{PASS} 通过 / {FAIL} 失败")

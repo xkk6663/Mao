@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Mio Live2D renderer. The Electron process owns desktop behavior while
  * FastAPI remains the single owner of persona, memory, speech and vision.
  */
@@ -1267,6 +1267,33 @@
 
   const AGENT_STATUS_LABELS = { online: '在线', connecting: '连接中', error: '异常', offline: '离线' }
 
+  // ---- 插件身份色：从插件注册表读取，桌宠侧不硬编码任何插件 ----
+  // 各插件在 manifest.bubble.accent 里声明自己的专属色；这里只做查询，
+  // 保证"谁在工作一眼可辨"，且新增插件零改动（未声明的走原有 phase 配色）。
+  function agentAccentOf(agentId) {
+    try {
+      const reg = window.__mioPluginRegistry
+      const m = reg && reg.get ? reg.get(String(agentId)) : null
+      if (m && m.bubble && m.bubble.accent) return String(m.bubble.accent)
+    } catch (_) {}
+    return ''
+  }
+  // 每次 render 时刷新（插件可能晚于桌宠注册）
+  let AGENT_ACCENTS = {}
+  function refreshAgentAccents() {
+    const next = {}
+    try {
+      const reg = window.__mioPluginRegistry
+      const ids = reg && reg.list ? reg.list() : []
+      for (const id of ids) {
+        const c = agentAccentOf(id)
+        if (c) next[id] = c
+      }
+    } catch (_) {}
+    AGENT_ACCENTS = next
+  }
+  refreshAgentAccents()
+
   function renderAgentBadge() {
     if (!agentBadgeEnabled()) {
       const badge = document.getElementById('agent-badge')
@@ -1298,6 +1325,14 @@
     for (const chip of chips) {
       const el = document.createElement('span')
       el.className = `agent-badge-chip p-${chip.phase}`
+      // 插件身份色：不同来源的 Agent 用各自专属色，一眼区分谁在工作
+      // （色值来自各插件 manifest 的 bubble.accent；未声明则不着色，走原有 phase 配色）
+      const accent = AGENT_ACCENTS[chip.id]
+      if (accent) {
+        el.classList.add('agent-accented')
+        el.style.setProperty('--agent-accent', accent)
+        el.style.borderColor = accent + '66'
+      }
       el.textContent = `${chip.name} · ${chip.label}`
       el.title = `${chip.name} · ${chip.label}`
       badge.appendChild(el)
@@ -2160,6 +2195,11 @@
         applyAgentStatus(payload)
       } else if (message.type === 'agents_snapshot') {
         fetchAgentsSnapshot()
+      } else if (message.type === 'agent_bubble') {
+        // 插件向桌宠发文本（走气泡）——按插件身份着色，与其它插件气泡区分。
+        // 只读 payload.agent_id 决定颜色，桌宠侧不认识任何具体插件。
+        const text = String(payload.text || payload.content || '').trim()
+        if (text) showSpeechBubble(text, Number(payload.duration_ms) || 0, messageResponseId(payload), String(payload.agent_id || ''))
       } else if (message.type === 'speak') {
         if (!xzPluginOn) return
         const text = String(payload.text || payload.content || '').trim()
@@ -2326,11 +2366,30 @@
     speechBubble.classList.toggle('align-left', !lastBubblePos.useLeftSide)
   }
 
-  function showSpeechBubble(text, durationMs = 0, responseId = '') {
+  // 气泡身份色：把插件声明的 accent 写到气泡上（CSS 按 data 属性套用）。
+  // 未声明 accent 的插件/小智默认气泡 → 清掉标记，回到原样式。
+  function applyBubbleAgentAccent(agentId) {
+    if (!speechBubble) return
+    const id = String(agentId || '')
+    const accent = id ? (AGENT_ACCENTS[id] || agentAccentOf(id)) : ''
+    if (accent) {
+      speechBubble.dataset.agentId = id
+      speechBubble.dataset.agentAccent = accent
+      speechBubble.style.setProperty('--bubble-accent', accent)
+    } else {
+      delete speechBubble.dataset.agentAccent
+      delete speechBubble.dataset.agentId
+      speechBubble.style.removeProperty('--bubble-accent')
+    }
+  }
+
+  function showSpeechBubble(text, durationMs = 0, responseId = '', agentId = '') {
     if (settings.live2d_speech_bubble_enabled === false || !String(text || '').trim()) {
       hideSpeechBubble()
       return
     }
+    // 气泡身份色：不同插件的气泡用各自专属色区分（色值来自插件 manifest，不硬编码）
+    applyBubbleAgentAccent(agentId)
     const normalizedResponseId = String(responseId || '')
     const normalizedText = String(text).trim()
     if (!speechBubble.hidden && normalizedResponseId && normalizedResponseId === speechBubbleResponseId) {

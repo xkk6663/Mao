@@ -98,6 +98,7 @@ from pathlib import Path
 from typing import Any
 
 from ...kernel import agent_bus_service
+from . import dsh_signals
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +142,32 @@ DSH_FACT_PHASES: tuple[str, ...] = DSH_WORK_PHASES + ("idle", "complete", "error
 
 # 边车脚本（与本体同目录）
 SIDECAR_NAME = "dsh_log_stream.mjs"
+
+
+def _resolve_sidecar_script() -> Path | None:
+    """定位边车脚本，兼容两种布局（插件目录化前后）。
+
+    历史：后端分层重构（P1）把适配器从 ``app/`` 迁到 ``app/agents/dsh/``，
+    但边车脚本当时留在 ``app/``。硬编码 ``Path(__file__).with_name(...)``
+    会因搬迁而静默失效——表现为"DSH 在线但状态永远 idle"。
+
+    查找顺序：
+      1. 与本模块同目录（插件包自足的期望位置）；
+      2. 上两级（``app/``，搬迁前的历史位置）。
+
+    找到即返回；都没有则返回 None，由调用方给出明确错误。
+    """
+    candidates = [
+        Path(__file__).with_name(SIDECAR_NAME),
+        Path(__file__).resolve().parents[2] / SIDECAR_NAME,
+    ]
+    for path in candidates:
+        try:
+            if path.is_file():
+                return path
+        except OSError:
+            continue
+    return None
 
 # DSH 进程名（用于在线/离线判定与 paused 上报）
 DSH_PROCESS_NAMES = ("DeepSeek Harness.exe", "dsh.exe")
@@ -683,9 +710,11 @@ class DshAdapter:
         if not node:
             self.sidecar_error = "未找到 node 可执行文件：请安装 Node.js 或配置 dsh_config.json 的 node_path"
             return False
-        script = Path(__file__).with_name(SIDECAR_NAME)
-        if not script.exists():
-            self.sidecar_error = f"缺少边车脚本 {script}"
+        script = _resolve_sidecar_script()
+        if script is None:
+            self.sidecar_error = (
+                f"缺少边车脚本 {SIDECAR_NAME}（已在插件目录与 app 目录查找）"
+            )
             return False
 
         args: list[str] = []
@@ -784,6 +813,12 @@ class DshAdapter:
         if self.session_id:
             state["session"] = self.session_id
         self._emit_phase(phase, state, force=force)
+        # DSH 独有信号 → 桌宠气泡：审批/提问挂起时主动播报一句
+        # （phase 已表达"在等"，气泡负责"主动叫你"，二者不重叠）
+        try:
+            dsh_signals.maybe_announce_waiting(AGENT_ID, self.facts)
+        except Exception:  # noqa: BLE001
+            logger.debug("DSH 等待播报失败（不影响主链路）", exc_info=True)
 
     # -- 主循环 -----------------------------------------------------------
     async def run(self) -> None:

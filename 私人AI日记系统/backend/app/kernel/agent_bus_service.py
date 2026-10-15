@@ -328,6 +328,37 @@ class AgentBus:
                 },
             )
 
+    def announce(self, agent_id: str, text: str, *, duration_ms: int = 0) -> bool:
+        """插件向桌宠发**一条文本气泡**（不改 phase，不抢"身体"）。
+
+        与 ``emit`` 的分工：``emit`` 表达"我在干什么"（驱动动画/徽标），
+        ``announce`` 表达"我想说一句话"（只出气泡）。二者互不覆盖。
+
+        颜色区分：气泡带 ``agent_id``，渲染端按该插件 manifest 声明的
+        ``bubble.accent`` 着色——**总线不认识任何具体插件**，只透传 id。
+
+        返回 False 表示未广播（插件停用/文本为空）。
+        """
+        body = str(text or "").strip()
+        if not body:
+            return False
+        with self._lock:
+            agent = self._agents.get(agent_id)
+            if agent is None or not agent.enabled:
+                return False
+            name = agent.name
+        pet_event_service.publish(
+            "agent_bubble",
+            {
+                "agent_id": agent_id,
+                "agent_name": name,
+                "text": body,
+                "duration_ms": max(0, int(duration_ms or 0)),
+                "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
+            },
+        )
+        return True
+
     def _decide_active_locked(self, agent: AgentState, phase: str, now: float) -> None:
         """活跃聚焦：谁有资格占据桌宠的"身体"。"""
         new_priority = PHASE_PRIORITY.get(phase, 6)
@@ -469,6 +500,11 @@ def emit(agent_id: str, phase: str, state: dict[str, Any] | None = None, meta: d
 
 def heartbeat(agent_id: str) -> None:
     bus.heartbeat(agent_id)
+
+
+def announce(agent_id: str, text: str, *, duration_ms: int = 0) -> bool:
+    """插件 → 桌宠文本气泡（按插件身份色显示）。见 ``AgentBus.announce``。"""
+    return bus.announce(agent_id, text, duration_ms=duration_ms)
 
 
 def set_status(agent_id: str, status: str, *, error: str | None = None) -> None:

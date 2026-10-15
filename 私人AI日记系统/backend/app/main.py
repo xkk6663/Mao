@@ -21,6 +21,7 @@ from .creation import creation_service
 from .screen import screen_observation_service
 from .kernel import agent_bus_service, agent_task_service
 from .agents.dsh import dsh_adapter
+from .agents.dsh import routes as dsh_plugin_routes
 from .agents.octop import octop_adapter
 from .agents.xiaozhi import routes as xiaozhi
 from . import model_runtime
@@ -33,6 +34,7 @@ from .routes import (
     backup,
     chat,
     companion,
+    conversations,
     creation,
     day,
     diary,
@@ -239,6 +241,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router)
     app.include_router(backup.router)
     app.include_router(companion.router)
+    app.include_router(conversations.router)
     app.include_router(creation.router)
     app.include_router(diary.router)
     app.include_router(day.router)
@@ -251,6 +254,9 @@ def create_app() -> FastAPI:
     app.include_router(stats.router)
     app.include_router(weekly.router)
     app.include_router(xiaozhi.router)
+    # 插件包自带的 HTTP 面（装配职责留在 kernel/main，插件自己不抢装配权）。
+    # 每个插件包对外只暴露自己的前缀，互不 import。
+    app.include_router(dsh_plugin_routes.router)
 
     if settings.agent_frontend_dir.exists():
         agent_frontend_root = settings.agent_frontend_dir.resolve()

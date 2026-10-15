@@ -300,6 +300,13 @@ function initialFacts() {
     approvals_pending: 0,
     awaiting_user: false,
     voice_active: false,
+    // DSH 独有的两类"在等你"信号（比 awaiting_user 更精确，驱动桌宠气泡播报）：
+    //   awaiting_approval —— approval/asked 之后尚未 approval/decided
+    //   awaiting_question —— ask_user_question 工具在飞（模型等你选）
+    awaiting_approval: false,
+    approval_tool: '',
+    awaiting_question: false,
+    question_text: '',
     // “本事件本身表明的意图”（每事件清零后由当前事件置位，
     // 与 last_event_failed 同一套语义，避免意图粘住整轮）
     plan_intent: false,
@@ -352,6 +359,8 @@ function foldEvent(prev, ev) {
       f.active_tools = 0
       f.approvals_pending = 0
       f.awaiting_user = false
+      f.awaiting_approval = false
+      f.approval_tool = ''
       f.voice_active = false
       f.retrying = false
       f.errored = false
@@ -375,6 +384,10 @@ function foldEvent(prev, ev) {
       f.active_tools = 0
       f.approvals_pending = 0
       f.awaiting_user = false
+      f.awaiting_approval = false
+      f.approval_tool = ''
+      f.awaiting_question = false
+      f.question_text = ''
       f.voice_active = false
       f.turn_end_reason = kind
       if (kind === 'error' || kind === 'max-tokens' || kind === 'interrupted') {
@@ -451,6 +464,7 @@ function foldEvent(prev, ev) {
       const lname = name.toLowerCase()
       if (ASK_TOOLS.has(lname)) {
         f.awaiting_user = true
+        f.awaiting_question = true
         f._askCalls = (prev._askCalls || []).concat([callId])
       }
       // 规划类工具（todo_write/create_goal/update_goal）＝本轮在做规划
@@ -492,7 +506,11 @@ function foldEvent(prev, ev) {
       }
       const asks = (prev._askCalls || []).filter((x) => x !== callId)
       f._askCalls = asks
-      if (asks.length === 0) f.awaiting_user = false
+      if (asks.length === 0) {
+        f.awaiting_user = false
+        f.awaiting_question = false
+        f.question_text = ''
+      }
       if (prev.voice_active) {
         // 只有当前工具是语音工具时才结束语音态（粗粒度但足够）
         f.voice_active = false
@@ -500,14 +518,26 @@ function foldEvent(prev, ev) {
       break
     }
 
-    case 'approval/asked':
+    case 'approval/asked': {
       f.approvals_pending += 1
-      f.last_tool = String(d.toolName || f.last_tool)
+      const tool = String(d.toolName || '')
+      f.last_tool = String(tool || f.last_tool)
+      // DSH 独有：正在等用户授权（渲染端据此弹"待确认"气泡）
+      if (f.approvals_pending > 0) {
+        f.awaiting_approval = true
+        f.approval_tool = tool
+      }
       break
+    }
 
-    case 'approval/decided':
+    case 'approval/decided': {
       f.approvals_pending = Math.max(0, f.approvals_pending - 1)
+      if (f.approvals_pending === 0) {
+        f.awaiting_approval = false
+        f.approval_tool = ''
+      }
       break
+    }
 
     case 'llm/retry':
     case 'llm/retry-started': {
