@@ -41,6 +41,11 @@
         if (!j || !j.ok) throw new Error((j && j.detail) || '保存失败')
         return loadAgents()
       })
+      .then(function () {
+        // 切换 enabled 后立即刷新左侧导航（agent 功能入口按需显隐）
+        try { if (window.__mioPluginNav) window.__mioPluginNav.refresh() } catch (_) {}
+        return null
+      })
       .catch(function (e) { throw e })
       .finally(function () { busy = false })
   }
