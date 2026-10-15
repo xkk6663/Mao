@@ -104,7 +104,19 @@
     '</div>'
   }
 
+  // 小智连接行：仅当插件 manifest 声明 health.connection 时显示（小智插件声明；停用/卸载插件则本行消失）
+  function connectionAgentId() {
+    var reg = window.__mioPluginRegistry
+    if (reg && reg.connectionSection) return reg.connectionSection()
+    var ms = window.__mioPluginManifests || {}
+    for (var id in ms) {
+      if (ms[id] && ms[id].health && ms[id].health.connection === true) return id
+    }
+    return null
+  }
+
   function render(panel) {
+    var connAgentId = connectionAgentId()
     var xzAgent = null
     for (var i = 0; i < data.agents.length; i++) {
       if (data.agents[i] && data.agents[i].agent_id === 'xiaozhi') { xzAgent = data.agents[i]; break }
@@ -140,7 +152,7 @@
       '<div style="font-size:12px;font-weight:600;color:var(--muted, #687984);margin:10px 0 4px;display:flex;align-items:center;gap:6px;">' +
         '<span style="width:4px;height:12px;border-radius:2px;background:var(--accent, #4c8798);"></span>桌宠本体自检</div>'
     html += '<div class="health-rows" style="display:flex;flex-direction:column;gap:7px;font-size:12px;color:var(--ink, #20303a);">' +
-      rowHtml('小智连接', xzLine) +
+      (connAgentId ? rowHtml('小智连接', xzLine) : '') +
       rowHtml('语音语言（当前框架）', '<b style="font-weight:600;">' + lang + '</b>') +
       rowHtml('会话 ID', '<b>' + esc(data.xz.session_id || '-') + '</b>') +
       rowHtml('后端服务', '<b>' + esc(data.version.name || '-') + '</b>') +

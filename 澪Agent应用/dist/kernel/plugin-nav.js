@@ -14,9 +14,11 @@
   // 固定导航：始终显示且固定顺序（Agent 置顶 → 桌宠 → 设置），插件导航统一追加其后
   var FIXED_NAV_ORDER = ['Agent', '桌宠', '设置']
 
-  // 从插件 manifest 动态收集导航规则（插件零相互依赖：各自声明，这里只聚合）
-  // window.__mioPluginManifests[agentId] = { nav: { keywords: [...] }, observeTab: bool }
+  // 从插件注册表/ manifest 动态收集导航规则（插件零相互依赖：各自声明，这里只聚合）
+  // 优先走 kernel/plugin-registry.js（统一状态），不存在时回退直读 manifest 对象
   function collectNavRules() {
+    var reg = window.__mioPluginRegistry
+    if (reg && reg.navRules) return reg.navRules()
     var rules = {}
     var ms = window.__mioPluginManifests || {}
     for (var id in ms) {
@@ -28,6 +30,8 @@
 
   // 声明 observeTab（桌宠页「观察」子tab）的插件：任意一个 enabled 时显示观察tab
   function observeTabEnabled() {
+    var reg = window.__mioPluginRegistry
+    if (reg && reg.observeTabEnabled) return reg.observeTabEnabled()
     var ms = window.__mioPluginManifests || {}
     for (var id in ms) {
       var m = ms[id]
@@ -153,6 +157,8 @@
           if (a && a.agent_id) next[String(a.agent_id)] = a.enabled !== false
         }
         agentEnabled = next
+        var reg = window.__mioPluginRegistry
+        if (reg && reg.reconcile) reg.reconcile(list)
         reorderNav()
         applyVisibility()
       })

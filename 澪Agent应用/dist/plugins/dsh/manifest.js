@@ -9,3 +9,5 @@ window.__mioPluginManifests['dsh'] = {
   observeTab: false,
   health: true,
 }
+// 注册进前端微内核注册表（幂等）
+if (window.__mioPluginRegistry) window.__mioPluginRegistry.register(window.__mioPluginManifests['dsh'])

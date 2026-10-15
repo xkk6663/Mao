@@ -10,8 +10,10 @@
     <title>Mio</title>
     <!-- 宿主注入（core-inject）：拦截原版已弃用 /api/agent/* 端点（防 404 / Not Found 提示条），必须最先同步执行 -->
     <script src="./core-inject/agent-kill-inject.js?v=20261013c"></script>
-    <!-- 插件 manifest（先于 kernel/plugin-nav.js 声明，供导航/观察tab/体检聚合） -->
-    <script defer src="./plugins/xiaozhi/manifest.js?v=20261015-p3"></script>
+    <!-- 前端微内核：插件注册表（先于 manifest 注册与 plugin-nav 查询） -->
+    <script src="./kernel/plugin-registry.js?v=20261015-p3b"></script>
+    <!-- 插件 manifest（注册进 registry；导航/观察tab/体检条目由此聚合） -->
+    <script defer src="./plugins/xiaozhi/manifest.js?v=20261015-p3b"></script>
     <script defer src="./plugins/dsh/manifest.js?v=20261015-p3"></script>
     <script defer src="./plugins/octop/manifest.js?v=20261015-p3"></script>
     <!-- 宿主注入：设置页收敛（隐藏原版已弃用的设置项/分类，只留桌宠分类） -->
