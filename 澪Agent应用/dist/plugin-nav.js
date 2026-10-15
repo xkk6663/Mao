@@ -40,19 +40,23 @@
     var nav = $q('nav')
     if (!nav) return
     var items = getNavItems()
+    // 固定导航按槽位收集（同标题可能出现多个，如 settings-panel 插的"设置"+ 原版"设置"，全部保留不覆盖）
     var fixed = []
+    for (var f = 0; f < FIXED_NAV_ORDER.length; f++) fixed.push([])
     var plugins = []
     for (var i = 0; i < items.length; i++) {
       var btn = items[i]
       var t = (btn.getAttribute('title') || '') + ' ' + (btn.textContent || '')
       var idx = -1
-      for (var f = 0; f < FIXED_NAV_ORDER.length; f++) {
-        if (t.indexOf(FIXED_NAV_ORDER[f]) >= 0) { idx = f; break }
+      for (var f2 = 0; f2 < FIXED_NAV_ORDER.length; f2++) {
+        if (t.indexOf(FIXED_NAV_ORDER[f2]) >= 0) { idx = f2; break }
       }
-      if (idx >= 0) fixed[idx] = btn
+      if (idx >= 0) fixed[idx].push(btn)
       else plugins.push(btn)
     }
-    var ordered = fixed.filter(function (b) { return !!b }).concat(plugins)
+    var ordered = []
+    for (var j = 0; j < fixed.length; j++) ordered = ordered.concat(fixed[j])
+    ordered = ordered.concat(plugins)
     // 提取 nav 中 button.nav-item 的实际顺序（跳过头像/Logo/分隔符等非按钮元素）
     var current = []
     for (var c = 0; c < nav.children.length; c++) {
@@ -68,7 +72,7 @@
       if (same) return
     }
     // 按固定顺序依次 append（append 即移到末尾，保持传入顺序），插件导航自然排在固定导航之后
-    for (var j = 0; j < ordered.length; j++) nav.appendChild(ordered[j])
+    for (var m = 0; m < ordered.length; m++) nav.appendChild(ordered[m])
   }
 
   // 停用小智时收起已打开的小智工具面板（对话页为原版路由，只隐藏入口）
