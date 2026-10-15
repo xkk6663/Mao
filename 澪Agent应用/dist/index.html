@@ -14,17 +14,19 @@
     <script src="./settings-clean-inject.js?v=20261013f"></script>
     <!-- 重建设置页：接管「设置」导航项，内嵌自有设置面板（桌宠/语音/观察/提示词/小智） -->
     <script src="./settings-panel-inject.js?v=20261015a"></script>
-    <script type="module" crossorigin src="./assets/index-BBVquePX.js?v=20261015-ui"></script>
+    <script type="module" crossorigin src="./assets/index-BBVquePX.js?v=20261015-ui2"></script>
     <link rel="modulepreload" crossorigin href="./assets/createLucideIcon-CoqYpl-V.js">
-    <link rel="stylesheet" crossorigin href="./assets/index-CnRrRFJT.css?v=20261015-ui">
+    <link rel="stylesheet" crossorigin href="./assets/index-CnRrRFJT.css?v=20261015-ui2">
     <!-- 小智图片提问：原版私人空间对话页注入 📷 上传按钮 + 粘贴图片（小智官方云视觉，免费） -->
     <script defer src="./xiaozhi-chat-inject.js?v=20261013a"></script>
     <!-- 小智 MCP 工具集中管理：左侧导航「小智工具」页（本地免费 MCP 工具开关，配置持久化） -->
     <script defer src="./mcp-tools-panel.js?v=20261013b"></script>
     <!-- 跨 Agent 总线管理：左侧导航「Agent」页（Agent 状态 + 即换即用启用/停用） -->
     <script defer src="./agent-switch-inject.js?v=20261015a"></script>
-    <!-- 左侧导航插件化：Agent 导航置顶 + agent 功能入口按 enabled 动态显隐（小智停用隐藏小智工具/对话） -->
+    <!-- 左侧导航插件化：Agent 导航置顶 + agent 功能入口按 enabled 动态显隐（小智停用隐藏小智工具/对话/观察tab） -->
     <script defer src="./plugin-nav.js?v=20261015-plugin"></script>
+    <!-- 桌宠体检增强：接管 CompanionPage「体检」面板，各插件(agent)与本体自检（小智/DSH/Octop + 语言框架/版本/音频） -->
+    <script defer src="./health-panel-inject.js?v=20261015-health"></script>
     <!-- 小智对话记录已内建于原版 ChatPage（对话页改造版：历史轮询+WS实时+音频+跟随对话+会话抽屉），
          不再使用独立覆盖面板 xiaozhi-history-panel.js（已移除引用，恢复原版 UI 框架无缝衔接） -->
   </head>

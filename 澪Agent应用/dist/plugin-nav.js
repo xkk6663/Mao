@@ -84,6 +84,31 @@
     if (d) d.classList.remove('active')
   }
 
+  // 桌宠页(CompanionPage)内的「观察」子 tab 是小智专有功能：按 xiaozhi enabled 显隐
+  // 停用时若正在观察面板 → 模拟点击「桌宠」切回（Vue state 同步）
+  function applyObserveTab() {
+    var bar = $q('.companion-tab-bar')
+    if (!bar) return
+    var btns = bar.querySelectorAll('button')
+    var obsBtn = null
+    var petBtn = null
+    var obsActive = false
+    for (var i = 0; i < btns.length; i++) {
+      var t = btns[i].textContent || ''
+      if (t.indexOf('观察') >= 0) obsBtn = btns[i]
+      else if (t.indexOf('桌宠') >= 0) petBtn = btns[i]
+      if (obsBtn && btns[i] === obsBtn && btns[i].classList.contains('active')) obsActive = true
+    }
+    if (!obsBtn) return
+    var on = agentEnabled['xiaozhi'] === true
+    obsBtn.style.display = on ? '' : 'none'
+    if (on) obsBtn.classList.remove('plugin-off')
+    else obsBtn.classList.add('plugin-off')
+    if (!on && obsActive && petBtn && petBtn.style.display !== 'none') {
+      petBtn.click()
+    }
+  }
+
   function applyVisibility() {
     var items = getNavItems()
     for (var agentId in AGENT_NAV_RULES) {
@@ -96,6 +121,7 @@
         if (!enabled) closePanelsFor(agentId)
       }
     }
+    applyObserveTab()
   }
 
   function refresh() {
