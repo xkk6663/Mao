@@ -1361,7 +1361,8 @@
         }
         const api = window.__mioPetIdleTalk
         if (!api) { scheduleIdleTalk(); return }
-        showSpeechBubble(api.pick(anyAgentBusy()), 0, `idle-talk-${Date.now()}`)
+        // 空闲自语同样 6s 自动消失（不一直挂着；打字机节奏随 6s 收敛）
+        showSpeechBubble(api.pick(anyAgentBusy()), 6000, `idle-talk-${Date.now()}`)
       } catch (_) {}
       scheduleIdleTalk()
     }, waitMs)
