@@ -11,8 +11,8 @@
   var agentEnabled = {}
   var POLL_MS = 8000
 
-  // 固定导航：始终显示且固定顺序（Agent 置顶 → 桌宠 → 设置），插件导航统一追加其后
-  var FIXED_NAV_ORDER = ['Agent', '桌宠', '设置']
+  // 固定导航：始终显示且固定顺序（桌宠 → 设置；Agent 管理已收敛至对话页右侧 rail 面板，不再占左侧导航）
+  var FIXED_NAV_ORDER = ['桌宠', '设置']
 
   // 从插件注册表/ manifest 动态收集导航规则（插件零相互依赖：各自声明，这里只聚合）
   // 优先走 kernel/plugin-registry.js（统一状态），不存在时回退直读 manifest 对象
