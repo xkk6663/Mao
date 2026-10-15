@@ -2639,6 +2639,16 @@
     window.mioDesktop.setUiOpen(open)
   }
 
+  // 智能穿透的 UI 白名单：悬停在这些元素上时窗口必须可交互（可点击/可拖动）。
+  // 历史 bug：此前只认右键菜单+大小面板，图库/泡泡图库/模块库悬浮时点击全部
+  // 穿透到桌面——面板"看得到点不着"。用 elementFromPoint 做通用命中检测，
+  // 新增 UI 只要把选择器加进来即可。
+  const INTERACTIVE_UI_SELECTOR = [
+    '#context-menu', '#size-panel', '#pet-gallery',
+    '#pet-style-gallery', '#pet-bubble-lib',
+    '.pet-bubble-mod', '#pet-image-bubble', '#agent-badge',
+  ].join(', ')
+
   function updateMousePassThrough(force = false, event = null) {
     if (clickThroughLocked()) {
       setInteractive(false)
@@ -2654,7 +2664,14 @@
       const menuOpen = !contextMenu.hidden || !sizePanel.hidden
       const x = Number(event?.clientX ?? -10000)
       const y = Number(event?.clientY ?? -10000)
-      setInteractive(menuOpen || Boolean(pointerDown) || pointHitsModel(x, y))
+      let uiHover = false
+      if (Number.isFinite(x) && Number.isFinite(y) && x > 0 && y > 0) {
+        try {
+          const hit = document.elementFromPoint(x, y)
+          uiHover = Boolean(hit && hit.closest(INTERACTIVE_UI_SELECTOR))
+        } catch (_) {}
+      }
+      setInteractive(menuOpen || uiHover || Boolean(pointerDown) || pointHitsModel(x, y))
     })
   }
 
