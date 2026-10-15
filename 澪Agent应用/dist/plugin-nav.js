@@ -1,8 +1,8 @@
-/* plugin-nav.js — 左侧导航插件化：Agent 导航置顶 + agent 功能入口按 enabled 动态显隐
+/* plugin-nav.js — 左侧导航插件化：固定导航前置 + agent 功能入口按 enabled 动态显隐
  * 规则：
- *   - Agent 导航项（mio-agent-nav）始终置顶（第一行）
- *   - 小智相关导航入口（小智工具 xz-mcp-nav、对话）随后端 xiaozhi enabled 显隐：
- *     启用 → 显示；停用 → 隐藏（并收起已打开的小智工具面板）
+ *   - 固定导航固定顺序：Agent（置顶）→ 桌宠 → 设置，始终显示
+ *   - 插件导航统一追加在固定导航之后（按出现顺序往后排），随后端 agent enabled 显隐：
+ *     小智启用 → 显示「小智工具」「对话」；停用 → 隐藏（并收起已打开的小智工具面板）
  * 状态源：GET /api/companion/agents（与桌宠插件总线同口径，以后端 enabled 为准）
  * 暴露：window.__mioPluginNav.refresh()（Agent 页切换 enabled 后立即调用）
  */
@@ -15,6 +15,9 @@
   var AGENT_NAV_RULES = {
     xiaozhi: ['小智工具', '对话'],
   }
+
+  // 固定导航：始终显示且固定顺序（Agent 置顶 → 桌宠 → 设置），插件导航统一追加其后
+  var FIXED_NAV_ORDER = ['Agent', '桌宠', '设置']
 
   function $q(sel, root) { return (root || document).querySelector(sel) }
 
@@ -31,14 +34,26 @@
     return false
   }
 
-  // Agent 导航置顶：mio-agent-nav 始终是导航栏第一个（第一行）
-  function pinAgentNav() {
+  // 导航排序：固定导航（Agent → 桌宠 → 设置）前置，插件导航按出现顺序追加其后
+  function reorderNav() {
     var nav = $q('nav')
     if (!nav) return
-    var agentBtn = nav.querySelector('.mio-agent-nav')
-    if (!agentBtn) return
-    var first = nav.firstElementChild
-    if (agentBtn !== first) nav.insertBefore(agentBtn, first)
+    var items = getNavItems()
+    var fixed = []
+    var plugins = []
+    for (var i = 0; i < items.length; i++) {
+      var btn = items[i]
+      var t = (btn.getAttribute('title') || '') + ' ' + (btn.textContent || '')
+      var idx = -1
+      for (var f = 0; f < FIXED_NAV_ORDER.length; f++) {
+        if (t.indexOf(FIXED_NAV_ORDER[f]) >= 0) { idx = f; break }
+      }
+      if (idx >= 0) fixed[idx] = btn
+      else plugins.push(btn)
+    }
+    // 按固定顺序依次 append（append 即移到末尾，保持传入顺序），插件导航自然排在固定导航之后
+    var ordered = fixed.filter(function (b) { return !!b }).concat(plugins)
+    for (var j = 0; j < ordered.length; j++) nav.appendChild(ordered[j])
   }
 
   // 停用小智时收起已打开的小智工具面板（对话页为原版路由，只隐藏入口）
@@ -75,15 +90,15 @@
           if (a && a.agent_id) next[String(a.agent_id)] = a.enabled !== false
         }
         agentEnabled = next
-        pinAgentNav()
+        reorderNav()
         applyVisibility()
       })
       .catch(function () { /* 后端暂不可达时保持现状 */ })
   }
 
-  // Vue 重渲染 / 其他脚本重建导航时兜底：重新置顶 + 重新显隐
+  // Vue 重渲染 / 其他脚本重建导航时兜底：重新排序 + 重新显隐
   var mo = new MutationObserver(function () {
-    try { pinAgentNav(); applyVisibility() } catch (e) { /* ignore */ }
+    try { reorderNav(); applyVisibility() } catch (e) { /* ignore */ }
   })
   mo.observe(document.body, { childList: true, subtree: true })
 
