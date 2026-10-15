@@ -35,6 +35,7 @@
   }
 
   // 导航排序：固定导航（Agent → 桌宠 → 设置）前置，插件导航按出现顺序追加其后
+  // 防递归：顺序已一致时不动 DOM（appendChild 会触发 MutationObserver，避免无限循环卡死 UI）
   function reorderNav() {
     var nav = $q('nav')
     if (!nav) return
@@ -51,8 +52,16 @@
       if (idx >= 0) fixed[idx] = btn
       else plugins.push(btn)
     }
-    // 按固定顺序依次 append（append 即移到末尾，保持传入顺序），插件导航自然排在固定导航之后
     var ordered = fixed.filter(function (b) { return !!b }).concat(plugins)
+    // 当前顺序已符合目标顺序 → 直接返回，不触发 DOM 变更
+    if (nav.children.length === ordered.length) {
+      var same = true
+      for (var k = 0; k < ordered.length; k++) {
+        if (nav.children[k] !== ordered[k]) { same = false; break }
+      }
+      if (same) return
+    }
+    // 按固定顺序依次 append（append 即移到末尾，保持传入顺序），插件导航自然排在固定导航之后
     for (var j = 0; j < ordered.length; j++) nav.appendChild(ordered[j])
   }
 
