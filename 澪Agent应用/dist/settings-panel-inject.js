@@ -6,11 +6,14 @@
  *   GET  /api/xiaozhi/prompts                      → 图片识别/观察提示词
  *   GET  /api/companion/live2d/schedule            → 模型自动更换
  *   GET  /api/xiaozhi/status                       → 小智绑定/设备码
+ *   GET  /api/settings/profile                     → Mio 资料（名称/头像 custom）
  * 保存：
  *   PATCH /api/companion/settings                   → 桌宠+语音+屏幕观察键
  *   POST  /api/xiaozhi/observe/start | /observe/stop → 自动观察
  *   PUT   /api/xiaozhi/prompts                      → 提示词
  *   PATCH /api/companion/live2d/schedule            → 模型调度
+ *   PATCH /api/settings/profile                     → Mio 名称
+ *   POST  /api/settings/avatar | DELETE             → 侧栏头像上传/重置
  *
  * UI：内嵌原版内容区（保留侧边栏/顶栏），样式走原框架 CSS 变量，观感统一。
  * 导航：点击原版「设置」导航项 → 打开本面板（不再进入原版设置页）。
@@ -102,11 +105,12 @@
   // ---------- 面板 ----------
   var panel = null
   var state = {
-    settings: {}, observe: {}, prompts: {}, schedule: {}, xz: {},
+    settings: {}, observe: {}, prompts: {}, schedule: {}, xz: {}, profile: {},
   }
-  var activeTab = 'pet'
+  var activeTab = 'profile'
 
   var TABS = [
+    { id: 'profile', label: '资料' },
     { id: 'pet', label: '桌宠' },
     { id: 'voice', label: '语音' },
     { id: 'observe', label: '屏幕观察' },
@@ -296,7 +300,71 @@
     if (!body) return
     body.innerHTML = ''
     var s = state.settings || {}
-    if (id === 'pet') {
+    if (id === 'profile') {
+      var pf = state.profile || {}
+      body.appendChild(section('头像'))
+      var avatarRow = document.createElement('div')
+      avatarRow.style.cssText = 'display:flex;align-items:center;gap:14px;padding:12px;background:var(--surface-soft, #f2f6f7);border:1px solid var(--line, #d9e2e6);border-radius:10px;margin-bottom:10px;'
+      var avatarImg = document.createElement('img')
+      avatarImg.id = 'mioProfileAvatarPreview'
+      avatarImg.src = '/api/settings/avatar?v=' + (pf.avatarVersion || Date.now())
+      avatarImg.style.cssText = 'width:56px;height:56px;border-radius:50%;object-fit:cover;flex:none;border:1px solid var(--line, #d9e2e6);background:var(--line-strong, #c4d1d7);'
+      var avatarBtns = document.createElement('div')
+      avatarBtns.style.cssText = 'flex:1;display:flex;flex-direction:column;gap:6px;align-items:flex-start;'
+      var btnUpload = document.createElement('button')
+      btnUpload.type = 'button'
+      btnUpload.textContent = pf.custom ? '更换头像' : '上传头像'
+      btnUpload.style.cssText = 'border:none;background:var(--accent, #4c8798);color:#fff;border-radius:8px;padding:5px 14px;font-size:12px;cursor:pointer;'
+      var btnReset = document.createElement('button')
+      btnReset.type = 'button'
+      btnReset.textContent = '恢复默认头像'
+      btnReset.style.cssText = 'border:1px solid var(--line, #d9e2e6);background:transparent;border-radius:8px;padding:5px 14px;font-size:12px;cursor:pointer;color:var(--muted, #687984);'
+      var fileInput = document.createElement('input')
+      fileInput.type = 'file'
+      fileInput.accept = 'image/*'
+      fileInput.style.display = 'none'
+      btnUpload.addEventListener('click', function () { fileInput.click() })
+      fileInput.addEventListener('change', function () {
+        var f = fileInput.files && fileInput.files[0]
+        if (!f) return
+        var reader = new FileReader()
+        reader.onload = function () {
+          state.profile.avatarDataUrl = String(reader.result)
+          state.profile.resetAvatar = false
+          var prev = $q('#mioProfileAvatarPreview', panel)
+          if (prev) prev.src = String(reader.result)
+          btnUpload.textContent = '已选择新头像 · 点保存生效'
+        }
+        reader.readAsDataURL(f)
+      })
+      btnReset.addEventListener('click', function () {
+        state.profile.avatarDataUrl = ''
+        state.profile.resetAvatar = true
+        var prev = $q('#mioProfileAvatarPreview', panel)
+        if (prev) prev.src = '/api/settings/avatar?v=' + Date.now()
+        btnUpload.textContent = (state.profile && state.profile.custom) ? '更换头像' : '上传头像'
+      })
+      avatarBtns.appendChild(btnUpload)
+      avatarBtns.appendChild(btnReset)
+      avatarRow.appendChild(avatarImg)
+      avatarRow.appendChild(avatarBtns)
+      avatarRow.appendChild(fileInput)
+      body.appendChild(avatarRow)
+      body.appendChild(section('名称'))
+      var nameInput = document.createElement('input')
+      nameInput.type = 'text'
+      nameInput.maxLength = '80'
+      nameInput.value = pf.name || ''
+      nameInput.placeholder = '应用显示名称'
+      nameInput.style.cssText = 'width:100%;box-sizing:border-box;border:1px solid var(--line, #d9e2e6);border-radius:8px;background:var(--surface-soft, #f2f6f7);color:var(--ink, #20303a);font-size:12px;padding:8px 10px;'
+      nameInput.addEventListener('input', function () { state.profile.name = nameInput.value.trim() })
+      nameInput.addEventListener('change', function () { state.profile.name = nameInput.value.trim() })
+      body.appendChild(row('显示名称', '左侧导航栏与各处显示的 Mio 名字，保存后立即生效', nameInput, 'profile_name'))
+      var hint = document.createElement('div')
+      hint.style.cssText = 'font-size:11px;color:var(--muted, #687984);line-height:1.8;padding:0 4px;'
+      hint.textContent = '头像与名称保存在后端设置中；桌宠立绘头像走另一通道（桌面端右键菜单「更换立绘」）。'
+      body.appendChild(hint)
+    } else if (id === 'pet') {
       body.appendChild(section('外观'))
       body.appendChild(row('桌宠大小', '整体缩放百分比', makeSlider(s.pet_size_percent != null ? s.pet_size_percent : 80, 20, 200, 5, '%'), 'pet_size_percent'))
       body.appendChild(row('模型缩放', 'Live2D 模型内缩放', makeSlider(s.live2d_scale != null ? s.live2d_scale : 1.0, 0.5, 2.0, 0.05, '×'), 'live2d_scale'))
@@ -408,6 +476,13 @@
       apiGet('/api/xiaozhi/prompts').then(function (j) { state.prompts = j || {} }).catch(function () { state.prompts = {} }),
       apiGet('/api/companion/live2d/schedule').then(function (j) { state.schedule = (j && j.schedule) ? j.schedule : (j || {}) }).catch(function () { state.schedule = {} }),
       apiGet('/api/xiaozhi/status').then(function (j) { state.xz = j || {} }).catch(function () { state.xz = {} }),
+      apiGet('/api/settings/profile').then(function (j) {
+        state.profile = {
+          name: (j && j.profile && j.profile.identity && j.profile.identity.name) || '',
+          custom: !!(j && j.avatar && j.avatar.custom),
+          avatarVersion: Date.now(),
+        }
+      }).catch(function () { state.profile = {} }),
     ]).then(function () {
       renderBody(activeTab)
       var st2 = $q('#mioSetStatus', panel)
@@ -477,6 +552,11 @@
     var schedBody = {}
     if (vals.schedule_enabled !== undefined) schedBody.enabled = !!vals.schedule_enabled
     if (vals.schedule_time !== undefined) schedBody.time = vals.schedule_time
+    // 5) 资料 → 名称 PATCH /api/settings/profile + 头像 POST/DELETE /api/settings/avatar
+    if (vals.profile_name !== undefined && state.profile) state.profile.name = vals.profile_name
+    var pf = state.profile || {}
+    var profileBody = {}
+    if (pf.name) profileBody.profile = { identity: { name: pf.name } }
 
     var proms = []
     if (Object.keys(settingsBody).length) proms.push(apiSend('/api/companion/settings', 'PATCH', settingsBody))
@@ -487,16 +567,32 @@
     }
     if (Object.keys(promptsBody).length) proms.push(apiSend('/api/xiaozhi/prompts', 'PUT', promptsBody))
     if (Object.keys(schedBody).length) proms.push(apiSend('/api/companion/live2d/schedule', 'PATCH', schedBody))
+    if (Object.keys(profileBody).length) proms.push(apiSend('/api/settings/profile', 'PATCH', profileBody))
+    if (pf.avatarDataUrl) proms.push(apiSend('/api/settings/avatar', 'POST', { data_url: pf.avatarDataUrl }))
+    if (pf.resetAvatar) proms.push(apiSend('/api/settings/avatar', 'DELETE', null))
 
     Promise.all(proms.map(function (p) { return p.catch(function (e) { return { __err: String(e && e.message || e) } }) }))
       .then(function (results) {
         var errs = results.filter(function (r) { return r && r.__err || (r && r.detail) })
         if (st) st.textContent = errs.length ? ('保存完成，但有 ' + errs.length + ' 项失败') : '已保存 ✓'
+        state.profile.avatarDataUrl = ''
+        state.profile.resetAvatar = false
+        syncBrandBlock()
         return loadAll()
       })
       .finally(function () {
         if (btn) { btn.disabled = false; btn.textContent = '保存' }
       })
+  }
+
+  // ---------- 侧栏头像/名称同步（保存后立即反映，不依赖 Vue 重渲染） ----------
+  function syncBrandBlock() {
+    var bb = $q('.sidebar .brand-block') || $q('.brand-block')
+    if (!bb) return
+    var strong = bb.querySelector('strong')
+    if (strong && state.profile && state.profile.name) strong.textContent = state.profile.name
+    var img = bb.querySelector('img.brand-avatar')
+    if (img) img.src = '/api/settings/avatar?v=' + Date.now()
   }
 
   // ---------- 激活 / 退出 ----------
