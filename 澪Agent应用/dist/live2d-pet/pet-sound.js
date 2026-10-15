@@ -22,6 +22,7 @@
   var volume = 0.7          // 0..1
   var lastPlayAt = 0
   var MIN_GAP_MS = 45       // 连点去抖：避免快速点击叠成噪音
+  var unlocked = false      // 音频上下文是否已被用户手势解锁
 
   function ensureCtx() {
     if (ctx) return ctx
@@ -38,6 +39,40 @@
     return ctx
   }
 
+  /**
+   * 提前解锁音频上下文（必须在**用户手势**的同步调用栈里执行）。
+   *
+   * 为什么必须单独做：Chromium 的自动播放策略让 AudioContext 初始为 'suspended'，
+   * 且 resume() 是**异步**的。旧实现在播放时才调 resume，于是第一次点击时
+   * currentTime 仍停在 0，而我们把音符调度在 t0=currentTime 上——等音频时钟真正
+   * 跑起来时那个短音早已"过期"，表现就是**第一次点击没声音**（甚至因为每次点击
+   * 都重建/复用未解锁的上下文而一直没声音）。
+   *
+   * 正确做法：在 pointerdown 的同步栈里就 resume 并播放一个**静音**振荡器，
+   * 把上下文真正推入 running，之后的音效才听得到。
+   */
+  function unlock() {
+    var c = ensureCtx()
+    if (!c) return false
+    try {
+      if (c.state === 'suspended' && typeof c.resume === 'function') c.resume()
+    } catch (_) {}
+    if (!unlocked) {
+      try {
+        // 静音振荡器：把上下文推入 running（音量 0，不会出声）
+        var osc = c.createOscillator()
+        var g = c.createGain()
+        g.gain.value = 0
+        osc.connect(g)
+        g.connect(c.destination)
+        osc.start(0)
+        osc.stop(c.currentTime + 0.01)
+      } catch (_) {}
+      unlocked = true
+    }
+    return true
+  }
+
   /** 播放一个带包络的音（现场合成，无外部素材）。 */
   function tone(opts) {
     if (!enabled) return false
@@ -47,10 +82,14 @@
 
     var c = ensureCtx()
     if (!c || !master) return false
-    // 浏览器要求用户手势后才能出声；resume 是幂等的
+    // 已解锁则直接用；未解锁时**先解锁再播**（路径上仍带 resume，最大化成功率）
+    if (!unlocked) unlock()
     if (c.state === 'suspended') { try { c.resume() } catch (_) {} }
 
     var t0 = c.currentTime
+    // 关键：调度点加 12ms 提前量。裸 t0 在上下文刚 resume 时可能已经落在过去，
+    // 导致整段音被 Web Audio 丢弃（听不见）。小的前瞻量能稳定播出。
+    t0 += 0.012
     var dur = Math.max(0.03, Number(opts.duration) || 0.09)
     var osc = c.createOscillator()
     var gain = c.createGain()
@@ -102,6 +141,9 @@
       var fn = PRESETS[String(name || '')]
       return fn ? fn() : false
     },
+    // 供桌宠在 pointerdown 的同步栈里调用（解锁音频），必须在用户手势内
+    unlock: unlock,
+    isUnlocked: function () { return unlocked },
     setEnabled: function (on) { enabled = !!on },
     isEnabled: function () { return enabled },
     setVolume: function (v) {

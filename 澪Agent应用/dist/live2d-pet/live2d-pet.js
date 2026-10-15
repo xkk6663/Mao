@@ -1314,11 +1314,22 @@
     }
   }
 
-  // 按压 Q 弹：只缩放模型（不移动底部坐标），松手自然回弹
-  let pressBounceUntil = 0
+  // A4：贴左吸附时水平镜像（角色面朝屏内）。用 CSS transform 翻转整个舞台，
+  // 这样 Live2D 的模型矩阵与动作都不受影响，也不会与物理/动作系统打架。
+  function applyPetFlip(flip) {
+    try {
+      const stage = document.getElementById('pet-root') || document.body
+      stage.classList.toggle('pet-flipped', !!flip)
+    } catch (_) {}
+  }
+
+  // 按压反馈：**用动作+表情**而不是缩放形变。
+  // 曾经试过改 model.scale.y 做"Q 弹"，但实测观感很怪（模型横向不变、纵向被压扁，
+  // 看起来像渲染出错而非"被按扁"），且与 Live2D 自身的物理/动作系统打架。
+  // 改为：点击走模型自带的 touch 动作（见 finishPointerInteraction），这里只留音效。
   function playPressBounce() {
-    if (settings.pet_press_bounce_enabled === false) return
-    pressBounceUntil = Date.now() + 160
+    // 保留函数名以兼容既有调用点；视觉反馈已交给 motion，不再做形变。
+    return false
   }
 
   // 空闲自语：长时间无交互时按内容池随机说一句
@@ -1369,20 +1380,8 @@
     }, waitMs)
   }
 
-  // 按压 Q 弹：在 ticker 里按剩余时间做 y 轴压缩，**底部坐标不变**
-  // （用 model.scale.y 而非 model.y —— 改 y 会整体上移，看起来像"跳起来"而非"被按扁"）
-  function updatePressBounce() {
-    if (!model) return
-    const now = Date.now()
-    if (now >= pressBounceUntil) {
-      if (model.scale.y !== model.scale.x) model.scale.y = model.scale.x
-      return
-    }
-    const remain = (pressBounceUntil - now) / 160       // 1 → 0
-    // 压缩幅度：最深 6%，用正弦让"下压→回弹"平滑
-    const squash = 1 - 0.06 * Math.sin(remain * Math.PI)
-    model.scale.y = model.scale.x * squash
-  }
+  // 按压形变已移除（见 playPressBounce 注释）；保留函数名避免 ticker 报错。
+  function updatePressBounce() { /* no-op：视觉反馈交给模型动作系统 */ }
 
   function renderAgentBadge() {
     if (!agentBadgeEnabled()) {
@@ -2634,6 +2633,10 @@
 
   canvas.addEventListener('pointerdown', async (event) => {
     markPetActivity()
+    // 音频解锁必须在这个**用户手势的同步栈**里完成。
+    // 放到 await 之后或首次播放时再做，Chromium 会拒绝启动 AudioContext，
+    // 表现就是"点了完全没声音"。
+    try { const s = window.__mioPetSound; if (s) { s.setEnabled(settings.pet_sound_enabled !== false); s.unlock() } } catch (_) {}
     if (clickThroughLocked() || event.button !== 0 || !pointHitsModel(event.clientX, event.clientY)) return
     pointerDown = {
       x: event.clientX,
@@ -2695,8 +2698,31 @@
       const marginX = Math.min(72, Math.max(32, vw * 0.08))
       const marginY = Math.min(96, Math.max(48, vh * 0.1))
       // 完全放开上下与水平限位：位置原样保存，不做任何回弹
-      const nextX = Math.round(interaction.positionX + dx)
-      const nextY = Math.round(interaction.positionY + dy)
+      let nextX = Math.round(interaction.positionX + dx)
+      let nextY = Math.round(interaction.positionY + dy)
+      // A4：拖拽结束按设置做边缘吸附 + 贴左水平翻转（纯几何，pet-snap.js 负责算）
+      try {
+        const snapApi = window.__mioPetSnap
+        if (snapApi && settings.pet_snap_enabled !== false) {
+          const r = snapApi.resolve(
+            { x: nextX, y: nextY },
+            { width: vw, height: vh },
+            { width: vw, height: vh },
+            {
+              edges: {
+                left: settings.pet_snap_left ?? 'ratio:0.03',
+                right: settings.pet_snap_right ?? 'ratio:0.03',
+                top: settings.pet_snap_top ?? '',
+                bottom: settings.pet_snap_bottom ?? 'ratio:0.03',
+              },
+              threshold: Number(settings.pet_snap_threshold ?? 24),
+            },
+          )
+          nextX = r.x
+          nextY = r.y
+          applyPetFlip(r.flip)
+        }
+      } catch (_) {}
       settings.position_x = nextX
       settings.position_y = nextY
       request('/api/companion/position', {

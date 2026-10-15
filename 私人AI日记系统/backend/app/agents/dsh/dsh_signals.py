@@ -69,6 +69,18 @@ def maybe_announce_waiting(agent_id: str, facts: dict[str, Any]) -> str:
             return text[:120]
         return ""
 
+    # 3) 工作节点播报：工具开始/完成。
+    #    为什么需要它：前两条只在"卡住等人"时才响，日常干活时桌宠**一句话都不说**，
+    #    用户看不到属于 DSH 的气泡（会误以为功能没生效）。这里补上"我开工了/这一步做完了"，
+    #    让 DSH 在桌宠上始终有存在感，且与其它插件的气泡用颜色区分。
+    tool = str(facts.get("last_tool") or "").strip()
+    if tool and int(facts.get("active_tools") or 0) > 0:
+        key = f"tool-start:{tool}"
+        if _should_announce(key, now_ms):
+            text = f"正在用 {tool} 干活…"
+            agent_bus_service.announce(agent_id, text, duration_ms=4000)
+            return text
+
     return ""
 
 

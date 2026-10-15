@@ -762,6 +762,19 @@ def test_plugin_api() -> None:
         none = dsh_signals.maybe_announce_waiting("dsh", {})
         check("无等待时不打扰", none == "", repr(none))
 
+        # 工作节点播报：前两条只在"卡住等人"时才响，日常干活时桌宠一句话都不说，
+        # 用户会误以为 DSH 气泡功能没生效。补上"正在用 X 干活"。
+        dsh_signals.reset_announce_state()
+        work = dsh_signals.maybe_announce_waiting("dsh", {"last_tool": "pwsh", "active_tools": 2})
+        check("干活时播报工具名", "pwsh" in work, repr(work))
+        again = dsh_signals.maybe_announce_waiting("dsh", {"last_tool": "pwsh", "active_tools": 2})
+        check("同一工具不刷屏（去重）", again == "", repr(again))
+        other = dsh_signals.maybe_announce_waiting("dsh", {"last_tool": "read", "active_tools": 1})
+        check("换工具会重新播报", "read" in other, repr(other))
+        dsh_signals.reset_announce_state()
+        idle = dsh_signals.maybe_announce_waiting("dsh", {"last_tool": "pwsh", "active_tools": 0})
+        check("无工具在跑时不播报", idle == "", repr(idle))
+
         check("播报都带本插件 agent_id",
               all(a == "dsh" for a, _ in captured),
               repr(captured))

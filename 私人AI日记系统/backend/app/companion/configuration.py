@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Callable
 from pathlib import Path
 import json
+import re
 
 
 class ConfigurationService:
@@ -149,6 +150,15 @@ class ConfigurationService:
         if data["pet_idle_talk_max_seconds"] < data["pet_idle_talk_min_seconds"]:
             data["pet_idle_talk_max_seconds"] = data["pet_idle_talk_min_seconds"]
         data["pet_press_bounce_enabled"] = bool(data.get("pet_press_bounce_enabled", True))
+        data["pet_snap_enabled"] = bool(data.get("pet_snap_enabled", True))
+        data["pet_snap_threshold"] = max(0, min(200, int(data.get("pet_snap_threshold", 24))))
+        for _side in ("left", "right", "top", "bottom"):
+            _key = f"pet_snap_{_side}"
+            _raw = str(data.get(_key, "") or "").strip()
+            # 只接受 ratio:x / px:n / 空串，脏值一律落回空（=该侧不吸附，比静默用错值安全）
+            if _raw and not re.match(r"^(ratio:[0-9.]+|px:[0-9.]+|[0-9.]+)$", _raw):
+                _raw = ""
+            data[_key] = _raw
         data["position_x"] = max(-10000, min(10000, int(data.get("position_x", 80))))
         data["position_y"] = max(-10000, min(10000, int(data.get("position_y", 420))))
         return data
@@ -252,6 +262,14 @@ class ConfigurationService:
         if normalized["pet_idle_talk_max_seconds"] < normalized["pet_idle_talk_min_seconds"]:
             normalized["pet_idle_talk_max_seconds"] = normalized["pet_idle_talk_min_seconds"]
         normalized["pet_press_bounce_enabled"] = bool(normalized.get("pet_press_bounce_enabled", True))
+        normalized["pet_snap_enabled"] = bool(normalized.get("pet_snap_enabled", True))
+        normalized["pet_snap_threshold"] = max(0, min(200, int(normalized.get("pet_snap_threshold", 24))))
+        for _side in ("left", "right", "top", "bottom"):
+            _key = f"pet_snap_{_side}"
+            _raw = str(normalized.get(_key, "") or "").strip()
+            if _raw and not re.match(r"^(ratio:[0-9.]+|px:[0-9.]+|[0-9.]+)$", _raw):
+                _raw = ""
+            normalized[_key] = _raw
         normalized["position_x"] = max(-10000, min(10000, int(normalized.get("position_x", 80))))
         normalized["position_y"] = max(-10000, min(10000, int(normalized.get("position_y", 420))))
         return normalized

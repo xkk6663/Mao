@@ -153,6 +153,17 @@ body,
 .agent-badge-chip.p-heartbeat { background: #4f7ba8; }
 .agent-badge-chip.p-connecting { background: #6b7f96; }
 
+/* A4：贴左吸附时水平镜像，让角色面朝屏幕内侧。
+   翻转放在 #pet-root 上（整个舞台），Live2D 的模型矩阵/动作不受影响；
+   徽标与气泡是被镜像的，故单独再翻回来，保证文字始终可读。 */
+#pet-root.pet-flipped {
+  transform: scaleX(-1);
+}
+#pet-root.pet-flipped #agent-badge,
+#pet-root.pet-flipped #speech-bubble {
+  transform: scaleX(-1);
+}
+
 /* 插件身份识别：声明了 bubble.accent 的插件，其 chip 左侧加一条专属色竖条。
    保留原有 phase 配色（仍能看出"在干什么"），同时能看出"谁在干"——
    多 Agent 并排时一眼区分来源，且新增插件零改动（色值来自插件自己的 manifest）。 */
