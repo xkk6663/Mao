@@ -53,11 +53,17 @@
       else plugins.push(btn)
     }
     var ordered = fixed.filter(function (b) { return !!b }).concat(plugins)
-    // 当前顺序已符合目标顺序 → 直接返回，不触发 DOM 变更
-    if (nav.children.length === ordered.length) {
+    // 提取 nav 中 button.nav-item 的实际顺序（跳过头像/Logo/分隔符等非按钮元素）
+    var current = []
+    for (var c = 0; c < nav.children.length; c++) {
+      var child = nav.children[c]
+      if (child && child.classList && child.classList.contains('nav-item')) current.push(child)
+    }
+    // 当前按钮顺序已符合目标顺序 → 直接返回，不触发 DOM 变更
+    if (current.length === ordered.length) {
       var same = true
       for (var k = 0; k < ordered.length; k++) {
-        if (nav.children[k] !== ordered[k]) { same = false; break }
+        if (current[k] !== ordered[k]) { same = false; break }
       }
       if (same) return
     }
@@ -106,9 +112,17 @@
   }
 
   // Vue 重渲染 / 其他脚本重建导航时兜底：重新排序 + 重新显隐
-  var mo = new MutationObserver(function () {
-    try { reorderNav(); applyVisibility() } catch (e) { /* ignore */ }
-  })
+  // 去抖 + 重入保护：mutation 事件合并到宏任务执行，避免高频 DOM 写引发递归
+  var repairScheduled = false
+  function scheduleRepair() {
+    if (repairScheduled) return
+    repairScheduled = true
+    setTimeout(function () {
+      repairScheduled = false
+      try { reorderNav(); applyVisibility() } catch (e) { /* ignore */ }
+    }, 0)
+  }
+  var mo = new MutationObserver(function () { scheduleRepair() })
   mo.observe(document.body, { childList: true, subtree: true })
 
   // 启动：尽快执行一次（导航渲染完成前静默等待），8s 轮询兜底覆盖外部 enabled 变化
