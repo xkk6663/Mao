@@ -2584,7 +2584,8 @@
     speechBubble.style.width = '232px'
     speechBubble.hidden = false
     updateSpeechBubblePosition(true)
-    speechBubbleHideTimer = window.setTimeout(hideSpeechBubble, 7000)
+    // 点击触发的图片 3s 自动消失（用户裁决：不要一直挂着）
+    speechBubbleHideTimer = window.setTimeout(hideSpeechBubble, 3000)
   }
 
   async function showClickTalk() {
@@ -2600,7 +2601,8 @@
       }
     } catch (_) {}
     const talk = window.__mioPetIdleTalk
-    if (talk) showSpeechBubble(talk.pick(anyAgentBusy()), 0, `click-talk-${Date.now()}`)
+    // 3s 自动消失（用户裁决：点击弹出的气泡不要一直挂着；打字机节奏随 3s 收敛）
+    if (talk) showSpeechBubble(talk.pick(anyAgentBusy()), 3000, `click-talk-${Date.now()}`)
   }
 
   async function setClickThroughLocked(enabled, persist = true) {
