@@ -33,7 +33,7 @@ import httpx
 import yaml
 from PIL import Image
 
-from .. import system_audio_service
+from ..screen import system_audio_service
 from ..config import settings
 from .companion_observation_service import GameObserver, WindowObserver, cleanup_legacy_preview
 
@@ -156,7 +156,7 @@ def _builtin_live2d_models() -> tuple[dict[str, Any], ...]:
             meta_file = entry / "mio-model.json"
             if meta_file.is_file():
                 try:
-                    metadata = json.loads(meta_file.read_text(encoding="utf-8")) or {}
+                    metadata = json.loads(meta_file.read_text(encoding="utf-8-sig")) or {}
                 except (OSError, json.JSONDecodeError):
                     metadata = {}
             display_name = str(metadata.get("name") or entry.name)
@@ -694,7 +694,7 @@ def _create_window_observer():
     }
     is_worker = os.getenv("MIO_SCREEN_OBSERVER_WORKER", "").strip() == "1"
     if use_process and not is_worker:
-        from ..screen_observer_process import ScreenObserverProcess
+        from ..screen.screen_observer_process import ScreenObserverProcess
 
         return ScreenObserverProcess()
     return WindowObserver()
@@ -719,7 +719,7 @@ def shutdown() -> None:
     run("临时预览", cleanup_legacy_preview)
     run("Live2D 桌宠", stop_pet)
     try:
-        from .. import local_vision_service
+        from ..screen import local_vision_service
     except Exception:
         logger.exception("加载本地视觉清理模块失败")
     else:

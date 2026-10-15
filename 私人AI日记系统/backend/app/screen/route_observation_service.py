@@ -7,7 +7,7 @@ from collections import deque
 from datetime import datetime
 from typing import Any, Iterable
 
-from . import db
+from .. import db
 
 
 _lock = threading.Lock()

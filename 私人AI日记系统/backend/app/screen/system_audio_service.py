@@ -14,8 +14,8 @@ import time
 from typing import Any
 import uuid
 
-from . import environment_check_service
-from .config import settings
+from .. import environment_check_service
+from ..config import settings
 
 
 _lock = threading.RLock()

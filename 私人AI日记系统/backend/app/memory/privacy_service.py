@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from .. import db
-from .. import screen_observation_service
-from .. import system_audio_service
+from ..screen import screen_observation_service
+from ..screen import system_audio_service
 from ..companion import companion_service
 from ..config import load_runtime_settings, save_runtime_settings, settings
 

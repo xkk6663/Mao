@@ -14,11 +14,11 @@ from . import (
     migration_service,
     onboarding_service,
     runtime_diagnostics,
-    screen_observation_service,
     subservice_health,
 )
 from .companion import companion_service, pet_event_service
 from .creation import creation_service
+from .screen import screen_observation_service
 from .kernel import agent_bus_service, agent_task_service
 from .agents.dsh import dsh_adapter
 from .agents.octop import octop_adapter

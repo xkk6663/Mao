@@ -568,7 +568,7 @@ def _optional_checks(system: dict[str, object]) -> list[dict[str, object]]:
     vision_profiles = [profile for profile in profiles if profile.supports_vision]
 
     # Installation and runtime readiness are separate; discovery never runs inference.
-    from . import local_vision_service
+    from .screen import local_vision_service
 
     local_vision = local_vision_service.dependency_status()
     local_vision_state = str(local_vision["status"])

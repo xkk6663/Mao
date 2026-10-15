@@ -12,8 +12,8 @@ from typing import Any
 from PIL import Image, ImageGrab
 
 from ..config import settings
-from ..screen_capture import create_compatible_capture, create_native_capture, create_obs_capture
-from ..screen_frame_processor import calculate_change_metrics
+from ..screen.screen_capture import create_compatible_capture, create_native_capture, create_obs_capture
+from ..screen.screen_frame_processor import calculate_change_metrics
 
 
 class WindowObserver:

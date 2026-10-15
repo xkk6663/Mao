@@ -551,7 +551,7 @@ def _pick_next_observe_at() -> float:
 
 async def _observe_loop() -> None:
     global _observe_next_at, _observe_last_result, _pending_vision, _last_vision_image
-    from ..screen_capture import MssCapture
+    from ..screen.screen_capture import MssCapture
     while True:
         try:
             if _observe_cfg.get("enabled") and _in_quiet_hours():
@@ -1379,7 +1379,7 @@ async def _exec_screen_explain(question: str) -> str:
         if pending_q:
             q = pending_q
     if not image_base64:
-        from ..screen_capture import MssCapture
+        from ..screen.screen_capture import MssCapture
         image_base64 = await asyncio.to_thread(_full_screen_jpeg, MssCapture)
     if not image_base64:
         raise RuntimeError("截图失败：无法获取屏幕画面")

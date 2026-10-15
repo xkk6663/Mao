@@ -224,7 +224,7 @@ class PetEventHub:
     async def serve(self, websocket: WebSocket) -> None:
         await self.register(websocket)
         from . import companion_service
-        from .. import screen_observation_service
+        from ..screen import screen_observation_service
 
         await self.send(
             websocket,

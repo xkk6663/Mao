@@ -20,12 +20,8 @@ from pydantic import BaseModel, Field
 
 from .. import (
     db,
-    local_vision_service,
-    route_observation_service,
-    screen_observation_service,
-    system_audio_service,
-    window_topology_service,
 )
+from ..screen import local_vision_service, route_observation_service, screen_observation_service, system_audio_service, window_topology_service
 from ..companion import audio_diag, call_session_service, companion_service, pet_event_service
 from ..kernel import agent_bus_service
 from ..agents.dsh import dsh_adapter
@@ -1865,7 +1861,7 @@ async def companion_screen_shot(payload: ScreenShotRequest | None = None):
     """全屏截图（JPEG base64）；bbox 存在时截取指定区域。返回虚拟桌面完整尺寸供坐标映射。"""
     import io
 
-    from ..screen_capture import MssCapture
+    from ..screen.screen_capture import MssCapture
 
     def _shot(bbox: list[int] | None) -> tuple[str, int, int]:
         cap = MssCapture()

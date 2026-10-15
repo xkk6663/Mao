@@ -5,7 +5,8 @@ import asyncio
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from .. import route_observation_service, self_snapshot_service
+from .. import self_snapshot_service
+from ..screen import route_observation_service
 
 
 router = APIRouter(prefix="/self")

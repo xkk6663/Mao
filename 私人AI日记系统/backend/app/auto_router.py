@@ -6,7 +6,7 @@ from typing import Mapping, Sequence
 
 from .model_latency_service import get_latency_stats
 from .model_registry import ModelProfile, list_model_profiles, model_reasoning_config
-from .route_observation_service import model_performance_snapshot
+from .screen.route_observation_service import model_performance_snapshot
 from .web_search_service import build_contextual_lookup_message, needs_web_lookup
 
 

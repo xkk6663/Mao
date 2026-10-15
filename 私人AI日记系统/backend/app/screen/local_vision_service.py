@@ -13,9 +13,9 @@ from typing import Any
 
 import httpx
 
-from .config import settings
-from .llm import CompletionResult
-from .ollama_model_files import manifest_complete
+from ..config import settings
+from ..llm import CompletionResult
+from ..ollama_model_files import manifest_complete
 
 
 DEFAULT_PORT = 11435

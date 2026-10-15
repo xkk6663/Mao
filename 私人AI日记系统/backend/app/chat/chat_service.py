@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 
 from .. import db
-from .. import system_audio_service
+from ..screen import system_audio_service
 from ..model_runtime import operation
 from ..kernel.agent_loop_service import (
     AgentLoopResult,
