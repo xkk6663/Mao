@@ -5,6 +5,53 @@
 
 ---
 
+## v4.2.1（2026-10-16）· **形象切换弹回真根因**：IPC 时序差 + 宽限期劫持（二次修复）
+
+**用户报障原文**：
+> 菜单切换形象后快速弹回的BUG并未修复，你找到弹回的根因了吗？
+
+v4.2 的一版修复在验证环境 10/10，线上却依旧弹回。用**照抄真实 Electron 时序**的 mock 复测
+才暴露第三层根因——**验证 mock 的 IPC 时序与真实主进程不一致**。
+
+### 真根因（接 v4.2 根因①②的最后一层）
+
+主进程在 `ipcMain.handle` 内**同步** `sendModelsChanged()` ⇒ `models-changed` 广播**先于**
+`selectModel` 的 invoke 回包到达渲染进程 ⇒ `onModelsChanged` 回调先于 `switchModel` 后续代码
+执行，此刻 `settings.live2d_model_id` 还是**旧值** ⇒ 广播回调发起 `loadModel(旧)`。
+
+而 v4.2 一版用 `pendingModelId`（loadModel 发起即记）做切换宽限期判据，被这次「广播加载旧
+模型」污染 ⇒ 10s 宽限期**反向劫持**成「10s 内强行锁回旧形象」。真实时序 mock 复现出
+`loads=[da-feiyu, da-feiyu, hiyori, hiyori]`（应只有 `[hiyori]`）。
+
+### 修法（`dist/live2d-pet/live2d-pet.js`，`?v=20261016-modelswitch2`）
+
+**状态分离，勿合并**（接替 `pendingModelId`，全文件残留 0）：
+
+1. `modelSwitchTarget/At` —— **用户切换意图**，仅在 `switchModel()` 里赋值，且必须在
+   `await selectModel` **之前**（广播回调会先执行）。`applySettings` 的宽限判据改用它；
+2. `lastLoad{gen,target,done}` —— 最近一次 loadModel 的**在途状态**，`applySettings` 重载
+   判据改用它：大模型（大肥鱼 28MB）加载数秒期间轮询不重复发起；失败置 `done=true`
+   保留轮询自愈；
+3. `onModelsChanged` 新增守卫：用户切换在飞（<3s）跳过该次加载，消灭旧模型闪现
+   （`switchModel` 自己会加载正确目标）。
+
+### 验证
+
+- `verify_gallery_switch.mjs` mock 改为**真实 IPC 时序**（emit 先于 resolve）后 **10/10**，
+  内置项加载序列收敛为 `[hiyori]` 单次、导入项 `[biaoqiang-…]` 单次，2 个轮询周期零弹回；
+- 回归：`verify_companion_persist` **16/16** · `verify_v42_ui` **7/7**，无 pageerror；
+- 服务端 `live2d_model_id` 测试后还原 whale-deepseek。
+
+**教训**（沉淀到工作区纪律）：mock 桥不仅要逐字段照抄主进程的目录构造（v4.2 教训），
+还要**逐时序**照抄（emit 先于 resolve）；「宽限期 / 回写」类修复必须把「用户意图」与
+「在途副作用」拆成两个独立状态，否则会被广播反向劫持。
+
+### 版本
+
+tag **v4.2.1**；`?v=`：live2d-pet → `20261016-modelswitch2`。
+
+---
+
 ## v4.1（2026-10-16）· **Vue 源码回仓 + 构建管线恢复** ★ fork 起点
 
 **主线**：把 `澪Agent应用` 的前端从「手改 minified 产物」拉回**正规工程化**——

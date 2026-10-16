@@ -255,13 +255,20 @@
   let modelDefinitions = { ...builtInModels }
   let desktopState = { bounds: { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight } }
   let desktopSelectedModelId = ''
-  // 形象切换的"在途目标"：loadModel 一发起就记（不像 currentModelId 要等加载完成才赋值）。
-  // 用途：① applySettings 的重载判据——大模型加载要数秒，若只看 currentModelId，
-  //         每次 5s 轮询都会误判"还没切过去"而重新加载一遍（用户可见为形象不停重载）；
-  //       ② 切换宽限期——PATCH /settings 之前已在途的旧 /status 响应会把 live2d_model_id
-  //         盖回旧值，造成"切过去→闪回旧形象→再跳回来"。宽限期内以本地目标为准。
-  let pendingModelId = ''
-  let pendingModelIdAt = 0
+  // ★ 形象切换的两个独立状态（v4.2 二次修复，勿合并）：
+  // ① modelSwitchTarget/At —— **用户切换意图**，只在 switchModel() 里赋值。
+  //    用途：切换宽限期。PATCH 之前已在途的旧 /status 响应会把 live2d_model_id 盖回旧值，
+  //    宽限期内（10s）applySettings 强行以本地目标为准。
+  //    ⚠ 不能用 loadModel 顺手赋值：真实 Electron 里主进程在 ipcMain.handle 内**同步**
+  //    sendModelsChanged()，广播先于 invoke 回包到达 ⇒ onModelsChanged 回调先执行，
+  //    此刻 settings 还是旧值 ⇒ 那次 loadModel(旧) 若也写"pending"，就会把宽限期劫持成
+  //    "10s 内强行锁回旧形象"（v4.2 一版修复在线上弹回的真凶）。
+  // ② lastLoad —— 最近一次 loadModel 的在途状态（gen/target/done）。
+  //    用途：applySettings 重载判据。currentModelId 只在加载**完成**后才赋值，
+  //    大模型（大肥鱼 8192/28MB）加载数秒，只看它会让每次 5s 轮询都重复加载。
+  let modelSwitchTarget = ''
+  let modelSwitchAt = 0
+  let lastLoad = { gen: 0, target: '', done: true }
   let settings = {}
   let latestMessageId = null
   let lastStatusSuccess = Date.now()
@@ -595,9 +602,8 @@
   async function loadModel(modelId) {
     const definition = modelDefinition(modelId)
     const generation = ++modelLoadGeneration
-    // 发起即记为目标：applySettings 用它判断"切换已在途"，慢加载期间不再重复发起
-    pendingModelId = definition.id
-    pendingModelIdAt = Date.now()
+    // 记录在途状态：applySettings 用它区分「目标已在加载中」与「需要重新发起」
+    lastLoad = { gen: generation, target: definition.id, done: false }
     loading.hidden = false
     errorPanel.hidden = true
     let nextModel = null
@@ -624,6 +630,7 @@
       // Electron 启动时等窗口虚拟边界修正完成再显示，杜绝"先下方后上方"跳位
       model.visible = windowStable || !electronRuntime
       currentModelId = definition.id
+      if (lastLoad.gen === generation) lastLoad.done = true
       lastAppliedExpressionEmotion = ''
       // 必须在模型可见前完成水印消除：await 保证第一帧可见时水印参数已生效
       // （Electron 侧 windowStable 会再延迟显示，双保险无冲突）
@@ -639,8 +646,8 @@
         if (nextModel) nextModel.destroy({ children: true, texture: false, baseTexture: false })
         return
       }
-      // 加载失败：清掉在途目标，让下一次轮询仍能重试（保留原有失败自愈语义）
-      pendingModelId = ''
+      // 加载失败：标记在途结束，让下一次轮询仍能重试（保留原有失败自愈语义）
+      if (lastLoad.gen === generation) lastLoad.done = true
       console.error('[MioLive2D] model load failed', error)
       loading.hidden = true
       errorPanel.hidden = false
@@ -1618,12 +1625,14 @@
   async function applySettings(nextSettings) {
     // ★ 形象切换宽限期：PATCH /settings 之前已在途的旧 /status 响应（或晚到的 settings_changed）
     //   会把 live2d_model_id 盖回旧值，造成"切过去→闪回旧形象→再跳回来"。
-    //   宽限期内（10s）只要本地还有在途目标，就强行以本地目标为准；
-    //   PATCH 完成后服务端值与本地一致，这里自然不再改写。
+    //   宽限期内（10s）只要存在**用户切换意图**（modelSwitchTarget，仅 switchModel 赋值），
+    //   就强行以它为准；PATCH 完成后服务端值与之一致，这里自然不再改写。
+    //   ⚠ 判据不能用 loadModel 里记的"在途目标"：真实 Electron 时序下广播先于 invoke 回包，
+    //   onModelsChanged 会先 loadModel(旧) —— 那会把宽限期劫持成"锁回旧形象"。
     if (nextSettings && typeof nextSettings.live2d_model_id === 'string'
-      && pendingModelId && nextSettings.live2d_model_id !== pendingModelId
-      && Date.now() - pendingModelIdAt < 10000) {
-      nextSettings = { ...nextSettings, live2d_model_id: pendingModelId }
+      && modelSwitchTarget && nextSettings.live2d_model_id !== modelSwitchTarget
+      && Date.now() - modelSwitchAt < 10000) {
+      nextSettings = { ...nextSettings, live2d_model_id: modelSwitchTarget }
     }
     const previousModel = selectedModelId()
     settings = { ...settings, ...(nextSettings || {}) }
@@ -1658,10 +1667,10 @@
     const nextModel = selectedModelId()
     // currentModelId 只在加载**完成**后才赋值：大模型加载要数秒，若只看它，
     // 每次 5s 轮询都会误判"还没切过去"而重新加载一遍（形象不停重载）。
-    // 加上 pendingModelId（发起即记）后，切换在途期间不再重复发起；
-    // 加载失败时 pendingModelId 被清空，轮询仍会重试（保留失败自愈）。
+    // 用 lastLoad（发起即记）判断「目标已在加载中」，跳过重复发起；
+    // 加载失败时 lastLoad.done = true，轮询仍会重试（保留失败自愈）。
     if (!model || previousModel !== nextModel
-      || (currentModelId !== nextModel && pendingModelId !== nextModel)) {
+      || (currentModelId !== nextModel && !(lastLoad.target === nextModel && !lastLoad.done))) {
       await loadModel(nextModel)
     } else {
       fitModel()
@@ -3207,6 +3216,11 @@
     const id = String(modelId || '')
     if (!modelDefinitions[id]) return false
     const definition = modelDefinitions[id]
+    // ★ 记录用户切换意图（宽限期判据）。必须在 await selectModel 之前：
+    //   真实 Electron 里主进程在 ipcMain.handle 内同步 sendModelsChanged()，
+    //   广播先于 invoke 回包到达 ⇒ onModelsChanged 回调先于本函数后续代码执行。
+    modelSwitchTarget = id
+    modelSwitchAt = Date.now()
     // 桌面侧：导入形象要让主进程把该模型目录设为当前资源目录；内置形象则清掉桌面侧覆盖，
     // 回到「以服务端 live2d_model_id 为准」。
     if (electronRuntime && window.mioDesktop && window.mioDesktop.selectModel) {
@@ -3229,8 +3243,8 @@
     })
     // onModelsChanged 广播（selectModel 触发）已经发起/完成了同一目标的加载，
     // 这里就不必再加载一遍（大模型如大肥鱼 28MB，重复解析很可观）。
-    // 广播那次若失败，pendingModelId 已被清空，这里仍会重试。
-    if (currentModelId !== id && pendingModelId !== id) await loadModel(id)
+    // 广播那次若失败，lastLoad.done 已被置 true，这里仍会重试。
+    if (currentModelId !== id && !(lastLoad.target === id && !lastLoad.done)) await loadModel(id)
     return true
   }
 
@@ -3342,6 +3356,11 @@
       mergeImportedModels(desktopState)
       window.mioDesktop.onModelsChanged(async (payload) => {
         mergeImportedModels(payload)
+        // ★ 真实 Electron 时序：selectModel 的广播先于 switchModel 的 invoke 回包到达，
+        //   此刻 settings.live2d_model_id 还是旧值 ⇒ selectedModelId() 返回旧目标。
+        //   若用户切换在飞（<3s），跳过这次加载 —— switchModel 自己会加载正确目标，
+        //   否则会先闪一下旧模型（"切换后快速变回原形象"的视觉来源之一）。
+        if (modelSwitchTarget && Date.now() - modelSwitchAt < 3000) return
         await loadModel(selectedModelId())
       })
       window.mioDesktop.onClickThroughChanged(async (enabled) => {

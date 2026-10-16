@@ -9,7 +9,7 @@
 > 小智为默认语音主通道：官方免费云（test-token），视觉 / 语音 / 对话全部免费。
 
 [![platform](https://img.shields.io/badge/platform-Windows-0078D6)](https://github.com/xkk6663/Mao)
-[![version](https://img.shields.io/badge/version-v4.2-1a2b4a)](https://github.com/xkk6663/Mao)
+[![version](https://img.shields.io/badge/version-v4.2.1-1a2b4a)](https://github.com/xkk6663/Mao)
 [![agents](https://img.shields.io/badge/agents-小智%20%7C%20DSH%20%7C%20Octop-orange)](https://github.com/xkk6663/Mao)
 [![MCP](https://img.shields.io/badge/一切皆插件-MCP%20Tools-4caf50)](https://github.com/xkk6663/Mao)
 [![Live2D](https://img.shields.io/badge/Live2D-Cubism-ff69b4)](https://github.com/xkk6663/Mao)
@@ -42,6 +42,10 @@
 **主聊天界面**（MIO 管理窗口 · 对话页）：与小智的完整往来记录实时显示，文字 / 图片发送、官方音色语音 + 逐句文本。
 
 ![主聊天界面](docs/images/主聊天界面.png)
+
+**桌宠形象与模型管理**（MIO 管理窗口 · 桌宠页）：内置模型随项目分发，按「DSH 专用模型」（金色标识）与「Live2D 官方免费模型」分区管理，点击卡片即切换形象并**写穿服务端持久化**（重启 / 轮询均不弹回）；右侧 Agent 工具栏实时显示各插件（小智 / DSH / Octop）的在线状态、工作阶段与能力标签，当前显示者高亮标注。
+
+![桌宠形象管理主界面](docs/images/桌宠形象管理主界面.png)
 
 #### 🧩 插件功能展示区
 
@@ -306,6 +310,6 @@ Mao
 | [paperclipai/paperclip](https://github.com/paperclipai/paperclip) | 多 Agent 调度参考（`awaiting_approval` phase 借鉴） |
 | [小智控制台](https://xiaozhi.me/console/agents) · [文档](https://xiaozhi.me/docs) · [开发文档](https://xiaozhi.dev) | 设备绑定 / Agent 管理 / 协议与 MCP |
 
-**更新记录**：详细版本历史见 `CHANGELOG.md`。最近：**v4.2 桌宠形象切换持久化 + 体检页接管提速**；v4.1 Vue 源码回仓 + 构建管线恢复（fork 起点）；v4.0 A 档收口 + 逐 token 流式；v3.12 泡泡交互重构；v3.11 泡泡工坊迁入管理页。
+**更新记录**：详细版本历史见 `CHANGELOG.md`。最近：**v4.2.1 形象切换弹回真根因修复（IPC 时序 + 宽限期劫持）**；v4.2 桌宠形象切换持久化 + 体检页接管提速；v4.1 Vue 源码回仓 + 构建管线恢复（fork 起点）；v4.0 A 档收口 + 逐 token 流式；v3.12 泡泡交互重构；v3.11 泡泡工坊迁入管理页。
 
 **开发守则**：改界面先查 `SRC-MAP-源码地图.md`。**Vue 源码已回仓**：改 `澪Agent应用/src/` 后 `npm run build:dist` 重建（守卫 A/B/C/D 全 0 才算过）；手写注入层（`dist/core-inject`、`dist/plugins`、`dist/live2d-pet`）直接改并升 `?v=` 版本参数。改后端 `python -m py_compile` 校验。
