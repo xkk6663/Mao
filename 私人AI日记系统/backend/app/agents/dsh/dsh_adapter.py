@@ -29,6 +29,27 @@ DSH 协议细节（帧格式、事件字段）全部隔离在边车里，总线�
                     └─ dsh_adapter.py      （策略侧：facts → phase → 总线）
                           └─ agent_bus_service → WS agent_phase → 桌宠
 
+两条并行上报链路（互不耦合）
+----------------------------
+  ============= ========================== ==============================
+  链路          边车 kind                 → WS 事件 → 桌宠效果
+  ============= ========================== ==============================
+  状态（主）     ``event`` / ``facts``      ``agent_phase``  徽标 + 动画
+  正文（M1）     ``stream``                 ``agent_stream`` 气泡逐 token 追加
+  ============= ========================== ==============================
+
+正文链路**不参与 phase 计算**：一条 ``assistant/message`` 既会让 phase 变成
+``streaming``（驱动"打字中"的动作），也会让正文按原始节奏逐块进气泡；两者
+各自独立，任一失效都不影响另一条。
+
+**逐 token 的真实来源与限制（实测，别想当然）**：会话日志里
+``assistant/message`` 的 ``data.stream[]`` 含 ``text-chunks`` 帧（真增量 + 毫秒
+时基 + 权威全文），但它**与紧随其后的 ``tool/call`` 同帧落盘**——即日志拿到
+文本时该消息已经生成完毕（实测 2 个会话、1131 个 stream 事件全部单帧完整）。
+所以当前实现是「**事后按 DSH 原始节奏回放**」，不是"边生成边出字"。
+真·实时增量只能走下方"实测选型"表里的 Host WS ``session/follow`` 快通道；
+渲染端消费的都是同一条 ``agent_stream``，将来换源不需要动前端。
+
 phase 映射（facts → 12 个标准 phase 中 DSH 能显示的那些）
 --------------------------------------------------------
 DSH 原生能真实驱动的 phase（本适配器全部注册）：
@@ -825,6 +846,41 @@ class DshAdapter:
         except Exception:  # noqa: BLE001
             logger.debug("DSH 等待播报失败（不影响主链路）", exc_info=True)
 
+    def _publish_stream(self, msg: dict[str, Any]) -> None:
+        """逐 token 流式：把边车给的一段正文增量交给总线（→ 桌宠气泡追加渲染）。
+
+        与 phase 链路**完全解耦**：只出气泡，不改 phase、不抢桌宠"身体"
+        （与 ``agent_bus_service.announce`` 同一分层）。
+
+        门控两道，缺一不可：
+        - 总线 ``enabled``：用户在 MIO 管理页停用 DSH 时不该继续冒泡；
+        - 会话一致性：边车切会话后仍在飞的旧消息（``msg.session`` 与当前不符）
+          直接丢掉，避免"上一个会话的正文"糊到新会话上。
+        """
+        if not self._bus_enabled():
+            return
+        session = str(msg.get("session") or "")
+        if session and self.session_id and session != self.session_id:
+            return
+        texts = msg.get("texts")
+        payload = {
+            "session": session,
+            "turn": msg.get("turn"),
+            "step": msg.get("step"),
+            "seq": msg.get("seq"),
+            "index": msg.get("index"),
+            "frame": str(msg.get("frame") or "text-chunks"),
+            "time0": msg.get("time0"),
+            "dt": msg.get("dt") if isinstance(msg.get("dt"), list) else [],
+            "texts": texts if isinstance(texts, list) else [],
+            "final_text": str(msg.get("final_text") or ""),
+            "total_ms": msg.get("total_ms"),
+        }
+        try:
+            agent_bus_service.stream(AGENT_ID, payload)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("DSH agent_stream 上报失败：%s", exc)
+
     # -- 主循环 -----------------------------------------------------------
     async def run(self) -> None:
         agent_bus_service.register(
@@ -992,6 +1048,12 @@ class DshAdapter:
         if kind == "event":
             agent_bus_service.heartbeat(AGENT_ID)
             self._publish_facts(msg.get("facts") or {})
+            return
+
+        if kind == "stream":
+            # 逐 token 流式（M1）：只喂气泡，不参与 facts/phase 计算
+            agent_bus_service.heartbeat(AGENT_ID)
+            self._publish_stream(msg)
             return
 
         if kind == "switch":

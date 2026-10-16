@@ -1,7 +1,7 @@
 # Mio 桌宠 · 源码地图（SRC-MAP）
 
 > 本项目的界面导航手册。**改哪个界面，先查这张表。**
-> 更新日期：2026-10-15（v3.5）
+> 更新日期：2026-10-16（M0 收口：保存反馈三态修复 + 仓库清理）
 
 ---
 
@@ -44,15 +44,18 @@
 | 项 | 位置 |
 |---|---|
 | URL | `http://127.0.0.1:8000/agent-app/?workspace=main&v=...` |
-| 入口 HTML | `澪Agent应用\dist\index.html`（加载 assets 分片 + 注入脚本） |
+| 入口 HTML | `澪Agent应用\dist\index.html`（加载 assets 分片 + **15 个注入 script 标签**，均带 `?v=` 版本参数） |
 | 对话页组件 | `澪Agent应用\dist\assets\ChatPage-DUGVoyFe.js`（小智对话：输入框 `.composer-input`、WS 直连、历史轮询、状态点） |
-| 主入口/路由 | `澪Agent应用\dist\assets\index-BBVquePX.js`（bootstrap/状态管理，勿手改） |
-| **图片上传注入** | `澪Agent应用\dist\xiaozhi-chat-inject.js`（📷 按钮 + 粘贴暂存 + 左下角红/黄/绿调试角标） |
-| **Agent 页注入** | `澪Agent应用\dist\agent-switch-inject.js`（★ 总线快照 + 启用/停用开关 + 点击其他导航自动收起） |
-| **设置面板注入** | `澪Agent应用\dist\settings-panel-inject.js`（★ 桌宠/语音/屏幕观察/提示词/小智 5 tab） |
-| **小智工具页** | `澪Agent应用\dist\mcp-tools-panel.js`（★ 15 项本地 MCP 工具开关） |
-| **对话记录面板** | `澪Agent应用\dist\xiaozhi-history-panel.js`（★ 历史 + WS 实时 + 发送） |
+| 桌宠管理页 | `澪Agent应用\dist\assets\CompanionPage-D7yDEAW1.js` + `assets\PetAppearancePanel-CAsGsCDg.js`（模型管理 / 动作表情预览 / 保存反馈三态 / 实时刷新按钮） |
+| 主入口/路由 | `澪Agent应用\dist\assets\index-BBVquePX.js`（bootstrap + store + provide，勿手改） |
+| **前端微内核** | `dist\kernel\plugin-registry.js`（插件注册表）/ `dist\kernel\plugin-nav.js`（导航注入） |
+| **插件包（目录化）** | `dist\plugins\{xiaozhi,dsh,octop}\`（每个含 `manifest.js` + 自有面板：`xiaozhi/chat-inject.js`、`xiaozhi/mcp-panel.js`、`dsh/dsh-panel.js`） |
+| **核心注入层** | `dist\core-inject\`（7 个）：`settings-panel-inject.js`（★ 设置 5 tab）/ `settings-clean-inject.js` / `bubble-panel-inject.js`（★ 泡泡工坊）/ `agent-switch-inject.js`（★ Agent 开关）/ `agent-kill-inject.js` / `rail-switch-inject.js` / `health-panel-inject.js`（体检） |
 | Electron 窗口 | `main.js` 中 `petAdminWindow`（打开前强制清缓存） |
+
+> ⚠ **已变更（2026-10-16）**：注入脚本已从 dist 根目录**迁入 `core-inject/` / `kernel/` / `plugins/` 三层**；
+> 旧根路径 `dist\xiaozhi-chat-inject.js`、`dist\mcp-tools-panel.js`、`dist\settings-panel-inject.js`、`dist\agent-switch-inject.js` **均不再存在**。
+> `dist\xiaozhi-history-panel.js` **已删除**——历史/实时对话已内建于 `ChatPage-DUGVoyFe.js`（走 `/api/xiaozhi/chat-history` + `/api/xiaozhi/ws?role=chat`），不再需要独立覆盖面板。
 
 ### 2.4 截图提问的选区覆盖层（快捷键触发）
 
@@ -182,6 +185,20 @@
 | 原版文档（根/子项目 README_EN、CHANGELOG*、CONTRIBUTING、SECURITY、.github CI） | ✅ 已删除 | 保留 LICENSE / THIRD_PARTY_NOTICES |
 | 后端空转后台任务（QQ/日记/备份/周月报/费用对账等 9 项） | ✅ 已移除 | main.py 任务工厂 13→4（提交见下） |
 
+### 2026-10-16 追加清理（M0 收口）
+
+| 内容 | 处理 | 说明 |
+|---|---|---|
+| `dist\xiaozhi-history-panel.js` | ✅ 已删除 | 历史/实时对话已内建于 `ChatPage-DUGVoyFe.js`（`/api/xiaozhi/chat-history` + `ws?role=chat`） |
+| `dist\assets\CompanionPage-D7yDEAVz.js` / `-D7yDEAW0.js` | ✅ 已删除 | 改名遗留的孤儿分片（全仓 0 引用） |
+| `dist\assets\PetAppearancePanel-CAsGsCDh.js` / `-CDi.js` / `-CDj.js` | ✅ 已删除 | 孤儿分片；`__vite__mapDeps` 已重指到 `-CDg.js` |
+| `dist\assets\save-D7rMjPJ0.js` | ✅ 已删除 | 仅被已阉割的 AgentSettingsPage 引用 |
+| `dist\assets\*.bak` / `*.orig` / `*.bak-<ts>`（5 个） | ✅ 已删除 | 补丁备份（`clean-dist.mjs` A 类） |
+| 9 处悬空 `import()` 引用 | ✅ 已改写为 `_trimmed-stub.js` / `.css` | **不增删 `__vite__mapDeps` 数组元素**（保 27 项与全部下标） |
+| `pet-data\_verify\`（434 文件 / 21 MB） | ✅ 已删除 | 调试探针脚本 |
+| `pet-data\.edge-pA~pD`（4 个浏览器剖面 / 240 MB） | ✅ 已删除 | 调试用 Edge 剖面 |
+| `workspace_patch\`（252 项） | ✅ 已删除 | 上一轮工作区临时补丁脚本 |
+
 **保留（别删）**：
 - `本地视觉\`（后端 config 引用路径 `MIO_LOCAL_VISION_DIR`，空目录也要留）
 - `xiaozhi_device.json` / `xiaozhi_chat_history.json` / `status.json`（运行数据）
@@ -193,10 +210,13 @@
 
 ## 6. 修改守则（每次改前看一遍）
 
-1. **改界面** → 先查第 2 节表，确定改哪个文件；dist 内是**构建产物**，`assets\` 分片不要手改（ChatPage 分片例外——它就是我们的小智对话页，可直接改，改完 `node --check`）。
+1. **改界面** → 先查第 2 节表，确定改哪个文件；dist 内是**构建产物**，`assets\` 分片不要手改（`ChatPage` / `CompanionPage` / `PetAppearancePanel` 例外——它们是我们自研的页面，可直接改，改完 `node --check`）。
+   ⚠ **手改压缩产物必知的坑（2026-10-16 实证）**：往 Vue 编译产物里**手工新增动态节点**时，若它落在 `(openBlock(), createBlock(...))` 包裹的区块内，会被 `patchBlockChildren` 的**索引式 patch 整体跳过**——表现为「render 确实跑了、数据也对，但 DOM 永不更新」（本次"保存反馈不显示"+"刷新 tip 不出现"两个 BUG 的真实根因）。
+   **解法**：把该区块的 `(s(),u(\`div\`,X,[...]))` 改成 `f(\`div\`,X,[...])`（去掉 block 包裹），让它走完整 children diff。
+   **验证纪律**：改动后必须用无头浏览器**实测 DOM 变化**，不能只看 render 是否执行——render 执行 ≠ DOM 更新。
 2. **改后端** → 改 `routes\` 下对应文件，`py_compile` 校验；小智逻辑全在 `xiaozhi.py`。
 3. **改完必做**：`node --check`（JS）+ `python -m py_compile`（py）+ **git commit**。
-4. **Electron 加载的页面 URL 带版本参数**（当前 v3.5：live2d-pet.js `v=20261015-models`、pet-xz-audio.js `v=20261015-plugin`、CSS `v=20261015-plugin`）——改了前端文件记得**升版本号**，否则缓存不刷新。
+4. **Electron 加载的页面 URL 带版本参数**——`dist\index.html` 内有 **15 个注入 script 标签**各带 `?v=`（当前：`index-BBVquePX.js?v=20261015-ui11`、`settings-panel-inject.js?v=20261015a2`、`bubble-panel-inject.js?v=20261015-bp5`、`health-panel-inject.js?v=20261015-health`、`plugin-registry.js?v=20261015-p3b`…）；`live2d-pet\index.html` 同理。**改了哪个前端文件就升它自己的 `?v=`**，否则缓存不刷新。
 5. **重启方式**：`taskkill /F /IM electron.exe` 后跑 `start_mio.ps1`（start_mio.ps1 检测到 electron 在跑会跳过启动）。
 6. **MIO 管理窗口红点**：看左下角角标颜色定位注入状态；inject.js 每次 keepAlive 都会更新角标颜色。
 7. **git 仓库**：根目录 `C:\Users\xiao1\Mao`（本地 main 分支），每次改动都提交，防写坏。

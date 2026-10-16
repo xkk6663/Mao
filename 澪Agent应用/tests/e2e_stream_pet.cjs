@@ -1,0 +1,280 @@
+// M1 逐 token 流式 · 真实渲染端 E2E（Playwright + 注入 WebSocket 桩）
+//
+// 跑法（后端必须先起着，页面由后端静态托管）：
+//   NODE_PATH=<有 playwright 的 node_modules 路径> node 澪Agent应用/tests/e2e_stream_pet.cjs
+// 可用环境变量覆盖：PET_CHROME（Chrome 可执行文件）、PET_BASE_URL（页面基址）
+//
+// 为什么要这么写（三个踩过的坑，别简化掉）：
+//  1) 桌宠渲染端只在 Electron 里连 WS（`if (!electronRuntime) return`），必须注入
+//     mioDesktop 桩，否则永远拿不到 socket 实例——测的全是空气。
+//  2) 纯 Chrome 下 Live2D 资源加载失败会让页面 IIFE 在中途抛错，气泡绑定可能没接上。
+//     故用**就绪门闩**：轮询 socket + 气泡 API，并预热一次气泡确认真的会渲染。
+//  3) 同一页面里连做多个用例会互相污染（idle 自语定时器/自动隐藏会插进来），
+//     表现为"第一个用例过了后面全乱"。故**每个用例独立新开页面 + 独立门闩**。
+const { chromium } = require('playwright')
+const fs = require('node:fs')
+const path = require('node:path')
+
+const BASE_URL = process.env.PET_BASE_URL || 'http://127.0.0.1:8000'
+const PAGE = `${BASE_URL}/agent-app/live2d-pet/index.html`
+const CHROME = process.env.PET_CHROME || 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+let pass = 0
+let fail = 0
+function check(name, ok, detail) {
+  if (ok) { pass += 1; console.log(`  [OK]   ${name}`) }
+  else { fail += 1; console.log(`  [FAIL] ${name}${detail === undefined ? '' : ' — ' + detail}`) }
+}
+
+const BASE_STREAM = {
+  agent_id: 'dsh', agent_name: 'DSH', accent: '#4F6BED',
+  session: 'e2e-session', turn: 1, step: 1, index: 0,
+  frame: 'text-chunks', time0: 0,
+  dt: [120, 120, 120, 120, 120],
+  texts: ['你', '好', '，', '这是', '逐 token', '。'],
+  final_text: '你好，这是逐 token。',
+  total_ms: 600,
+}
+
+const INIT_SCRIPT = () => {
+  window.__ws = null
+  window.__wsN = 0
+  window.__rej = []
+  window.addEventListener('unhandledrejection', (e) => {
+    window.__rej.push(String((e.reason && e.reason.message) || e.reason))
+  })
+  // Electron preload 面（渲染端据此判断 electronRuntime 才连 WS）
+  window.mioDesktop = {
+    getState: () => Promise.resolve({ settings: {} }),
+    setAlwaysOnTop() {}, setClickThroughLocked() {}, setInteractive() {},
+    setLockControlAnchor() {}, setModelBounds() {}, setUiOpen() {},
+    selectModel() {}, toggleChatWindow() {}, openAgent() {}, close() {},
+    onMouseMove() {}, onClickThroughChanged() {}, onModelsChanged() {},
+    onWindowStable() {},
+  }
+  class FakeWS {
+    constructor(url) {
+      this.url = url
+      this.n = (window.__wsN += 1)
+      this.readyState = 0
+      this.onopen = null
+      this.onmessage = null
+      this.onclose = null
+      window.__ws = this
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}) }, 10)
+    }
+    send() {}
+    close() { this.readyState = 3; if (this.onclose) this.onclose({}) }
+  }
+  window.WebSocket = FakeWS
+}
+
+/** 渲染端静态资源根（供直连磁盘用）。 */
+const RENDERER_DIR = path.join(__dirname, '..', 'dist')
+
+async function openReady(browser) {
+  const page = await browser.newPage()
+  const errors = []
+  page.on('pageerror', (e) => errors.push(String(e.message || e)))
+  // 桌宠渲染端是普通静态文件，浏览器按 URL 缓存——同一个 ?v= 下改了文件却仍拿旧内容，
+  // 会让 E2E 变成"测上一次的代码"（本 harness 真踩过：连改 4 次都测的是首版）。
+  // 故对渲染端静态资源**直连磁盘**，彻底绕开 HTTP 缓存。
+  await page.route('**/agent-app/live2d-pet/*.js*', async (route) => {
+    const name = path.basename(new URL(route.request().url()).pathname)
+    const file = path.join(RENDERER_DIR, 'live2d-pet', name)
+    if (fs.existsSync(file)) {
+      await route.fulfill({ path: file, contentType: 'application/javascript' })
+    } else {
+      await route.continue()
+    }
+  })
+  await page.addInitScript(INIT_SCRIPT)
+  await page.goto(PAGE, { waitUntil: 'domcontentloaded' })
+
+  const api = {
+    text: () => page.evaluate(() => {
+      const el = document.getElementById('speech-bubble-text')
+      return el ? el.textContent : null
+    }),
+    visible: () => page.evaluate(() => {
+      const el = document.getElementById('speech-bubble')
+      return el ? !el.hidden : null
+    }),
+    // 走"页面自己的 socket 实例"，不做任何中间包装（曾因包装层引入假失败）
+    push: (msg) => page.evaluate((m) => {
+      const h = window.__ws && window.__ws.onmessage
+      if (typeof h !== 'function') return 'NO-HANDLER'
+      h({ data: JSON.stringify(m) })
+      return 'ok'
+    }, msg),
+    wsCount: () => page.evaluate(() => window.__wsN),
+    rejections: () => page.evaluate(() => window.__rej.slice(0, 5)),
+    hide: () => page.evaluate(() => window.__mioPetBubble.hide()),
+  }
+
+  for (let i = 0; i < 40; i += 1) {
+    const basic = await page.evaluate(
+      () => Boolean(window.__ws && typeof window.__ws.onmessage === 'function' && window.__mioPetBubble),
+    )
+    if (basic) {
+      await page.evaluate(() => window.__mioPetBubble.show('warmup', { durationMs: 400 }))
+      await sleep(250)
+      const warm = await api.text()
+      if (typeof warm === 'string' && warm.length > 0) {
+        await api.hide()
+        await sleep(150)
+        return { page, api, errors }
+      }
+    }
+    await sleep(250)
+  }
+  await page.close()
+  return null
+}
+
+async function withPage(browser, title, fn) {
+  console.log(`\n${title}`)
+  const ctx = await openReady(browser)
+  if (!ctx) {
+    check(`${title} · 页面就绪`, false, '渲染端未能在纯 Chrome 中完成初始化')
+    return
+  }
+  try {
+    await fn(ctx.api, ctx)
+  } finally {
+    const rej = await ctx.api.rejections()
+    if (rej.length) check(`${title} · 无未处理拒绝`, false, JSON.stringify(rej))
+    await ctx.page.close()
+  }
+}
+
+;(async () => {
+  if (!fs.existsSync(CHROME)) {
+    console.error(`找不到 Chrome：${CHROME}\n  用 PET_CHROME 环境变量指定可执行文件路径。`)
+    process.exit(2)
+  }
+  const browser = await chromium.launch({ executablePath: CHROME })
+  console.log('='.repeat(68))
+  console.log('M1 逐 token 流式 · 渲染端 E2E')
+  console.log('='.repeat(68))
+
+  // ---- 1. 逐块追加 + 节奏 + 最终校正 ----
+  await withPage(browser, '[1] 逐块追加（dt=120ms × 5，共 6 块）', async (api) => {
+    const r = await api.push({ type: 'agent_stream', payload: BASE_STREAM })
+    check('页面分发到 socket 处理器', r === 'ok', r)
+    const samples = []
+    for (let i = 0; i < 10; i += 1) { samples.push(await api.text()); await sleep(85) }
+    const uniq = [...new Set(samples)]
+    console.log('      采样：', JSON.stringify(samples))
+    check('出现多个中间态（不是一次性整段）', uniq.length >= 4, `uniq=${uniq.length}`)
+    check('各中间态长度单调不减（真追加，非替换）',
+          uniq.every((s, i) => i === 0 || String(s).length >= String(uniq[i - 1]).length),
+          JSON.stringify(uniq))
+    check('无 "undefined" 字面量', !uniq.some((s) => s && s.includes('undefined')))
+    check('逐 token 期间气泡可见', await api.visible())
+    await sleep(900)
+    check('最终文本 == 权威全文（零丢字/零重复）',
+          (await api.text()) === '你好，这是逐 token。', JSON.stringify(await api.text()))
+    check('播完仍在屏幕（hold 期）', await api.visible())
+  })
+
+  // ---- 2. 新流替换旧流 ----
+  await withPage(browser, '[2] 新消息中断旧流并替换', async (api) => {
+    await api.push({ type: 'agent_stream', payload: BASE_STREAM })
+    await sleep(700)
+    await api.push({
+      type: 'agent_stream',
+      payload: { ...BASE_STREAM, turn: 2, texts: ['第', '二', '条'], dt: [80, 80], final_text: '第二条' },
+    })
+    await sleep(500)
+    check('气泡内容被新流替换', (await api.text()) === '第二条', JSON.stringify(await api.text()))
+  })
+
+  // ---- 3. B4 降级：只有权威全文 ----
+  await withPage(browser, '[3] B4 降级：只有 final_text、没有增量', async (api) => {
+    await api.push({
+      type: 'agent_stream',
+      payload: { ...BASE_STREAM, texts: [], dt: [], final_text: '仅全文兜底' },
+    })
+    await sleep(400)
+    const t = await api.text()
+    check('直接显示权威全文', t === '仅全文兜底', JSON.stringify(t))
+    check('不出现 undefined 字面量', !String(t).includes('undefined'), JSON.stringify(t))
+  })
+
+  // ---- 4. 未知 frame 容忍 ----
+  await withPage(browser, '[4] 未知/非正文 frame 容忍', async (api) => {
+    await api.push({
+      type: 'agent_stream',
+      payload: { ...BASE_STREAM, frame: 'reasoning-chunks', texts: ['SECRET'], dt: [], final_text: 'SECRET' },
+    })
+    await sleep(400)
+    const t = await api.text()
+    check('协议层只发 text-chunks；未知 frame 不渲染', !String(t || '').includes('SECRET'), JSON.stringify(t))
+  })
+
+  // ---- 5. 其它来源可接管 ----
+  await withPage(browser, '[5] 其它来源可接管气泡（流不霸屏）', async (api) => {
+    await api.push({ type: 'agent_stream', payload: BASE_STREAM })
+    await sleep(400)
+    await api.push({ type: 'agent_bubble', payload: { agent_id: 'dsh', text: '一次性通知', accent: '#4F6BED' } })
+    // announce 走气泡自带的逐字打字机（约 180ms/字），等够 5 个字再看
+    await sleep(1300)
+    const t = await api.text()
+    check('agent_bubble 可覆盖流式气泡', String(t || '').includes('一次性通知'), JSON.stringify(t))
+  })
+
+  // ---- 6. 播完自动消失 ----
+  await withPage(browser, '[6] 播完自动消失（hold = max(3.5s, 字数×60ms)）', async (api) => {
+    await api.push({
+      type: 'agent_stream',
+      payload: { ...BASE_STREAM, texts: ['短'], dt: [], final_text: '短' },
+    })
+    await sleep(700)
+    const before = await api.visible()
+    await sleep(4200)
+    const after = await api.visible()
+    check('hold 期内可见、之后自动消失', before === true && after === false, `before=${before} after=${after}`)
+  })
+
+  // ---- 7. 开关（关） ----
+  await withPage(browser, '[7] 开关 live2d_stream_text_enabled=false 后不渲染', async (api) => {
+    // 注意：后端 settings_changed 推的是**全量** normalized 设置（configuration.py），
+    // 不是局部 patch。页面的 applySettings 里有 `if (!settings.live2d_speech_bubble_enabled)
+    // hideSpeechBubble()`——只推局部键会把总开关变成 undefined 从而误隐气泡。这里按真实
+    // 载荷形状推，避免把"测试造假的载荷"当成产品缺陷。
+    await api.push({
+      type: 'settings_changed',
+      payload: { live2d_speech_bubble_enabled: true, live2d_stream_text_enabled: false },
+    })
+    await sleep(350)
+    await api.push({
+      type: 'agent_stream',
+      payload: { ...BASE_STREAM, texts: ['SHOULD-NOT-SHOW'], dt: [], final_text: 'SHOULD-NOT-SHOW' },
+    })
+    await sleep(500)
+    const t = await api.text()
+    check('关掉后流不渲染', !String(t || '').includes('SHOULD-NOT-SHOW'), JSON.stringify(t))
+  })
+
+  // ---- 8. 开关（默认开）：新页面默认就能流式 ----
+  // 说明：同一页面里"关→再开"的往返没法在这个非 Electron 宿主里稳定断言——
+  // 页面的 settings_changed 分支会走 loadModel/Electron IPC，纯 Chrome 下会卡住整条
+  // applySettings。故这里用**新页面**验证默认开启路径（等价覆盖"开关为真则可渲染"）。
+  await withPage(browser, '[8] 默认开启（live2d_stream_text_enabled 为真）可渲染', async (api) => {
+    await api.push({
+      type: 'agent_stream',
+      payload: { ...BASE_STREAM, turn: 6, texts: ['RE-ON'], dt: [], final_text: 'RE-ON' },
+    })
+    await sleep(500)
+    check('默认开启时流可渲染', String((await api.text()) || '').includes('RE-ON'),
+          JSON.stringify(await api.text()))
+  })
+
+  console.log('\n' + '='.repeat(68))
+  console.log(`结果：${pass} 通过 / ${fail} 失败`)
+  console.log('='.repeat(68))
+  await browser.close()
+  process.exit(fail ? 1 : 0)
+})()

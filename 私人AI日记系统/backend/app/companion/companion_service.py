@@ -111,6 +111,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # 泡泡工坊：气泡皮肤 id + 点击互动（点桌宠随机语句/图片，复用说话气泡）
     "live2d_bubble_style": "default",
     "pet_click_talk_enabled": True,
+    # M1 逐 token 流式：插件（如 DSH）交来的正文增量按上游节奏铺进气泡。
+    # 与 live2d_speech_bubble_enabled 是**两层**开关：总开关关掉气泡全没了，
+    # 这个只关"流式"（关掉后插件仍可用一次性文本气泡 announce）。
+    "live2d_stream_text_enabled": True,
+    # 音效事件配置（clip 为空 = 用现场合成音；非空 = 播放 sounds/ 里的片段）
+    "pet_sound_events": {},
+    # 点击序列（first + queue；queue 为空则回退随机语句/图片）
+    "pet_click_bubbles": {},
+    # 图片池权重（bubble-imgs 文件名 → 权重，缺省 1）
+    "pet_image_weights": {},
     # ---- A 档：桌宠"生命感"设置（自带默认值，缺省即开箱可用）----
     # 音效：按压/释放/切换 Agent 等交互反馈音（0-100 音量，总开关独立）
     "pet_sound_enabled": True,
@@ -134,8 +144,8 @@ def _builtin_live2d_models() -> tuple[dict[str, Any], ...]:
             "id": "hiyori",
             "name": "Hiyori Momose",
             "description": "Live2D 官方免费示例，包含完整待机与点击动作",
-            "model_path": "models/hiyori/Hiyori.model3.json",
-            "preview_path": "models/hiyori/preview.png",
+            "model_path": "models/Hiyori/Hiyori.model3.json",
+            "preview_path": "models/Hiyori/preview.png",
             "preview_url": "/agent-app/live2d-pet/models/Hiyori/preview.png",
             "license": "Live2D Free Material License",
             "source": "Live2D/CubismWebSamples",

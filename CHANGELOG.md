@@ -5,6 +5,434 @@
 
 ---
 
+## v4.1（2026-10-16）· **Vue 源码回仓 + 构建管线恢复** ★ fork 起点
+
+**主线**：把 `澪Agent应用` 的前端从「手改 minified 产物」拉回**正规工程化**——
+恢复 Vue 源码、打通构建管线、把手工阉割改成脚本、补回 19 个提交的业务改动（含小智对话历史）。
+这是项目**第一次可以按源码重建前端**，也是 fork 基线。
+
+### 为什么必须做（v4.0 遗留的真实阻塞）
+
+v4.0 的 `dist/assets/*.js` 是**手工改过的 minified 产物**，全仓 `.vue` 文件数为 **0**。
+后果：任何前端改动都只能直接编辑压缩代码。M0 阶段就因此踩中一个极具迷惑性的 BUG——
+往 `(openBlock(), createBlock('section',...))` 区块里手工插节点，更新走 `patchBlockChildren`
+的**索引式 patch**，手改节点与 `dynamicChildren` 对不上 → **被整体跳过**。
+症状是「render 函数确实跑了、返回值完全正确、分支判定也对，但 DOM 一个字节都不变」。
+**根治法就是本次回仓**：编译器生成的动态节点能被正常 patch，手改 hack 不再需要。
+
+### M1 · 打通构建管线 + G1 判定
+
+- `src`（**108 文件 / 1.02 MB**）自 `eb520213^` 恢复，确认是当前 bundle 的**确切构建源**：
+  `package.json` 逐字段吻合（vite 8.2.0 / vue 3.5.40 / plugin-vue 6.0.8 / node≥22.12.0）。
+- **G1 判定：有条件通过** —— 新旧产物逐字节比对，**同名 chunk 8/8 = 100% 字节一致**，
+  其中 vendor chunk `createLucideIcon`（61.68 kB）字节相同（同一工具链 + 同一源码才可能）；
+  连建两次 **26/26 字节一致**。
+- **踩坑（已写入流程）**：必须同时恢复 `package-lock.json`，且构建一律用 `npm ci`。
+  漏掉时 `npm i` 会自造 lockfile → 传递依赖漂移（差 51 行）→ 分块归属对不上、判定被污染。
+
+### M2 · 19 个提交的业务改动回写
+
+| 批次 | 提交数 | 内容 |
+|---|---|---|
+| 2.1 小智对话历史 | 6 | `ChatPage` 首载 1000 + 3s 增量轮询、`seenIds`+`seenFp` 双去重、图片附带文本、逐句气泡、WS 只保留状态/音频 |
+| 2.2 桌宠模型管理 UI | 8 | 体检页、管理模式、反馈与刷新回传、模型导入/删除/封面/预览、模型切换事件 |
+| 2.3 busy 自愈 + emit | 4 | busy 10s 自愈、状态加载 8s 自愈、`select-live2d` 父子事件与模型 PATCH |
+| 2.4 反馈文案 | — | App 层单一 `settingsFeedback` 通路，保存中/成功/失败三态 |
+
+**小智对话历史（2.1）要点**：承载方式为「**接管**消息区与输入区」——
+新增独立状态（消息表 / 输入框 / 思考态 / session / WS），模板层替换 `context.messageTurns`、
+`context.draft`、`context.sending`，**保留**原版外壳（会话抽屉、跟随对话、清理模式、Agent 分支）。
+四条去重/过滤规则逐条对齐既有实现：system 重连消息跳过、按 `id` 主去重、
+assistant 临时分句与完整历史互为前缀跳过（消除"回复两遍"）、user 文本指纹去重（图片消息不参与）。
+音频沿用原样：WS 二进制帧（`uint32` 采样率 + `uint32` 声道 + `float32` PCM 交错）→
+独立 `AudioContext` 顺序队列播放。
+
+### M3 · 构建管线加固（★ 本轮补齐最关键一环）
+
+| 脚本 | 职责 |
+|---|---|
+| `scripts/index.template.html` | `dist/index.html` 模板：14 个手写注入 `<script>` 标签 + `?v=` 原样保留 |
+| `scripts/compose-dist.mjs` | 清空 `dist/assets/` → 拷入产物 → 按模板重生成 `index.html`；**绝不触碰**注入层与 `live2d-pet/` |
+| `scripts/trim-pages.mjs` | 5 页 + 2 CSS 脚本化阉割 → 重算 `__vite__mapDeps` → 生成 stub → **第二遍孤儿剪枝** |
+| `scripts/clean-dist.mjs` | 完整性守卫：补丁备份 / 备份目录 / 无人引用 assets / 悬空引用 / mapDeps 自洽 |
+
+- **`build.outDir: 'dist-build'`（最关键）**：vite 默认 `outDir` 是 `dist` 且构建前清空它，
+  而 `dist/` 里住着 **257 个手写注入层文件**（`core-inject` 7 + `kernel` 2 + `plugins` 6 + `live2d-pet` 242）。
+  裸跑 `vite build` 会一次性全毁。已设隔离输出 + `emptyOutDir`，实测构建前后 `dist` 278 → 278 不变。
+- **`hiyori` 大小写修复**：代码引用 `./models/hiyori/...` 而实际目录名是 `Hiyori`。
+  Windows 不敏感所以一直没暴露，**Linux 部署必 404**。修 3 处（`live2d-pet.js:12`、`companion_service.py:147/148`）。
+
+### 工程化收益
+
+- `npm run build:dist` 一条命令完成「构建 → 组装 → 阉割 → 守卫」，接手方可独立重建前端。
+- `npm test`（源码单元测试）/ `npm run e2e`（渲染端 E2E）/ `npm run guard`（完整性守卫）。
+- 前端门禁：单元测试 **88 项**、`clean-dist` **A/B/C/D 全 0**、后端自检 **184 项**、渲染端 E2E **15 项**。
+
+### 已修复的既有问题
+
+- `live2dExpression.test.js` 导入路径指向**不存在的** `public/live2d-pet/`（实际在 `dist/live2d-pet/`）→ 修正后测试全绿。
+- E2E 用例 `[2] 气泡内容被新流替换` 偶发失败 —— **经二分法证明与本轮改动无关**
+  （换入 `HEAD` 版渲染端后失败更严重：0/8），属渲染端既有不稳定，**不阻塞本版**。
+
+### 文档
+
+- 新增 `docs/Vue源码回仓可行性评估.md`（回仓可行性 + G1 取证）。
+- 新增 `docs/桌宠保存反馈BUG-诊断与决策.md`、`docs/项目接管执行方案.md`（接管方案与各里程碑实跑记录）。
+- 新增 `docs/M2-2.1-小智对话历史-回写规范.md`（反编译还原的逐项行为规范，供后续对照）。
+- `README.md`：目录树补 `src/`、`vite.config.js`、`scripts/`；**新增「前端开发与构建」章节**
+  （dist 双成分说明、构建四步、注入层改动纪律）。
+- `SRC-MAP-源码地图.md`：更新注入脚本路径（迁入 `core-inject/`/`kernel/`/`plugins/`）、
+  删已移除的 `xiaozhi-history-panel.js` 条目、新增 §6「手改压缩产物纪律」。
+
+---
+
+## v4.1.1（2026-10-16）· 对话页 / 标题栏 UI 精简（用户裁决）+ M2 缺口补记
+
+### 本轮删改（按用户红框截图逐项落地）
+
+| # | 位置 | 改动 | 依据 |
+|---|---|---|---|
+| 1 | 对话页输入区 | 删核心「添加图片或文件」回形针 | 红框 |
+| 2 | 对话页输入区 | 删「上下文用量环」 | 红框 |
+| 3 | 对话页输入区 | 删「模型 / 推理强度」下拉 | 红框 |
+| 4 | 对话页输入区 | 删「模型与API设置」齿轮 | 红框 |
+| 5 | 对话页内容区 | 删左上角「对话窗口」chip | 截图 2 |
+| 6 | 标题栏 | 删「Mio Agent」工作台切换按钮 | 红框 |
+| 7 | 标题栏 | 删窗口三键（最小化 / 最大化 / 关闭） | 红框 |
+
+**输入区最终形态**：`小智连接状态（靠左）` + `小智插件 📷` + `发送`。
+
+### 判据（先取证再改，不靠截图猜测）
+
+- **窗口三键本来就是死按钮**：真浏览器实测 `window.pywebview === 'undefined'`；
+  `controlDesktopWindow()`（`composables/useDesktopNavigation.js:79-86`）拿不到桥就直接 `return`。
+  现壳是「独立 Electron 桌宠 + 浏览器/WebView 管理窗口」，pywebview 桥不存在。
+  删掉后标题栏双击仍可最大化（`.window-drag-zone` 的 `dblclick`）。
+- **「对话窗口」chip 是浮层**：`.conversation-drawer-trigger { position:absolute; top:10px; left:12px }`
+  （`styles/integrated.css:280`）→ 直接压在消息区文字上。删掉后会话抽屉不再有打开入口
+  （**用户已裁决**：不需要；抽屉代码保留在源码，随时可挂回）。
+- **📷 挪位**：原插件注入用 `order:-1` + `insertBefore(firstChild)` 占输入区最左，
+  导致「小智已连接」贴不到左边。改为插到 `.send-button` 之前（`dist/plugins/xiaozhi/chat-inject.js` 的 `ensureBtn`），
+  锚点非直接子元素时回落 `appendChild`（避免 `insertBefore` 抛 `NotFoundError`）；
+  `dist/index.html` 侧 `?v=` 升到 `20261016-imgbtn-right`（模板 `scripts/index.template.html` 同改）。
+- **弹性布局坑**：`.composer-actions > span { flex: 1 }`（`styles/chat.css:997`）会把
+  `.xz-link-status` 一并拉成弹性块 → 新增 `.composer-actions > .xz-link-status { flex: 0 0 auto }` 固定靠左。
+- **标题栏 grid 收列**：从 `42px 1fr auto 42px auto` 收成 `42px 1fr 42px`，
+  同步改 `styles/integrated.css:49/61/563`、媒体查询 `:494`、`styles/agent-workspace.css:11`。
+  （只删元素不改列定义的话，`auto` 空列会让右栏开关不再贴边。）
+
+### 验证
+
+- `npm run build:dist`：守卫 **A 0 / B 0 / C 0 / D 0**，E `mapDeps` 自洽（数组 24 项｜调用 9 个｜占位 9 个）。
+- 真浏览器（playwright-core 驱动本机 Chrome，1280×800）
+  `workspace_patch/verify_chat_ui.mjs` **19 项全过**（含「状态距 composer 左边缘 13px」「右栏开关贴右边缘 1280」）；
+  上一轮回归套件 `workspace_patch/verify_ui.mjs` **25 项全过**。
+- 截图：`workspace_patch/shots/m5-{chat-page,titlebar,composer,settings-page}.png`。
+
+### M2 缺口补记（上一轮修补，此前未入 CHANGELOG）
+
+M2「19 个提交回写」只回写了 `.vue` 的**逻辑**，**CSS 改动整体丢失**：
+旧 `index-CnRrRFJT.css` 有 **71 条**规则在新源码里没有，其中 **50 条仍被模板引用**。
+直接表现为上一轮的三个前端 Bug：① 默认页不是桌宠；② 模型 tab 无样式（名称与 id 粘连、切换按钮退化成裸文字）；
+③ 桌宠页「内置模型 / 外部导入 / 两个金色 DSH 模型」分组塌陷。
+
+- 补法：`workspace_patch/gen_restore_css.mjs` 从旧构建 CSS 逐条抽取「旧有新无」规则（带 `@media` 上下文、
+  剔除死类）→ `src/styles/restored-overrides.css`（50 条），在 `src/main.js` **最后**导入以复现原层叠顺序。
+- 默认页迁移：`App.vue` 的 `DEFAULT_APP_PREFERENCES.default_open_page` 由 `home` 改 `companion`，
+  并加一次性迁移（`mio_default_open_page_migrated_v41`）——只改默认值对老用户无效（localStorage 已存 `home`）。
+- **纪律固化**：凡「回仓 / 回写」类工作，**CSS 与 markup 必须一起核对**，
+  方法把旧构建 CSS 按「选择器 → 声明集合」比对，**不能比字符串**（压缩器会重排声明顺序、把 `rgba()` 转 `#hex8`）。
+- **纪律固化**：改前端一律改 `src/`，`npm run build:dist` 重建；不再手改 `dist/assets/*`。
+
+---
+
+## v4.1.2（2026-10-16）· **「设置保存后失效」三层根因**（桌宠页 / 观察页 / 表情）
+
+**用户报障原文**：
+> 桌宠和观察的功能实际上不可用，我调整里面的选项后，再次打开恢复默认值，桌宠也是，调完表情点击保存后再次打开还是空的。
+
+后端全程**无责**：`GET /api/companion/status` 200/0.4s，`pet.settings` 65 键齐全，
+`PATCH /settings`、`PATCH /size` 均 200 且落盘 `数据/桌宠/设置.json`。
+三个症状是**前端的三个独立缺陷叠加**，逐个取证分离如下。
+
+### 根因 ① 桌宠页**永不水合** → 服务端配置被硬编码默认值永久固化
+
+- **现象**：打开桌宠页，桌宠大小永远显示 `150`（App 里的硬编码默认），而服务端存的是 `80/83`。
+- **机制**：`App.vue` 的 `companionStatus` 初始值是**硬编码的**（`pet_size_percent:150` 等）；
+  而 `loadCompanionStatus({ preserveSettings: true })` 的语义是「保留本地草稿、服务端值不覆盖」。
+  默认页已改为「桌宠」⇒ `watch(activeView)` **不为初始值触发** ⇒ 页面上唯一的加载器就是
+  **3s 轮询**那条带 `preserveSettings` 的路径 ⇒ 默认值被当成「用户正在编辑的草稿」，
+  一次次盖回服务端数据 —— 于是改了保存、重开还是默认值。
+- **铁证**（`workspace_patch/probe_companion_save.mjs`）：`PATCH /size` 设 205 **成功后**，
+  3 个并发的 `GET /status` 仍返回 `pet_size_percent:80`；而 `PATCH /settings` 正确发出了 `205`。
+  → 是**前端状态被旧默认值固化**，不是后端没存。
+- **修法**：`useCompanion.js` 的 `loadCompanionStatus` 给 preserve 加门禁
+  `const canPreserve = preserveSettings && deps.companionStatusReady.value && editingSettings`
+  （只有**成功水合过一次之后**才允许保留草稿）；同时 `App.vue` 启动时**无条件水合一次**
+  （原先只在 `activeView === 'home'` 时加载）。
+
+### 根因 ② 观察页三处独立缺陷
+
+- **2a 改了从不保存**：模板里「间隔(分)」的 `<select>` **漏了 `@change="saveObserve"`** ——
+  纯 UI 状态，永远没进过后端。
+- **2b 回读静默回默认**：旧回读逻辑要求 `(min,max)` **精确等于**三个预设配对之一；
+  服务端实际存成 `(1800,2000)` 这种非配对值 ⇒ 三个分支全不命中 ⇒ `observe.range`
+  静默保持默认 `'5-15'`。
+  修法：抽出 `OBSERVE_RANGES` 单一真相 + `matchObserveRange(min)`，**只按 `min` 匹配**
+  （`min` 是三预设的区分因子），非精确值按最近邻兜底。
+- **2c 加载失败把开关刷成默认**：`loadXiaozhiStatus` 用 `.catch(() => ({ enabled: false }))`
+  把请求失败当成「服务端说关闭」⇒ 一次网络抖动就把用户的开关抹平。
+  修法：`.catch(() => null)` + 保留上次值，仅在有回执时才写状态。
+- 另外 `saveObserve` 改为**用服务端回执回填**（`enabled` / `min_seconds`），保证
+  「界面上看到的 = 服务端存的」。
+
+### 根因 ③ 改「桌宠大小」会冲掉**尚未保存**的表情编辑 ★
+
+- **现象**：调完 6 个表情槽 → 点保存 → 重开仍是空的。
+- **机制**：`PetAppearancePanel` 是**直接 `v-model` 到 store 的 `pet.settings` 对象**上的
+  （动作/表情槽位、三个开关、桌宠大小都写在同一个对象里）。而「桌宠大小」是
+  `@change` **立即** `PATCH /size` 并把响应**整体替换** `companionStatus` —— 服务端响应带回的是
+  **旧 settings 副本**，于是刚填的表情被一起冲掉。之后再点保存，服务端存到的仍是旧值。
+  用户操作顺序「调表情 → 顺手拖一下大小 → 点保存」正好命中，观感就是「保存了但重开还是空的」。
+- **铁证**（`workspace_patch/probe_expr_save.mjs` vs `verify_companion_persist.mjs` 的差异）：
+  表情改动**单独走保存能落盘**（`cheerful: 02 龇牙 → 01 口型切换` 持久化成功，PATCH body 43 键）；
+  但只要流程里**先拖了大小滑块**，服务端就存不到新表情。
+- **修法**：新增 `assignStatus(next, { preserveSettings, editing, serverKeys })` 作为
+  **整体替换 `companionStatus` 的唯一入口**：
+  - `editing`：`saveCompanionSize` **在请求发出前**捕获草稿对象，响应回来后用草稿覆盖 `next.pet.settings`；
+  - `serverKeys`：`saveCompanionSettings` 等「保存某个分组」的场景，**只让本次提交的键以服务端回执为准**
+    （这样才能反映后端白名单过滤与它自动维护的 `live2d_model_id`），**未提交分组的草稿保留**——
+    避免「保存桌宠分组」顺手清掉「观察分组」里刚改还没保存的选项；
+  - 顺带把 `controlCompanion`（启动/停止/重启）、`uploadVoiceReference`、音色包导入、换精灵图
+    四处裸替换一并收敛（仅换精灵图改顶层 `pet.sprite_version`，不动 settings）。
+- 另将 `saveCompanionSettings` 中「桌宠状态尚未加载完成就点保存」的**静默 return** 改为显式错误提示
+  （原来点保存毫无反应，极易被误判为「保存了但不生效」）。
+
+### 验证（真浏览器，playwright-core 驱动本机 Chrome）
+
+- `npm run build:dist`：守卫 **A 0 / B 0 / C 0 / D 0**，入口 `assets/index-BK_-Fz8x.js`。
+- 新增 `workspace_patch/verify_companion_persist.mjs`（16 项）**全过**：
+  - 冷启即显示**服务端**大小 83（不再是默认 150）、「始终置顶」为服务端值、表情下拉已回填 6 个；
+  - 保存后服务端写入新大小 190 与新表情 `01 口型切换`；**重载后**大小仍是 190、表情仍是新值、下拉非空；
+  - 观察「间隔」回填按 `min` 匹配（`10-30` ↔ serverMin 600）、改 `5-15` 真正写入 `[300,900]`、
+    开关 `true → false` 持久化、**重载后两者都保持**；
+  - 脚本自还原，不留脏数据。
+- 回归：`verify_chat_ui.mjs` **19/19**、`verify_ui.mjs` **25/25**。
+- 已知遗留（非本轮引入，旧 bundle 同样存在）：`/api/companion/chat-settings`、
+  `/api/companion/startup-greeting`、`/api/companion/qq-startup` 三个端点 **404**。
+
+---
+
+## v4.2（2026-10-16）· **桌宠形象切换持久化** + 体检页接管提速 + 右侧栏收起态
+
+### 1 · 右键菜单「更换形象」切换后被弹回（桌宠主体，`dist/live2d-pet/live2d-pet.js`）
+
+**用户报障原文**：
+> 右键桌宠打开菜单里面的快速切换形象不可用，切换目标形象后又快速变回原来的桌宠形象了。
+
+后端无责（`PATCH /api/companion/settings` 对 `live2d_model_id` 落盘正常，实测回读一致）。
+根因是**前端两处叠加**，调用栈实证（hook `PIXI.live2d.Live2DModel.from`）：
+
+- **根因 ①** `mergeImportedModels()` 把主进程目录里**所有**模型（含 `source:'built_in'` 的内置模型）
+  都写死 `source:'imported'` ⇒ `switchModel()` 的内置分支（`selectModel('')` + **PATCH 服务端**）
+  **永远走不到**，任何切换都只写 Electron 主进程的 runtime state（`selectedModelId`），服务端
+  `live2d_model_id` 保持旧值；
+- **根因 ②** `applySettings()` 见到 settings 里带 `live2d_model_id` 就清空桌面侧覆盖
+  `desktopSelectedModelId` ⇒ 而每 5s 的 `pollStatus()` 都带这个键 ⇒ 切换后最多 5s 就被
+  轮询打回服务端旧值，表现为「切过去 → 很快变回去」。
+
+**修法**（均在 `dist/live2d-pet/live2d-pet.js`）：
+1. `switchModel()` **统一写穿服务端**：内置形象清桌面覆盖、导入形象设覆盖，随后一律
+   `PATCH /api/companion/settings`（`live2d_model_id` 是当前形象的唯一持久真相）；
+2. `mergeImportedModels()` 尊重 `entry.source === 'built_in'`；`selectedModelId` 尊重**显式空串**
+   （原 `||` 粘住旧覆盖值）；
+3. 新增 `pendingModelId`/`pendingModelIdAt`（loadModel **发起即记**，不等加载完成）：
+   - `applySettings` 的重载判据加 `pendingModelId !== nextModel`——大模型（大肥鱼 8192/28MB）
+     加载要数秒，只看 `currentModelId` 会让每次 5s 轮询都误判"还没切过去"而反复重载；
+   - **切换宽限期（10s）**：PATCH 之前已在途的旧 `/status` 响应会把 `live2d_model_id` 盖回旧值
+     （调用栈实证：`loadModel(旧) ← applySettings ← pollStatus`），宽限期内强行以本地目标为准；
+   - 加载失败清空 `pendingModelId`，轮询仍会重试（保留原有失败自愈）；
+4. `switchModel` 末尾的 `loadModel` 去重（`onModelsChanged` 广播已发起同目标加载就不再加载，
+   28MB 大模型的重复解析省一半）。
+
+**验证** `workspace_patch/verify_gallery_switch.mjs`（10 项）**10/10**：内置（hiyori）与导入
+（biaoqiang）两条路径都断言「PATCH 发出 + 服务端落盘 + 2 个轮询周期内零异模型加载」；
+切换后加载序列干净（各 1 次）。跑完自还原。
+⚠ 取证过程中的重要教训：验证用的 mock 桥拼模型 URL 时写成了 `./models/ + model_path`
+（`model_path` 本身已带 `models/` 前缀）⇒ 子资源 404 ⇒ 所有加载 "Network error" ⇒
+`pendingModelId` 被清空 ⇒ 出现一整批**假象**。真实 Electron 主进程拼的是 `./models/<目录>/<文件>`。
+**mock 必须逐字段照抄主进程的目录构造**，否则整条验证链路都被污染。
+
+### 2 · 进「体检」页闪现旧版体检 UI（`src/components/CompanionPage.vue` + `dist/core-inject/health-panel-inject.js`）
+
+旧 Vue 壳渲染完整体检 UI（设备/小智连接/版本行），注入层接管后再整体替换 `innerHTML`
+——接管前的取数周期（几百 ms）里旧 UI 裸露，且旧模板动态绑定会让 Vue 在 innerHTML 被
+替换后仍试图 patch 已不存在的节点。
+**修法**：① Vue 只渲染**空壳 + 「体检加载中…」占位**，删除 `loadHealth`/`testSystemAudio`/
+`testWebAudio`/`health`/`healthMessage` 死代码与 `Volume2` 导入（正式 UI 一直由注入层承载）；
+② 注入层 `takeOver()` **先用缓存数据同步渲染一次**再异步刷新（render 对空数据全字段兜底），
+消灭裸露窗口。`?v=` → `20261016-health`。
+**验证** `workspace_patch/verify_v42_ui.mjs`（7 项）**7/7**：切走切回体检 72 次高频采样，
+旧版标记（`health-banner`/`health-device`/旧副标题等**旧壳独有**项）出现 **0 次**；
+注入版标记（`data-hp-msg`）始终在。产物中 `体检读取失败`/`healthMessage` 残留 **0**。
+
+### 3 · 右侧栏收起态首行（`dist/core-inject/rail-switch-inject.js`）
+
+**用户原话**：右侧栏收起状态时第一行删掉图片符号，直接显示 agent 就行。
+原首行是 lucide **image 图标**（`ICON_AGENT`：rect+圆+山形，看起来像图片）+ 状态点 + 箭头。
+**修法**：删 `ICON_AGENT`，收起态改显 `Agent` 文本标签（`.mio-rail-agentlabel`，accent 色、
+仅收起态显示）；展开态仍是「Agent 工具」。`?v=` → `20261016-rail`。
+
+### 4 · 构建守卫降噪（`scripts/clean-dist.mjs`）
+
+`D'` 每次构建都误报 `live2d-pet/expressions/love.exp3.json` 悬空——实际该引用相对
+**模型目录**（真实位置 `live2d-pet/models/whale-deepseek/expressions/`，HTTP 200）。
+新增 `D''` 类：`live2d-pet/` 下悬空引用若能在 `live2d-pet/models/*/` 同名相对路径命中，
+按「模型目录清单」解析，不再计入。现 `D' = 0`。
+
+### 5 · 需求登记（用户 idea，随 M6/M7 DSH 插件线做）
+
+桌宠「可拖动、可关闭横条」复用为 **DSH 下发的流式提示窗口**（与说话气泡互斥、
+支持泡泡界面自定义主题/颜色，工作量在 DSH 插件内）——已登记
+`docs/项目接管执行方案.md` §18（M7 新增条目 7.6）。
+
+### 门禁与回归
+
+| 项 | 结果 |
+|---|---|
+| `npm run build:dist` 守卫 | A 0 / B 0 / C 0 / D 0，D' 0，D''（模型相对路径解析）1，mapDeps 自洽；入口 `assets/index-CaMCoE3e.js` |
+| `verify_gallery_switch.mjs`（新，10 项） | **10/10** |
+| `verify_v42_ui.mjs`（新，7 项） | **7/7** |
+| 回归 `verify_companion_persist.mjs` | **16/16** |
+| 回归 `verify_chat_ui.mjs` | **19/19** |
+| 回归 `verify_ui.mjs` | **25/25** |
+
+### 仓库整理
+
+- `workspace_patch/` 一次性诊断脚本归档至 `workspace_patch/archive/`（git-ignored，不影响仓库）；
+  保留 5 个回归验证脚本 + 2 个取证探针（CHANGELOG 引用其路径）。
+- `发布/` 三个旧 zip（v1/v2/v3）维持 §3.3 决定：不随仓库提交。
+- README 对齐：版本徽章 → v4.2；「开发守则」更新为「改 `src/` + `npm run build:dist`」
+  （删除过时的「dist 即源码」表述与「改完必 git commit」）。
+
+---
+
+## v4.0（2026-10-15）· A 档收口：泡泡/音效能力归主体 + **M1 逐 token 流式**
+
+**主线**：按《DSH桌宠深度融合技术方案》A 组（桌宠渲染层增强）补完最后一档——
+点击互动收敛、音效素材管理整套、**逐 token 流式**；同时把"泡泡"从插件名下收回桌宠主体，
+并做一次仓库清理与文档对齐。这是 M1 完成后的第一个大版本。
+
+### M1 逐 token 流式（新增能力，独立链路）
+
+- **边车**（`dsh_log_stream.mjs`）新增 `kind:"stream"`：从 `assistant/message` /
+  `assistant/attempt` 的 `data.stream[]` 里抽 `text-chunks` 帧（真逐 token 增量 +
+  `dt` 毫秒时基 + `block-end` 权威全文），**只在增量跟随路径发**——附着时的历史重放
+  一律不发（否则每次连上桌宠都会把几百条旧正文当实时流刷一遍）。
+  去重键 `session:seq`，防日志截断重读时同一段正文回放两次；`dt` 截断到"块数-1"。
+- **适配器**（`dsh_adapter.py`）新增 `_publish_stream()`：与 phase 链路**完全解耦**
+  （只出气泡，不改 phase、不抢桌宠"身体"）；两道门控——总线 `enabled`、
+  以及"会话一致性"（切会话后仍在飞的旧消息直接丢，避免串台）。
+- **总线**（`agent_bus_service.stream()`）与 `announce()` 同构：总线不认识任何具体插件，
+  只补 `agent_id` / `agent_name` / `accent` 后以 WS `agent_stream` 透传。
+- **渲染端**（`live2d-pet.js`）追加式渲染：首块立即上屏、按 `dt` 逐块铺、收尾用权威
+  全文校正（**零丢字零重复**），播完按字数停留 3.5~12s 后自动消失。
+  三个工程约束：节奏下限 24ms（上游一次性 flush 时也要有"逐块"感，**只垫高不压低**）、
+  总时长封顶 30s（防病态日志挂住气泡）、只认 `frame='text-chunks'`
+  （**推理草稿进气泡是明确越界**，另有渲染端白名单兜底）。
+  开关 `live2d_stream_text_enabled`（泡泡页，默认开）。
+
+> **能力边界（必须知道的限制）**：实测 2 个会话、1131 个 stream 事件，`assistant/message`
+> **与紧随其后的 `tool/call` 落在同一个 zstd 追加帧**——即日志拿到文本时该消息已生成完毕。
+> 所以本版是「**事后按 DSH 原始节奏回放**」，**不是**"边生成边出字"。
+> 真·实时增量只能走 Host WS `session/follow`（需凭据 cookie + 临时端口发现）；
+> 渲染端消费的同一条 `agent_stream`，将来换源**不需要动前端**。
+
+### 泡泡 / 音效：能力归桌宠主体（架构回归修复）
+
+- **修复真实回归**：停用小智插件后桌宠说话气泡整个消失。根因两处都在"插件越界改核心
+  DOM"——`xiaozhi-plugin.js:setXiaozhiUi()` 往核心 `#speech-bubble` /
+  `#activity-indicator` 加 `.plugin-off`；`pet-xz-audio.js` 直接持有气泡元素与定时器。
+  修法：删掉 `setXiaozhiUi()`，核心暴露唯一入口
+  `window.__mioPetBubble = { show, hide, isVisible, setEnabled }`，插件只能经它说话。
+  验证：无头浏览器停用小智插件后 dump DOM，断言 `.plugin-off` 计数为 0。
+- **点击互动三处收敛**（用户实测反馈）：点击弹出的气泡 **3s 自动消失**（原来一直挂着）；
+  空闲自语 6s。
+- **点击序列**：点桌宠按「第 1 次 → 第 2 次 → … → 循环」推进；单项支持
+  `a|b|c`（等权随机）与 `{image}`（抽图）；未配置时走缺省随机。
+- **图片素材库权重**：每张图可设抽取权重，抽中权重与"不连续重复"叠加。
+
+### 音效素材管理整套（A 组音效组）
+
+- **7 类事件**：`press / release / switch / task_end / ask / approval / error`，
+  每类独立 `{enabled, volume, clip}`；未绑片段走**现场合成音**（零素材依赖）。
+- **片段库 + 波形裁剪**：上传（≤10MB）/ 删除 / 试听；裁剪走
+  `decodeAudioData → OfflineAudioContext → 手写 WAV 编码 → 上传`，
+  **纯前端不引入 ffmpeg**；原片段保留。
+- **格式要求前置说明**（用户要求）：白名单对齐**浏览器解码能力**
+  （`wav/mp3/ogg/opus/m4a/aac/flac/webm`），并明确不支持 WMA/APE/AMR/AIFF/MIDI；
+  上传前预校验 + 报错文案直接指向"转 WAV/MP3"。
+
+### 仓库清理与 .gitignore
+
+- **移走调试残留**：`pet-data/` 根目录 23 项中间产物（抓页快照 `srv_*` / `dom_check.html`、
+  状态转储 `status*.json`、水印试验 `wm_diff*` `feiyu_*`、3 个 Edge 浏览器剖面 `.edge-prof*`）
+  → 移到 `.workbuddy/_cleanup_2026-10-15/`（**可还原，未硬删**）。
+- **.gitignore 三处修正**：
+  1. 删掉一行编码损坏的规则（`私人AI日记系统/backend/????????`，实际无命中、会误伤 8 字符名文件）；
+  2. **放宽浏览器剖面规则**：旧规则 `pet-data/.edge-prof*` 只匹配 `prof` 前缀，而实际目录名会变成
+     `.edge-pA` / `.edge-pB` …（并发调试各开一个剖面）→ 改成 `pet-data/.edge-*/`。
+     修正前 `git status` 挂着 **3232 个** Edge 缓存文件，修正后归零；
+  3. **删掉 `**/dist/assets/`（含子目录同名规则）**：这条规则与实际跟踪状态**自相矛盾**——
+     `dist/index.html` 以 hash 文件名引用 `assets/` 里的 bundle，两者必须同仓，否则新克隆白屏。
+     规则留着只会让人误以为 assets 不入库，前端重建产出新 hash 时被静默忽略。
+     现已改为"dist 整体入库"，把这个坑从根上拆掉（原 v4.0 草稿里的"遗留提示"随之作废）。
+- **发布包移出索引**：`发布/*.zip`（Mao v2 / v3、Mio v1，共 17MB）从 git 索引移除
+  （`git rm --cached`，**磁盘文件保留**），并新增 `发布/` 忽略规则。
+  理由：`打包发布.ps1` 的输出目录就是这里，出一版 +6MB，源码仓库不该存二进制；
+  历史版本仍可从 git 历史取回（`git log -- 发布/`）。
+- **E2E harness 入库**：M1 的渲染端 E2E 原在 `.workbuddy/`（该目录按约定不入库），
+  导致新克隆复跑不了这套验证 → 落到 `澪Agent应用/tests/e2e_stream_pet.cjs`，
+  并把 `PET_CHROME` / `PET_BASE_URL` 提成环境变量（不再硬编码本机路径）。
+  已在仓库内新位置**实跑 15 通过 / 0 失败**。
+- **库文件入库审计**：Live2D 模型（217 个，含 `Haru.moc3` 等）、`libs/` 三件套
+  （`pixi.min.js` / `live2dcubismcore.min.js` / `cubism4.min.js`）、`requirements.txt`
+  均**未被忽略**，可正常入库（`**/models/*` 的 `!` 例外生效）。
+  另查：`__pycache__` / `*.pyc` / `*.log` / `*.db` 在跟踪清单里计数为 **0**，无中间产物入库。
+- **dist 上游阉割残留清理**：前端 Vue 源码不在本仓，`dist` 由外部源码树构建后拷入，
+  上游页面被裁掉后留下了补丁备份、改名遗留的旧 hash chunk、以及入口 bundle 里对已删
+  chunk 的悬空引用（触发时后端 SPA 兜底返回 index.html → `import()` 报 MIME 错）。
+  清理后以 `_trimmed-stub.js/.css` 占位，**不增删 `__vite__mapDeps` 数组元素**（保持
+  27 项与全部下标，避免静默串位）。实测 `?workspace=agent` 路径 MIME 错误 10 → 0、
+  页面错误 15 → 5、渲染正文逐字不变。
+- **新增守卫 `澪Agent应用/scripts/clean-dist.mjs`**：默认只核查（退出码 1，可当提交门禁），
+  `--apply` 把残留移入 `.dist-cleanup-safety-<日期>/`（不硬删）。覆盖五类：补丁备份 /
+  备份目录 / 无人引用的 assets / 悬空引用 / **mapDeps 结构自洽**。存在理由：这类残留
+  每重新拷一次 dist 就会再来一轮，需要可重复的检查线而不是人肉发现。
+
+### 验证
+
+- **后端自检扩到 184 项**（原 131）：新增 `[9a]` 边车 emit（增量发 / 历史不发 / `dt` 截断 /
+  reasoning 不外泄）、`[9b]` 适配器→总线（字段、归属色、跨会话丢弃、空载荷、停用门控、
+  畸形载荷容忍）、`[9c]` 前端契约。
+  跑法：`python -m app.agents.dsh.dsh_adapter_selftest`（184 通过 / 0 失败）。
+- **新增渲染端 E2E 15 项**：`澪Agent应用/tests/e2e_stream_pet.cjs`（Playwright + WS 桩 + mioDesktop 桩），
+  覆盖逐块追加采样、节奏、最终校正、新流替换、兜底、frame 白名单、他源接管、自动消失、开关。
+  harness 两个必须保留的设计：**每个用例独立新开页面 + 独立就绪门闩**、
+  **渲染端静态资源直连磁盘绕开浏览器缓存**（后者踩过坑：同 `?v=` 下改文件仍被缓存，
+  连续多次改动都测的是首版代码，表现成"随机失败"）。
+
+### 文档
+
+- `README.md`：版本 v4.0；核心特性新增「泡泡工坊 / 音效系统 / 逐 token 流式」三行；
+  新增「桌宠主体能力（泡泡工坊）」展示段；核心设计补第 8/9 条（气泡归主体、流式独立链路）；
+  目录结构按插件化后的真实路径重写（`app/kernel/`、`app/agents/dsh/`）；常见问题补 3 条。
+- `docs/DSH桌宠深度融合技术方案.md`：升 **v3.0（A 档落地版）**；§3.1 对标表更新 7 项状态；
+  新增 §3.3（A 档落地记录 + 为什么不做浮窗模块卡）、§3.4（M1 能力边界与实测证据）、
+  §3.5（泡泡曾被挂到插件名下的踩坑回归）；Phase 3 标记完成并附两套复跑命令。
+
+---
+
 ## v3.12（2026-10-15）· 泡泡交互重构：浮窗卡撤除 → 点击桌宠触发（复用说话气泡框）
 
 **主线**：按用户实测反馈重构——浮窗模块卡方案推翻（状态栏与徽标重复、随机语句/图片

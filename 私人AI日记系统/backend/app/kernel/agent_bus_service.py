@@ -377,6 +377,46 @@ class AgentBus:
         )
         return True
 
+    def stream(self, agent_id: str, payload: dict[str, Any]) -> bool:
+        """插件 → 桌宠**逐 token 流式文本**（增量追加渲染，按插件身份色显示）。
+
+        与 ``announce`` 的分工：``announce`` 是"一次性说一句完整的话"（桌宠自己按
+        字数做打字机）；``stream`` 是"把模型逐 token 的增量交给气泡"，由渲染端按
+        上游节奏增量追加，因此比 announce 多带了 ``dt``（块间毫秒间隔）与
+        ``final_text``（权威全文，用于收尾校正）。
+
+        总线依旧**不认识任何具体插件**：``payload`` 由插件自定，总线只补
+        ``agent_id`` / ``agent_name`` / ``accent`` 三个身份字段后透传。
+
+        返回 False 表示未广播（插件停用/未注册/无正文）。
+        """
+        if not isinstance(payload, dict):
+            return False
+        texts = payload.get("texts")
+        has_chunks = isinstance(texts, list) and any(str(t or "") for t in texts)
+        if not has_chunks and not str(payload.get("final_text") or "").strip():
+            return False
+        with self._lock:
+            agent = self._agents.get(agent_id)
+            if agent is None or not agent.enabled:
+                return False
+            name = agent.name
+            accent = agent.accent
+            phase = agent.phase
+            seq = agent.seq
+        body = {
+            "agent_id": agent_id,
+            "agent_name": name,
+            "accent": accent,
+            # 渲染端据此判断"边车给的是不是我当前正在看的那条消息"
+            "phase": phase,
+            "bus_seq": seq,
+            "ts": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+        }
+        body.update(payload)
+        pet_event_service.publish("agent_stream", body)
+        return True
+
     def _decide_active_locked(self, agent: AgentState, phase: str, now: float) -> None:
         """活跃聚焦：谁有资格占据桌宠的"身体"。"""
         new_priority = PHASE_PRIORITY.get(phase, 6)
@@ -525,6 +565,11 @@ def heartbeat(agent_id: str) -> None:
 def announce(agent_id: str, text: str, *, duration_ms: int = 0) -> bool:
     """插件 → 桌宠文本气泡（按插件身份色显示）。见 ``AgentBus.announce``。"""
     return bus.announce(agent_id, text, duration_ms=duration_ms)
+
+
+def stream(agent_id: str, payload: dict[str, Any]) -> bool:
+    """插件 → 桌宠逐 token 流式文本（增量追加）。见 ``AgentBus.stream``。"""
+    return bus.stream(agent_id, payload)
 
 
 def set_status(agent_id: str, status: str, *, error: str | None = None) -> None:

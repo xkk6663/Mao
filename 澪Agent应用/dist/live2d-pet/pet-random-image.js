@@ -20,6 +20,7 @@
   var REFRESH_MS = 5 * 60 * 1000
 
   var images = []           // [{name,url,bytes,mtime}]
+  var weightsMap = {}       // 文件名 -> 权重（settings.pet_image_weights）
   var lastFetchedAt = 0
   var fetching = null
   var cardEl = null
@@ -59,7 +60,19 @@
     if (!images.length) return null
     var usable = images.filter(function (im) { return im.url !== lastUrl })
     if (!usable.length) usable = images
-    var chosen = usable[Math.floor(rnd() * usable.length) % usable.length]
+    // 权重来自 settings.pet_image_weights（管理页「泡泡 → 图片素材库」每张图可调；缺省 1）
+    var weights = usable.map(function (im) {
+      var w = Number(weightsMap[im.name])
+      return Number.isFinite(w) && w > 0 ? w : 1
+    })
+    var total = weights.reduce(function (a, b) { return a + b }, 0)
+    var roll = rnd() * total
+    var acc = 0
+    var chosen = usable[usable.length - 1]
+    for (var i = 0; i < usable.length; i++) {
+      acc += weights[i]
+      if (roll <= acc) { chosen = usable[i]; break }
+    }
     lastUrl = String(chosen.url)
     try { window.localStorage.setItem(CACHE_KEY, lastUrl) } catch (_) {}
     return chosen
@@ -127,5 +140,10 @@
     show: show,
     hide: hide,
     count: function () { return images.length },
+    /** settings.pet_image_weights 下发（管理页每张图的权重）。 */
+    setWeights: function (w) {
+      weightsMap = (w && typeof w === 'object') ? w : {}
+    },
+    getWeights: function () { return Object.assign({}, weightsMap) },
   }
 })()

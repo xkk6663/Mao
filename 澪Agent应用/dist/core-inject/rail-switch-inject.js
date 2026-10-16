@@ -27,7 +27,6 @@
   var rail = null
   var locked = false
 
-  var ICON_AGENT = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>'
   var ICON_LOCK = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
   var ICON_UNLOCK = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>'
   var ICON_CHEVRON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>'
@@ -79,7 +78,7 @@
       '#mioRailAgentPanel{height:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:10px;padding:10px 8px;font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;color:var(--ink,#20303a);min-height:0;}' +
       '#mioRailAgentPanel .mio-rail-header{flex:none;display:flex;align-items:center;gap:8px;min-height:36px;cursor:pointer;user-select:none;}' +
       '#mioRailAgentPanel .mio-rail-header .mio-rail-dot{width:8px;height:8px;border-radius:50%;background:var(--accent,#4c8798);flex:none;}' +
-      '#mioRailAgentPanel .mio-rail-header .mio-rail-agenticon{flex:none;color:var(--accent,#4c8798);display:none;}' +
+      '#mioRailAgentPanel .mio-rail-header .mio-rail-agentlabel{flex:none;font-size:11px;font-weight:700;letter-spacing:.5px;color:var(--accent,#4c8798);display:none;}' +
       '#mioRailAgentPanel .mio-rail-header strong{font-size:12px;flex:none;white-space:nowrap;}' +
       '#mioRailAgentPanel .mio-rail-header .mio-rail-spacer{flex:1;}' +
       '#mioRailAgentPanel .mio-rail-header .mio-rail-btn{flex:none;border:none;background:transparent;color:var(--muted,#687984);cursor:pointer;padding:4px;border-radius:6px;line-height:1;}' +
@@ -102,7 +101,7 @@
       '.integrated-right-rail.expanded #mioRailFull{display:flex;}' +
       '.integrated-right-rail:not(.expanded) #mioRailFull{display:none;}' +
       '.integrated-right-rail:not(.expanded) #mioRailCompact{display:flex;}' +
-      '.integrated-right-rail:not(.expanded) .mio-rail-agenticon{display:block!important;}' +
+      '.integrated-right-rail:not(.expanded) .mio-rail-agentlabel{display:block!important;}' +
       '.integrated-right-rail:not(.expanded) .mio-rail-header strong{display:none;}' +
       '.integrated-right-rail:not(.expanded) .mio-rail-lockbtn{display:none!important;}' +
       '.integrated-right-rail.expanded .mio-rail-lockbtn{display:block!important;}'
@@ -114,7 +113,7 @@
     p.id = 'mioRailAgentPanel'
     p.innerHTML =
       '<div class="mio-rail-header" title="点击展开/收起 Agent 工具">' +
-        '<span class="mio-rail-agenticon">' + ICON_AGENT + '</span>' +
+        '<span class="mio-rail-agentlabel">Agent</span>' +
         '<span class="mio-rail-dot"></span>' +
         '<strong>Agent 工具</strong>' +
         '<span class="mio-rail-spacer"></span>' +

@@ -8,7 +8,11 @@
   1. 边车解码真实 DSH 会话日志 → facts（含 zstd 多帧、状态折叠）；
   2. DSH 全部可显示工作状态（10 phase）逐一构造并断言映射正确；
   3. 单事件映射 parse_dsh_event 的关键分支；
-  4. 配置/路径/node 探测等工具函数。
+  4. 配置/路径/node 探测等工具函数；
+  5. 总线集成（注册 + 12 phase 广播 + 快照）；
+  6. 前端契约（phase 标签/工作态口径）；
+  7. 插件包自足性（路由契约 / 独有信号 / 气泡身份色）；
+  8. 逐 token 流式全链路（边车 emit → 适配器 → 总线 → 前端契约）。
 """
 from __future__ import annotations
 
@@ -18,6 +22,8 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -710,6 +716,240 @@ def test_bus_integration() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 9) 逐 token 流式（M1）全链路：边车 emit → 适配器 → 总线 → 前端契约
+# ---------------------------------------------------------------------------
+def _capture_published() -> tuple[list[dict[str, Any]], Any]:
+    """挂一个假发布器捕获 WS 事件，返回 ``(捕获列表, 还原函数)``。
+
+    总线发布走 ``pet_event_service.publish``（模块级函数）。测试里把它换成
+    append 到列表，既能断言事件结构，又不需要真的连一个 WebSocket 客户端。
+    """
+    from ...companion import pet_event_service
+
+    captured: list[dict[str, Any]] = []
+    original = pet_event_service.publish
+
+    def fake(event_type: str, payload: dict[str, Any]) -> None:
+        captured.append({"type": event_type, "payload": payload})
+
+    pet_event_service.publish = fake  # type: ignore[assignment]
+    # 总线模块持有的是同一个模块对象，所以直接换属性即可全局生效
+    return captured, original
+
+
+def test_stream_sidecar() -> None:
+    """[9a] 边车：增量跟随时发 kind:"stream"，附着历史重放**不发**。
+
+    夹具仍在仓库内 ``__pycache__`` 下（与 [7] 同一套理由：Windows 沙箱下 tempfile
+    清理会失败；且 node 无法按含中文的路径加载 .mjs 脚本，故一律用 ``node -e``
+    内联 —— 另一处踩过的坑：Python 的 zlib **没有** zstd 压缩，只有 node 有）。
+    """
+    print("\n[9a] 逐 token 流式 · 边车 emit（增量发 / 历史不发）")
+
+    node = dsh.resolve_node({})
+    script = Path(dsh.__file__).with_name(dsh.SIDECAR_NAME)
+    if not node or not script.exists():
+        print("      无 node 或边车脚本，跳过")
+        return
+
+    root = Path(dsh.__file__).resolve().parent / "__pycache__" / "_dsh_stream"
+    if root.exists():
+        shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True, exist_ok=True)
+    log = root / "--C-Users-xiao1-Stream--" / "session-stream" / "session.v4.jsonl.zstd"
+
+    # 一次 node 调用做两件事：写初始日志（历史） / 追加新帧（实时）。用 argv 区分。
+    writer_js = r"""
+const fs=require('fs'),path=require('path'),zlib=require('node:zlib');
+const [mode,logPath]=process.argv.slice(1);
+const now=Date.now();
+const hist=[
+  {type:'session',version:4,id:'session-stream',createdAt:now-9000,cwd:'C:\\Users\\xiao1\\Stream',
+   isSeeded:false,delegationDepth:0,agentPreset:'standard'},
+  {type:'turn/start',seq:1,time:now-8000,data:{turn:1}},
+  // 历史里**已经存在**的一条 assistant/message：绝不能被当实时流发出
+  {type:'assistant/message',seq:2,time:now-7000,data:{turn:1,step:1,stream:[
+    {chunk:{type:'block-start',index:0,blockType:'text'}},
+    {chunk:{type:'text-chunks',time0:now-7500,index:0,dt:[10],texts:['OLD','TEXT']}},
+    {chunk:{type:'block-end',index:0,block:{type:'text',text:'OLDTEXT'}}},
+  ]}},
+];
+const live=[
+  {type:'assistant/message',seq:3,time:now,data:{turn:1,step:2,stream:[
+    {chunk:{type:'block-start',index:0,blockType:'text'}},
+    {chunk:{type:'text-chunks',time0:now-800,index:0,dt:[41,0,15,13,20,999],
+            texts:['I',"'ll",' look',' at',' it','.']}},
+    // 推理草稿：绝不能进正文流
+    {chunk:{type:'reasoning-chunks',time0:now-900,index:0,dt:[5],texts:['SECRET-THOUGHT']}},
+    {chunk:{type:'block-end',index:0,block:{type:'text',text:"I'll look at it."}}},
+    {chunk:{type:'finish',reason:{kind:'stop'}}},
+  ]}},
+  {type:'tool/call',seq:4,time:now+1,data:{name:'pwsh',callId:'c1'}},
+];
+const events = mode==='init' ? hist : live;
+const body = events.map(e=>JSON.stringify(e)).join('\n')+'\n';
+const frame = zlib.zstdCompressSync(Buffer.from(body,'utf8'));
+if (mode==='init') { fs.mkdirSync(path.dirname(logPath),{recursive:true}); fs.writeFileSync(logPath,frame) }
+else { fs.appendFileSync(logPath,frame) }
+console.log('WROTE-'+mode);
+"""
+
+    def write_log(mode: str) -> str:
+        r = subprocess.run([node, "-e", writer_js, mode, str(log)],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+        return (r.stdout or "").strip() if r.returncode == 0 else f"ERR:{(r.stderr or '')[:200]}"
+
+    try:
+        check_eq("构造初始会话日志", write_log("init"), "WROTE-init")
+        if not log.exists():
+            return
+
+        proc = subprocess.Popen(
+            [node, str(script), "--sessions-root", str(root),
+             "--session-id", "session-stream", "--poll-ms", "100"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+        )
+        out: list[str] = []
+
+        def pump() -> None:
+            if proc.stdout is None:
+                return
+            for line in proc.stdout:
+                out.append(line)
+
+        threading.Thread(target=pump, daemon=True).start()
+        time.sleep(1.5)
+
+        msgs = [json.loads(l) for l in out if l.strip()]
+        check("边车进入 ready", any(m.get("kind") == "ready" for m in msgs),
+              f"kinds={[m.get('kind') for m in msgs]}")
+        check("附着历史重放不发 stream（应为 0）",
+              len([m for m in msgs if m.get("kind") == "stream"]) == 0,
+              f"got={[m.get('kind') for m in msgs]}")
+
+        # 追加一段**新的** assistant/message（模拟实时产生）
+        check_eq("追加实时帧", write_log("live"), "WROTE-live")
+        time.sleep(1.2)
+
+        msgs = [json.loads(l) for l in out if l.strip()]
+        streams = [m for m in msgs if m.get("kind") == "stream"]
+        check("增量跟随发 1 条 stream（历史那条不发）", len(streams) == 1,
+              f"got={len(streams)} kinds={[m.get('kind') for m in msgs]}")
+        if streams:
+            s = streams[0]
+            check_eq("stream 带 session", s.get("session"), "session-stream")
+            check_eq("stream 带 turn", s.get("turn"), 1)
+            # 源 dt 多给了 1 个（6 个 vs 需要的 5 个）：必须截断，不能把没用的尾间隔
+            # 留在载荷里让渲染端多等一拍
+            check_eq("stream.dt 截断到 块数-1", len(s.get("dt") or []), 5)
+            check_eq("stream 增量拼接 == 权威全文",
+                     "".join(s.get("texts") or []), "I'll look at it.")
+            check_eq("stream.final_text 来自 block-end",
+                     s.get("final_text"), "I'll look at it.")
+            check_eq("stream.frame 标为 text-chunks", s.get("frame"), "text-chunks")
+            check_eq("stream 带 time0 时基", isinstance(s.get("time0"), int), True)
+        check("推理草稿（reasoning-chunks）绝不进正文流",
+              not any("SECRET-THOUGHT" in "".join(m.get("texts") or [])
+                      for m in msgs if m.get("kind") == "stream"))
+        proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_stream_bus_and_adapter() -> None:
+    """[9b] 适配器 → 总线：agent_stream 事件字段、门控与归属色。"""
+    print("\n[9b] 逐 token 流式 · 适配器 → 总线（agent_stream）")
+
+    captured, original = _capture_published()
+    try:
+        bus = dsh.agent_bus_service
+        bus.register(dsh.AGENT_ID, dsh.AGENT_NAME, "dsh_adapter",
+                     capabilities={"voice": True, "text": True, "screen": False,
+                                   "mcp": True, "observe": False},
+                     accent=dsh.DSH_ACCENT)
+        adapter = dsh._adapter
+        adapter.session_id = "s1"
+
+        # 正常一条：正文增量 + 时基 + 权威全文
+        adapter._publish_stream({
+            "session": "s1", "turn": 3, "step": 7, "seq": 42, "index": 0,
+            "frame": "text-chunks", "time0": 111, "dt": [10, 20],
+            "texts": ["你", "好", "！"], "final_text": "你好！", "total_ms": 30,
+        })
+        evs = [e for e in captured if e["type"] == "agent_stream"]
+        check("发布了 agent_stream", len(evs) == 1, f"got={[e['type'] for e in captured]}")
+        if evs:
+            p = evs[0]["payload"]
+            check_eq("透传 agent_id", p.get("agent_id"), "dsh")
+            check_eq("透传插件身份色", p.get("accent"), dsh.DSH_ACCENT)
+            check_eq("透传 dt 时基", p.get("dt"), [10, 20])
+            check_eq("透传 texts 增量", p.get("texts"), ["你", "好", "！"])
+            check_eq("透传 final_text", p.get("final_text"), "你好！")
+            check("agent_stream 不改 phase（与状态链路解耦）",
+                  "phase" in p and p.get("phase") in bus.PHASES)
+
+        # 会话不一致：边车已切会话，旧消息必须丢弃（否则串台）
+        captured.clear()
+        adapter._publish_stream({"session": "OTHER", "texts": ["旧"], "final_text": "旧"})
+        check("跨会话的流被丢弃", not [e for e in captured if e["type"] == "agent_stream"],
+              f"got={[e['type'] for e in captured]}")
+
+        # 只有 final_text（增量缺失）也要能过——渲染端的兜底路径
+        captured.clear()
+        adapter._publish_stream({"session": "s1", "texts": [], "final_text": "兜底文本"})
+        evs = [e for e in captured if e["type"] == "agent_stream"]
+        check("只有 final_text 时仍发布（渲染端兜底）", len(evs) == 1, f"got={len(evs)}")
+
+        # 空载荷不发布
+        captured.clear()
+        adapter._publish_stream({"session": "s1", "texts": [], "final_text": ""})
+        check("空载荷不发布", not [e for e in captured if e["type"] == "agent_stream"])
+
+        # 停用后不再冒泡
+        captured.clear()
+        bus.set_enabled(dsh.AGENT_ID, False)
+        adapter._publish_stream({"session": "s1", "texts": ["x"], "final_text": "x"})
+        check("总线停用后不再发布 agent_stream",
+              not [e for e in captured if e["type"] == "agent_stream"])
+        bus.set_enabled(dsh.AGENT_ID, True)
+
+        # 未知 kind 容忍（B4）：总线 stream() 对畸形 payload 返回 False 而不是抛异常
+        adapter.session_id = ""
+        ok = True
+        try:
+            bus.stream(dsh.AGENT_ID, {"weird": 1})
+            bus.stream(dsh.AGENT_ID, None)  # type: ignore[arg-type]
+        except Exception as exc:  # noqa: BLE001
+            ok = False
+            print(f"      异常：{exc}")
+        check("畸形/未知流载荷不抛异常（容忍降级）", ok)
+    finally:
+        dsh.agent_bus_service.pet_event_service.publish = original  # type: ignore[assignment]
+
+
+def test_stream_frontend_contract() -> None:
+    """[9c] 前端契约：桌宠渲染端必须真的接上 agent_stream。"""
+    print("\n[9c] 逐 token 流式 · 前端契约")
+
+    src = _pet_js_src()
+    if not src:
+        print("      未找到桌宠渲染端 live2d-pet.js，跳过")
+        return
+    check("分发 agent_stream 事件", "message.type === 'agent_stream'" in src
+          or '"agent_stream"' in src)
+    check("实现追加式渲染 applyAgentStream", "function applyAgentStream" in src)
+    check("有可取消的流会话（新消息/隐藏时中断旧流）", "cancelAgentStream" in src)
+    check("用最终文本校正（零丢字/零重复）", "finishAgentStream" in src)
+    check("气泡被其他来源占用时会中断流", "cancelAgentStream()" in src.split("function showSpeechBubble")[1][:600]
+          if "function showSpeechBubble" in src else False)
+    check("流式受气泡开关约束", "live2d_stream_text_enabled" in src)
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 def _pet_js_src() -> str:
@@ -906,6 +1146,9 @@ def main() -> int:
     test_step_start_resets_output_flags()
     test_frontend_contract()
     test_plugin_api()
+    test_stream_sidecar()
+    test_stream_bus_and_adapter()
+    test_stream_frontend_contract()
 
     print("\n" + "=" * 68)
     print(f"结果：{PASS} 通过 / {FAIL} 失败")

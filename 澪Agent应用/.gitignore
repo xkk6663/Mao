@@ -1,6 +1,8 @@
 node_modules/
 pnpm-lock.yaml
-dist/assets/
+# dist/assets/ 不忽略：dist/index.html 以 hash 文件名引用这些 bundle，必须同仓。
+# 若在这里忽略，前端重建产出新 hash 时会静默不入库，导致 index.html 引用到仓库里
+# 不存在的文件（新克隆白屏）——历史上就踩过这个坑。
 dist/updates/
 __pycache__/
 *.pyc
@@ -12,3 +14,6 @@ desktop/build/
 desktop/generated/
 desktop/mio.ico
 .desktop-cache/
+
+# M1 构建输出隔离目录（不随仓入库）
+dist-build/

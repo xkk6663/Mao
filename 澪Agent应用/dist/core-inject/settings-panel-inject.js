@@ -116,6 +116,7 @@
     { id: 'observe', label: '屏幕观察' },
     { id: 'prompts', label: '提示词' },
     { id: 'xz', label: '小智' },
+    { id: 'bubble', label: '泡泡' },
   ]
 
   function setNavActive(on) {
@@ -520,6 +521,17 @@
       note.style.cssText = 'font-size:11px;color:var(--muted, #687984);line-height:1.8;padding:0 4px;'
       note.textContent = '小智官方云免费接入（绑定设备后使用官方音色）。如需更换设备绑定，请到小智控制台处理。'
       body.appendChild(note)
+    } else if (id === 'bubble') {
+      // 泡泡工坊：皮肤 / 点击互动 / 图片素材库 —— UI 由 bubble-panel-inject.js 渲染模块提供
+      var bubbleHost = document.createElement('div')
+      bubbleHost.id = 'mio-bubble-host'
+      bubbleHost.style.cssText = 'display:flex;flex-direction:column;gap:12px;'
+      body.appendChild(bubbleHost)
+      if (window.__mioBubblePanel && window.__mioBubblePanel.renderInto) {
+        window.__mioBubblePanel.renderInto(bubbleHost)
+      } else {
+        bubbleHost.innerHTML = '<div style="font-size:12px;color:var(--muted,#687984);padding:14px;">泡泡模块未加载，请刷新页面后重试。</div>'
+      }
     }
   }
 

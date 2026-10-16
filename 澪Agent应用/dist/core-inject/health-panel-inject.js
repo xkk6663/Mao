@@ -247,6 +247,11 @@
     var panel = $q('.health-simple-panel')
     if (!panel || panel.__mioHealthTaken) return
     panel.__mioHealthTaken = true
+    // ★ 先用缓存数据同步渲染一次，再异步刷新最新数据。
+    //   若只走 refreshNow()（await 全部接口后才 render），Vue 空壳的占位内容会裸露
+    //   一整个取数周期（几百 ms），看起来像"进体检闪一下加载占位"。
+    //   render() 对空数据完全防御（全字段有兜底），缓存为空也不会崩。
+    try { render(panel) } catch (e) { /* 缓存渲染失败不阻断，等 refreshNow 兜底 */ }
     refreshNow()
   }
 

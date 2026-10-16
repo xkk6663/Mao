@@ -1,0 +1,314 @@
+/*
+ * restored-overrides.css —— 回仓补丁（v4.1 修复）
+ *
+ * 背景：M2「19 个提交回写」把 .vue 的逻辑改动回写了，但 CSS 改动没跟上。
+ * v4.0 构建产物里有一批「后置覆盖」样式（在 index-*.css 末尾），回仓后整体丢失，
+ * 导致模型管理/桌宠形象/体检/观察等面板失去样式（表现为「UI 很丑、分组挤在一起」）。
+ *
+ * 本文件由 workspace_patch/gen_restore_css.mjs 从 HEAD 的 index-CnRrRFJT.css 逐条抽取，
+ * 导入位置必须在【最后】（见 main.js），因为原规则本身就是后置覆盖。
+ */
+
+.companion-hub {
+  align-items:stretch;
+  gap:14px;
+  padding-right:14px;
+  display:flex;
+  overflow:auto;
+}
+.companion-main {
+  flex:1;
+  min-width:0;
+}
+.appearance-unified-list {
+  grid-template-columns:repeat(auto-fill,minmax(176px,1fr));
+  gap:12px;
+  margin-top:14px;
+  display:grid;
+}
+.appearance-item-wrap>button:first-child,.appearance-unified-list>button,.appearance-unified-list>label {
+  width:100%;
+  min-height:76px;
+  height:76px;
+  color:inherit;
+  text-align:left;
+  cursor:pointer;
+  background:#f9fbfb;
+  border:1px solid #dfe7e9;
+  border-radius:8px;
+  grid-template-columns:52px minmax(0,1fr) 18px;
+  align-items:center;
+  gap:10px;
+  padding:9px;
+  display:grid;
+  transition:border-color .15s ease,box-shadow .15s ease;
+}
+.appearance-item-wrap>button:first-child:hover,.appearance-unified-list>button:hover,.appearance-unified-list>label:hover {
+  border-color:color-mix(in srgb,var(--mio-warm) 45%,var(--line));
+  box-shadow:0 1px 4px #1a25301a;
+}
+.appearance-unified-list img {
+  object-fit:contain;
+  background:#eef2f3;
+  border-radius:6px;
+  width:52px;
+  height:52px;
+}
+.appearance-unified-list span {
+  gap:3px;
+  display:grid;
+  min-width:0;
+}
+.appearance-unified-list strong {
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  min-width:0;
+}
+.appearance-unified-list small {
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.model-list {
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:8px;
+  max-height:300px;
+  margin-top:16px;
+  display:grid;
+  overflow:auto;
+}
+.model-item {
+  background:#f7f9f9;
+  border:1px solid #e2e8ea;
+  border-radius:6px;
+  align-items:center;
+  gap:8px;
+  min-width:0;
+  padding:9px 11px;
+  display:flex;
+}
+.model-name {
+  white-space:nowrap;
+  text-overflow:ellipsis;
+  font-size:12px;
+  font-weight:600;
+  overflow:hidden;
+}
+.model-id {
+  color:var(--muted);
+  white-space:nowrap;
+  text-overflow:ellipsis;
+  font-size:9px;
+  overflow:hidden;
+}
+.model-cur {
+  color:#4f9275;
+  background:#4f927526;
+  border-radius:8px;
+  flex:none;
+  margin-left:auto;
+  padding:1px 7px;
+  font-size:9px;
+}
+.model-switch {
+  color:#4f6ef7;
+  cursor:pointer;
+  background:0 0;
+  border:1px solid #4f6ef7;
+  border-radius:6px;
+  flex:none;
+  margin-left:auto;
+  padding:3px 10px;
+  font-size:11px;
+}
+.model-switch:hover {
+  background:#4f6ef714;
+}
+.model-empty {
+  color:var(--muted);
+  text-align:center;
+  grid-column:1/-1;
+  padding:12px 0;
+  font-size:11px;
+}
+.companion-panel-msg {
+  color:#4f9275;
+  margin:8px 0 0;
+  font-size:11px;
+}
+.health-banner {
+  background:#edf4f2;
+  border-left:3px solid #4f9275;
+  border-radius:6px;
+  margin-top:14px;
+  padding:11px 13px;
+  font-size:11px;
+}
+.health-device {
+  background:#f7f9f9;
+  border:1px solid #e2e8ea;
+  border-radius:6px;
+  align-items:center;
+  gap:8px;
+  padding:9px 11px;
+  display:flex;
+}
+.health-device span {
+  white-space:nowrap;
+  text-overflow:ellipsis;
+  font-size:12px;
+  overflow:hidden;
+}
+.health-device i {
+  color:var(--muted);
+  margin-left:auto;
+  font-size:11px;
+  font-style:normal;
+}
+.health-def {
+  color:#4f9275;
+  background:#4f927526;
+  border-radius:8px;
+  padding:1px 7px;
+  font-size:9px;
+  font-weight:600;
+}
+.health-muted {
+  color:#9b5a5a;
+  background:#9b5a5a26;
+  border-radius:8px;
+  padding:1px 7px;
+  font-size:9px;
+  font-weight:600;
+}
+.health-rows {
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:8px;
+  margin-top:12px;
+  display:grid;
+}
+.health-rows div {
+  background:#f8fafa;
+  border-radius:6px;
+  justify-content:space-between;
+  gap:10px;
+  padding:9px 11px;
+  font-size:11px;
+  display:flex;
+}
+.health-rows span {
+  color:var(--muted);
+}
+.health-ok {
+  color:#4f9275;
+}
+.health-bad {
+  color:#9b5a5a;
+}
+.observe-auto-block {
+  border-top:1px dashed #dfe7e9;
+  margin-top:18px;
+  padding-top:14px;
+}
+.observe-auto-block h3 {
+  margin:0 0 4px;
+  font-size:13px;
+}
+.shortcut-chip {
+  color:#4f6ef7;
+  background:#4f6ef71f;
+  border:1px solid #4f6ef740;
+  border-radius:7px;
+  padding:2px 9px;
+  font-size:10px;
+  font-weight:600;
+}
+.dim-text {
+  color:var(--muted);
+  font-size:10px;
+}
+.sys-msg {
+  color:#8a919e;
+  font-size:12px;
+  text-align:center;
+  margin:4px 0;
+  line-height:1.4;
+  user-select:none;
+}
+.appearance-item-wrap.gold>button:first-child {
+  background:linear-gradient(135deg,#fdf6e3,#fbf0d3);
+  border-color:#e2c267;
+}
+.appearance-item-wrap.gold>button:first-child:hover {
+  border-color:#d4af37;
+  box-shadow:0 1px 6px #d4af3740;
+}
+.appearance-item-wrap.gold>button:first-child.active {
+  background:linear-gradient(135deg,#faeecb,#f5e3b0);
+  border-color:#d4af37;
+}
+.appearance-item-wrap.gold strong {
+  color:#a8842c;
+}
+.appearance-item-wrap.gold small {
+  color:#b8963e;
+}
+.appearance-item-wrap.gold img {
+  background:#f6e9c8;
+}
+.appearance-item-wrap.gold .appearance-selected-mark {
+  color:#d4af37;
+}
+.model-item.gold {
+  background:linear-gradient(135deg,#fdf6e3,#fbf0d3);
+  border-color:#e2c267;
+}
+.model-item.gold:hover {
+  border-color:#d4af37;
+}
+.model-item.gold .model-name {
+  color:#a8842c;
+}
+.model-item.gold .model-id {
+  color:#b8963e;
+}
+.model-item.gold .model-switch {
+  border-color:#d4af37;
+  color:#a8842c;
+  background:#fffdf5;
+}
+.model-item.gold .model-switch:hover {
+  background:#f7eccf;
+}
+.model-item.gold .model-cur {
+  background:#d4af3726;
+  color:#a8842c;
+}
+.appearance-group-title {
+  grid-column:1/-1;
+  margin:10px 0 2px;
+  padding:3px 10px;
+  font-size:11px;
+  font-weight:600;
+  line-height:1.6;
+  color:#5f6670;
+  background:linear-gradient(90deg,rgba(226,194,103,.16),rgba(226,194,103,0));
+  border-left:3px solid #cfc3a0;
+  border-radius:0 4px 4px 0;
+  letter-spacing:.5px;
+}
+.appearance-group-title.gold {
+  color:#a8842c;
+  background:linear-gradient(90deg,rgba(226,194,103,.28),rgba(226,194,103,0));
+  border-left-color:#d4af37;
+  font-weight:700;
+}
+
+/* M2 改写时把旧版 h4 的内联样式换成了 class，但没定义 → 这里补上（并让标题独占整行） */
+.appearance-section-title {
+  grid-column: 1 / -1;
+  margin: 8px 0 4px;
+  font-size: 12px;
+  color: #5f6670;
+}

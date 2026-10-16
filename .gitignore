@@ -11,8 +11,8 @@
 **/*.sqlite
 **/*.sqlite3
 # 前端核心代码（live2d-pet 渲染器、注入脚本）手写维护，必须纳入 git 防写坏；
-# dist 下仅第三方构建产物 assets 不入库。
-**/dist/assets/
+# dist/assets 是 Vite 构建产物，但 dist/index.html 以 **hash 文件名** 引用它，
+# 两者必须同仓，否则新克隆直接白屏 → 故 dist/assets 一并入库（不要在这里加忽略规则）。
 **/dist/updates/
 # 本地库文件备份（保留在磁盘便于还原，不入库）
 *.bak-sound
@@ -113,9 +113,23 @@ octop_config.json
 # --- 桌宠运行时数据 + 上传临时残留（v3.9 整理，保留在磁盘不入库） ---
 pet-data/Live2D桌宠/
 pet-data/pet-instance/
-私人AI日记系统/backend/????????
 私人AI日记系统/xiaozhi_observe.json
 私人AI日记系统/backend/uvicorn_v2*.log
+
+# --- pet-data 根目录：并行调试现场（浏览器剖面 / 抓页快照 / 验图脚本产物） ---
+# 这些是"当时在查某个 BUG"的中间物，几十分钟就换一批；真正的运行数据是上面那两个
+# 目录（Live2D桌宠 / pet-instance）。历史上它们没有规则约束，导致每次 git status
+# 都会被并行会话的工作现场刷屏，提交时极容易误入库——故按类型整体隔离。
+# 浏览器剖面目录名前缀不稳定（.edge-prof4 / .edge-pA / .edge-pB …），按前缀整体兜住，
+# 否则每次并行调试都会往 git status 里灌 3000+ 个 Edge 缓存文件。
+pet-data/.edge-*/
+pet-data/_verify/
+pet-data/verify_*
+pet-data/*.json
+pet-data/*.html
+pet-data/*.png
+pet-data/*.py
+pet-data/*.js
 
 # --- 会话工作现场/工作区记忆（本机自足，不入库） ---
 workspace_patch/
@@ -123,3 +137,21 @@ workspace_patch/
 
 # pet-data 根目录调试文本（多会话工作现场，不入库）
 pet-data/*.txt
+
+# --- 发布包（构建产物，随 GitHub Release 分发，不入源码库） ---
+# 打包发布.ps1 的输出目录就是这里，每出一版就 +6MB；源码仓库不该存二进制。
+# 历史版本仍可从 git 历史取回：git log -- 发布/
+发布/
+
+# --- dist 打补丁/清理的副产物（会周期性再冒出来，别再入库） ---
+# 前端 Vue 源码不在本仓，dist 由外部源码树构建后拷入，修复靠直接改压缩 bundle，
+# 于是每次都会留下备份；清理器也会在仓库根留回收区。用 澪Agent应用/scripts/clean-dist.mjs 核查。
+**/dist/assets/*.bak
+**/dist/assets/*.orig
+**/dist/assets/*.bak-*
+**/dist/_cleanup-backup-*/
+.dist-cleanup-safety-*/
+_dist-cleanup-safety-*/
+
+# --- 本机 agent 工作目录（宿主自建，不入库） ---
+.workbuddy-ai/

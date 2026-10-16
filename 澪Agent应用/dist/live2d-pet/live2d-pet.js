@@ -9,7 +9,7 @@
     hiyori: {
       id: 'hiyori',
       name: 'Hiyori Momose',
-      url: './models/hiyori/Hiyori.model3.json',
+      url: './models/Hiyori/Hiyori.model3.json',
       idleGroup: 'Idle',
       tapGroup: 'TapBody',
       source: 'built_in',
@@ -255,6 +255,13 @@
   let modelDefinitions = { ...builtInModels }
   let desktopState = { bounds: { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight } }
   let desktopSelectedModelId = ''
+  // 形象切换的"在途目标"：loadModel 一发起就记（不像 currentModelId 要等加载完成才赋值）。
+  // 用途：① applySettings 的重载判据——大模型加载要数秒，若只看 currentModelId，
+  //         每次 5s 轮询都会误判"还没切过去"而重新加载一遍（用户可见为形象不停重载）；
+  //       ② 切换宽限期——PATCH /settings 之前已在途的旧 /status 响应会把 live2d_model_id
+  //         盖回旧值，造成"切过去→闪回旧形象→再跳回来"。宽限期内以本地目标为准。
+  let pendingModelId = ''
+  let pendingModelIdAt = 0
   let settings = {}
   let latestMessageId = null
   let lastStatusSuccess = Date.now()
@@ -565,7 +572,11 @@
         url: String(entry.modelUrl),
         idleGroup: String(entry.capabilities?.idleGroup || ''),
         tapGroup: String(entry.capabilities?.tapGroup || ''),
-        source: 'imported',
+        // ★ 主进程目录里内置模型也带 modelUrl（source:'built_in'），不能一律当 imported：
+        //   switchModel 靠 source 决定「给主进程设覆盖」还是「清掉覆盖」。
+        //   早先写死 'imported' ⇒ 内置模型被误判 ⇒ 桌面侧覆盖永远不干净，
+        //   而且那时内置分支（写服务端）永远走不到，形象切换后被 5s 轮询弹回。
+        source: String(entry.source || '') === 'built_in' ? 'built_in' : 'imported',
         capabilities: entry.capabilities && typeof entry.capabilities === 'object' ? entry.capabilities : {},
         authorization: entry.authorization && typeof entry.authorization === 'object' ? entry.authorization : {},
         renderOptimization: entry.renderOptimization && typeof entry.renderOptimization === 'object'
@@ -573,13 +584,20 @@
           : {},
       }
     })
-    desktopSelectedModelId = String(payload?.selectedModelId || desktopSelectedModelId || '')
+    // 尊重显式的空串：「没有桌面侧覆盖」也是有效状态，不能用 || 粘住上一个覆盖值
+    // （否则切回内置形象时，旧导入覆盖会被粘住一会儿，出现一段无谓的回弹）。
+    if (payload && Object.prototype.hasOwnProperty.call(payload, 'selectedModelId')) {
+      desktopSelectedModelId = String(payload.selectedModelId || '')
+    }
     populateModelSelect()
   }
 
   async function loadModel(modelId) {
     const definition = modelDefinition(modelId)
     const generation = ++modelLoadGeneration
+    // 发起即记为目标：applySettings 用它判断"切换已在途"，慢加载期间不再重复发起
+    pendingModelId = definition.id
+    pendingModelIdAt = Date.now()
     loading.hidden = false
     errorPanel.hidden = true
     let nextModel = null
@@ -621,6 +639,8 @@
         if (nextModel) nextModel.destroy({ children: true, texture: false, baseTexture: false })
         return
       }
+      // 加载失败：清掉在途目标，让下一次轮询仍能重试（保留原有失败自愈语义）
+      pendingModelId = ''
       console.error('[MioLive2D] model load failed', error)
       loading.hidden = true
       errorPanel.hidden = false
@@ -1297,7 +1317,7 @@
   // 三个能力都在 pet-sound.js / pet-idle-talk.js 里自足实现，这里只做**接线**：
   // 桌宠主文件不关心音色怎么合成、台词池有什么，只决定"何时触发"。
 
-  // 播放交互音效（尊重桌面设置开关与音量）
+  // 播放交互音效（尊重桌面设置开关与音量；事件级配置由 settings 下发）
   function petSound(name) {
     try {
       const api = window.__mioPetSound
@@ -1478,8 +1498,10 @@
     const agentName = String(payload.agent_name || payload.agent_id || 'Agent')
     const active = Boolean(payload.active)
     // 实时刷新对应 agent 的状态 chip（多 agent 各自更新，互不覆盖）
+    let prevPhaseBefore = ''
     if (agentId) {
       const prev = agentBadgeStates.get(agentId) || {}
+      prevPhaseBefore = String(prev.phase || '')
       agentBadgeStates.set(agentId, {
         name: payload.agent_name || prev.name || agentId,
         status: prev.status || 'online',
@@ -1498,6 +1520,15 @@
     // A 档音效：Agent 交接（活跃者换人）时给一声"换人了"，只在真的换手时响
     if (active && lastActiveAgentId && agentId && lastActiveAgentId !== agentId) {
       petSound('switch')
+    }
+    // 音效事件：提问 / 授权 / 任务结束 / 异常（只在**相位真的变化**时响，避免重复轰炸）
+    if (active) {
+      const prevPhase = prevPhaseBefore
+      const workPhases = ['thinking', 'planning', 'executing_tool', 'streaming', 'voice']
+      if (phase === 'waiting_input' && prevPhase !== 'waiting_input') petSound('ask')
+      else if (phase === 'awaiting_approval' && prevPhase !== 'awaiting_approval') petSound('approval')
+      else if (phase === 'error' && prevPhase !== 'error') petSound('error')
+      else if ((phase === 'complete' || phase === 'idle') && workPhases.includes(prevPhase)) petSound('task_end')
     }
     if (active && agentId) lastActiveAgentId = agentId
     // 多 agent 并行时，只有当前活跃者驱动桌宠"身体"（表情/动作），互不抢占
@@ -1585,6 +1616,15 @@
   }
 
   async function applySettings(nextSettings) {
+    // ★ 形象切换宽限期：PATCH /settings 之前已在途的旧 /status 响应（或晚到的 settings_changed）
+    //   会把 live2d_model_id 盖回旧值，造成"切过去→闪回旧形象→再跳回来"。
+    //   宽限期内（10s）只要本地还有在途目标，就强行以本地目标为准；
+    //   PATCH 完成后服务端值与本地一致，这里自然不再改写。
+    if (nextSettings && typeof nextSettings.live2d_model_id === 'string'
+      && pendingModelId && nextSettings.live2d_model_id !== pendingModelId
+      && Date.now() - pendingModelIdAt < 10000) {
+      nextSettings = { ...nextSettings, live2d_model_id: pendingModelId }
+    }
     const previousModel = selectedModelId()
     settings = { ...settings, ...(nextSettings || {}) }
     // 后端设置变更(settings_changed)以 settings.live2d_model_id 为准，清空桌面侧覆盖，避免热切换不触发
@@ -1597,6 +1637,16 @@
       if (bs && nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, 'live2d_bubble_style')) {
         bs.setStyle(nextSettings.live2d_bubble_style, speechBubble)
       }
+      // 音效事件配置（每事件开关/音量/自定义片段）
+      const snd = window.__mioPetSound
+      if (snd && nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, 'pet_sound_events')) {
+        snd.setEvents(nextSettings.pet_sound_events)
+      }
+      // 图片池权重（点击随机图片按权重抽）
+      const imgApi = window.__mioPetRandomImage
+      if (imgApi && nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, 'pet_image_weights')) {
+        imgApi.setWeights(nextSettings.pet_image_weights)
+      }
     } catch (_) {}
     if (electronRuntime) {
       window.mioDesktop.setAlwaysOnTop(Boolean(settings.live2d_always_on_top ?? true))
@@ -1606,7 +1656,12 @@
     updateContextMenuLabels()
     if (!settings.live2d_speech_bubble_enabled) hideSpeechBubble()
     const nextModel = selectedModelId()
-    if (!model || previousModel !== nextModel || currentModelId !== nextModel) {
+    // currentModelId 只在加载**完成**后才赋值：大模型加载要数秒，若只看它，
+    // 每次 5s 轮询都会误判"还没切过去"而重新加载一遍（形象不停重载）。
+    // 加上 pendingModelId（发起即记）后，切换在途期间不再重复发起；
+    // 加载失败时 pendingModelId 被清空，轮询仍会重试（保留失败自愈）。
+    if (!model || previousModel !== nextModel
+      || (currentModelId !== nextModel && pendingModelId !== nextModel)) {
       await loadModel(nextModel)
     } else {
       fitModel()
@@ -2316,6 +2371,11 @@
             String(payload.accent || ''),
           )
         }
+      } else if (message.type === 'agent_stream') {
+        // M1 逐 token 流式：插件的正文增量 → 气泡**追加式**渲染（不是一次性整段）。
+        // 与 agent_bubble 的分工：agent_bubble = "说一句完整的话"（气泡自己按字均速
+        // 打字机）；agent_stream = "把上游逐块交来的正文按上游节奏铺开"。
+        applyAgentStream(payload)
       } else if (message.type === 'speak') {
         if (!xzPluginOn) return
         const text = String(payload.text || payload.content || '').trim()
@@ -2505,6 +2565,9 @@
       hideSpeechBubble()
       return
     }
+    // 别的来源（插件气泡/点击互动/唤醒词）要用这个框了：先中断流式会话，
+    // 否则两套计时器会同时往 textContent 里写，出现"跳字/回退"。
+    cancelAgentStream()
     // 气泡身份色：不同插件的气泡用各自专属色区分
     applyBubbleAgentAccent(agentId, accent)
     // 退出图片模式（点击互动的图片泡泡与文本共用同一个框）
@@ -2548,6 +2611,7 @@
   }
 
   function hideSpeechBubble() {
+    cancelAgentStream()
     window.clearTimeout(speechBubbleTimer)
     window.clearTimeout(speechBubbleHideTimer)
     speechBubbleTimer = null
@@ -2560,6 +2624,135 @@
     speechBubble.style.width = ''
     speechBubble.classList.remove('image-mode')
     speechBubbleText.textContent = ''
+  }
+
+  // -------------------------------------------------------------------------
+  // M1 逐 token 流式：把插件（如 DSH）交来的正文增量，按**上游原始节奏**追加
+  // -------------------------------------------------------------------------
+  // 与 showSpeechBubble 的区别（这是两条独立路径，别合并）：
+  //   showSpeechBubble：一端是"完整文本 + 期望总时长"，气泡自己算每字间隔；
+  //   applyAgentStream：一端是"分块文本 + 每块之间的毫秒间隔(dt)"，气泡只负责
+  //                     按时序把块贴上去——上游是快是慢，气泡就跟着是快是慢。
+  //
+  // 三个关键设计（都有踩坑理由）：
+  //   1) **节奏下限** STREAM_MIN_STEP_MS：上游 provider 常把几十个 token 一次性
+  //      flush（实测 dt 多为 0），直接照抄会"啪"地全段出现，等于没有流式感。
+  //      故对每块间隔取 max(dt, 下限)——注意是**只垫高不压低**：真的慢就跟着慢。
+  //   2) **总时长封顶** STREAM_MAX_TOTAL_MS：防病态日志（实测有单帧 dt 累计 30s）
+  //      把气泡一直挂住；超了按比例压缩，保留相对节奏。
+  //   3) **最终文本校正**：块间拼接可能因上游丢块/重复而与权威全文不一致，收尾
+  //      时用 final_text 覆盖一次，保证"零丢字、零重复"。
+  const STREAM_MIN_STEP_MS = 24
+  const STREAM_MAX_STEP_MS = 1200
+  const STREAM_MAX_TOTAL_MS = 30000
+  let streamState = null
+
+  /** 中断当前流（不隐藏气泡本身——由调用方决定后续动作）。 */
+  function cancelAgentStream() {
+    if (!streamState) return
+    window.clearTimeout(streamState.timer)
+    window.clearTimeout(streamState.holdTimer)
+    streamState = null
+  }
+
+  /** 流播完：把权威全文校正上去，并按文本长度停留一会儿再消失。 */
+  function finishAgentStream(responseId, finalText, rendered) {
+    if (!streamState || streamState.responseId !== responseId) return
+    const authoritative = String(finalText || '').trim()
+    if (authoritative && authoritative !== String(rendered || '').trim()) {
+      speechBubbleText.textContent = authoritative
+      speechBubbleText.scrollTop = speechBubbleText.scrollHeight
+      updateSpeechBubblePosition(true)
+    }
+    const chars = Array.from(authoritative || String(rendered || '')).length
+    const holdMs = Math.max(3500, Math.min(12000, chars * 60))
+    streamState.holdTimer = window.setTimeout(() => {
+      if (streamState && streamState.responseId === responseId) {
+        cancelAgentStream()
+        hideSpeechBubble()
+      }
+    }, holdMs)
+  }
+
+  function applyAgentStream(payload) {
+    if (!payload) return
+    if (settings.live2d_speech_bubble_enabled === false) return
+    if (settings.live2d_stream_text_enabled === false) return
+    const texts = Array.isArray(payload.texts) ? payload.texts.map((t) => String(t == null ? '' : t)) : []
+    const finalText = String(payload.final_text || '')
+    // 只认正文（text-chunks）。上游将来若新增 reasoning/tool-call 之类的流，
+    // 缺了这道判断就会把**模型推理草稿**直接铺到桌宠气泡里——那是明确的越界。
+    const frame = String(payload.frame || 'text-chunks')
+    if (frame !== 'text-chunks') return
+    if (!texts.join('') && !finalText.trim()) return
+    // B4 降级：上游只给了权威全文、没给增量（老日志/丢帧）时把它当成"一整块"直接上屏。
+    // 少一层动画，总好过 texts[0] 取到 undefined 把字面量 "undefined" 写上气泡。
+    if (!texts.length) texts.push(finalText.trim())
+
+    const responseId = [
+      'agent-stream',
+      String(payload.agent_id || ''),
+      String(payload.session || ''),
+      String(payload.turn == null ? '' : payload.turn),
+      String(payload.step == null ? '' : payload.step),
+      String(payload.index == null ? 0 : payload.index),
+    ].join(':')
+    // 同一条消息重复下发（例如边车重放）直接忽略：动画不该从头再来一遍
+    if (streamState && streamState.responseId === responseId) return
+
+    cancelAgentStream()
+    // 身份色与位置：跟 agent_bubble 完全同一套（气泡尾巴/主题色一致）
+    applyBubbleAgentAccent(String(payload.agent_id || ''), String(payload.accent || ''))
+    speechBubble.classList.remove('image-mode')
+    speechBubbleResponseId = responseId
+    window.clearTimeout(speechBubbleTimer)
+    window.clearTimeout(speechBubbleHideTimer)
+    speechBubbleHideTimer = null
+    speechBubbleCharacterCount = 0
+    speechBubbleVisibleCount = 0
+    speechBubbleText.textContent = ''
+    speechBubble.style.visibility = ''
+    speechBubble.hidden = false
+    updateSpeechBubblePosition(true)
+
+    const dt = Array.isArray(payload.dt) ? payload.dt : []
+    const steps = []
+    for (let i = 0; i < texts.length - 1; i += 1) {
+      const raw = Number(dt[i])
+      const value = Number.isFinite(raw) && raw > 0 ? raw : 0
+      steps.push(Math.min(STREAM_MAX_STEP_MS, Math.max(STREAM_MIN_STEP_MS, value)))
+    }
+    let total = steps.reduce((a, b) => a + b, 0)
+    if (total > STREAM_MAX_TOTAL_MS) {
+      const k = STREAM_MAX_TOTAL_MS / total
+      for (let i = 0; i < steps.length; i += 1) steps[i] = Math.max(1, steps[i] * k)
+      total = steps.reduce((a, b) => a + b, 0)
+    }
+
+    streamState = { responseId, index: 0, timer: null, holdTimer: null }
+    let shown = ''
+    const step = () => {
+      if (!streamState || streamState.responseId !== responseId) return
+      if (settings.live2d_speech_bubble_enabled === false || settings.live2d_stream_text_enabled === false) {
+        // 用户在播放途中关掉开关：立即收尾，不留半截文本挂在屏上
+        cancelAgentStream()
+        hideSpeechBubble()
+        return
+      }
+      shown += texts[streamState.index]
+      speechBubbleText.textContent = shown
+      speechBubbleText.scrollTop = speechBubbleText.scrollHeight
+      updateSpeechBubblePosition(true)
+      streamState.index += 1
+      if (streamState.index < texts.length) {
+        // 第 i 块之后等 steps[i-1]（dt 描述的是"块间间隔"）
+        streamState.timer = window.setTimeout(step, steps[streamState.index - 1])
+      } else {
+        finishAgentStream(responseId, finalText, shown)
+      }
+    }
+    // 首块立即上屏：流式的"首字延迟"取决于上游何时把第一块交来，气泡不额外引入延迟
+    step()
   }
 
   async function persistCompanionSetting(key, value) {
@@ -2590,7 +2783,28 @@
   }
 
   async function showClickTalk() {
-    // 素材库有图时 45% 概率出图片，否则出随机语句（复用空闲自语内容池）
+    // 1) 点击序列模式：配置了 first/queue 就按序列推进（首次泡 → 队列 → 循环）
+    const item = nextClickBubbleItem()
+    if (item !== null) {
+      const resolved = resolveBubbleItem(item)
+      if (resolved && resolved.image) {
+        const imgApi = window.__mioPetRandomImage
+        if (imgApi) {
+          const list = await imgApi.refresh()
+          if (Array.isArray(list) && list.length) {
+            const im = imgApi.pick()
+            if (im) { showImageInBubble(im); return }
+          }
+        }
+        showSpeechBubble('（素材库还没有图片）', 3000, `click-talk-${Date.now()}`)
+        return
+      }
+      if (resolved && resolved.text) {
+        showSpeechBubble(resolved.text, 3000, `click-talk-${Date.now()}`)
+        return
+      }
+    }
+    // 2) 缺省随机模式：素材库有图时 45% 概率出图片，否则出随机语句（复用空闲自语内容池）
     try {
       const imgApi = window.__mioPetRandomImage
       if (imgApi) {
@@ -2604,6 +2818,42 @@
     const talk = window.__mioPetIdleTalk
     // 3s 自动消失（用户裁决：点击弹出的气泡不要一直挂着；打字机节奏随 3s 收敛）
     if (talk) showSpeechBubble(talk.pick(anyAgentBusy()), 3000, `click-talk-${Date.now()}`)
+  }
+
+  // ---- 点击序列（whale 的"首次点击泡 + 再次点击队列"）：配置在「泡泡 → 点击互动」----
+  let clickSeqStep = 0
+  function clickSequence() {
+    const cfg = settings.pet_click_bubbles
+    if (!cfg || typeof cfg !== 'object') return null
+    const first = String(cfg.first || '').trim()
+    const queue = Array.isArray(cfg.queue)
+      ? cfg.queue.map((x) => String(x || '').trim()).filter(Boolean)
+      : []
+    if (!first && !queue.length) return null
+    return { first, queue }
+  }
+
+  /** 返回本次点击应显示的项（'' 表示无内容）；未配置序列时返回 null（走随机模式）。 */
+  function nextClickBubbleItem() {
+    const seq = clickSequence()
+    if (!seq) return null
+    const total = (seq.first ? 1 : 0) + seq.queue.length
+    const idx = clickSeqStep % total
+    clickSeqStep = (clickSeqStep + 1) % total
+    if (seq.first && idx === 0) return seq.first
+    return seq.queue[idx - (seq.first ? 1 : 0)] || seq.first || ''
+  }
+
+  /** 项语法：`a|b|c` 等权随机；`{image}` 随机图片；其余按纯文本。 */
+  function resolveBubbleItem(item) {
+    const s = String(item || '').trim()
+    if (!s) return null
+    if (s === '{image}') return { image: true }
+    if (s.indexOf('|') >= 0) {
+      const parts = s.split('|').map((x) => x.trim()).filter(Boolean)
+      if (parts.length) return { text: parts[Math.floor(Math.random() * parts.length)] }
+    }
+    return { text: s }
   }
 
   async function setClickThroughLocked(enabled, persist = true) {
@@ -2956,19 +3206,31 @@
   async function switchModel(modelId) {
     const id = String(modelId || '')
     if (!modelDefinitions[id]) return false
-    if (electronRuntime && modelDefinitions[id].source === 'imported') {
-      await window.mioDesktop.selectModel(id)
-      desktopSelectedModelId = id
-    } else if (electronRuntime) {
-      await window.mioDesktop.selectModel('')
-      desktopSelectedModelId = ''
-      settings.live2d_model_id = id
-      await request('/api/companion/settings', {
-        method: 'PATCH',
-        body: JSON.stringify({ ...settings, live2d_model_id: id }),
-      })
+    const definition = modelDefinitions[id]
+    // 桌面侧：导入形象要让主进程把该模型目录设为当前资源目录；内置形象则清掉桌面侧覆盖，
+    // 回到「以服务端 live2d_model_id 为准」。
+    if (electronRuntime && window.mioDesktop && window.mioDesktop.selectModel) {
+      const override = definition.source === 'imported' ? id : ''
+      try {
+        await window.mioDesktop.selectModel(override)
+      } catch (_) { /* 主进程不可用时仍继续走服务端回写 */ }
+      desktopSelectedModelId = override
     }
-    await loadModel(id)
+    // ★ 服务端 live2d_model_id 才是「当前形象」的唯一持久真相。
+    //   pollStatus() 每 5s 拉一次 /api/companion/status，applySettings() 见到 settings 里带
+    //   live2d_model_id 就会清空 desktopSelectedModelId（见 applySettings 注释），于是
+    //   selectedModelId() 落回服务端值 —— 不回写服务端的话，形象会在下一次轮询（≤5s）
+    //   被弹回原样，表现为「切换后很快又变回去」。
+    //   注意：导入形象同样要回写（它不只是主进程 runtime state 的事）。
+    settings.live2d_model_id = id
+    await request('/api/companion/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ ...settings, live2d_model_id: id }),
+    })
+    // onModelsChanged 广播（selectModel 触发）已经发起/完成了同一目标的加载，
+    // 这里就不必再加载一遍（大模型如大肥鱼 28MB，重复解析很可观）。
+    // 广播那次若失败，pendingModelId 已被清空，这里仍会重试。
+    if (currentModelId !== id && pendingModelId !== id) await loadModel(id)
     return true
   }
 
@@ -3139,6 +3401,8 @@
     try {
       window.__mioPetRandomImage && window.__mioPetRandomImage.mount(root)
       window.__mioPetBubbleStyles && window.__mioPetBubbleStyles.apply(speechBubble)
+      // 音效片段列表预热（自定义片段播放前先拿到 URL/版本，避免首播延迟）
+      window.__mioPetSound && window.__mioPetSound.refreshClips()
     } catch (_) {}
   }
 
@@ -3289,6 +3553,24 @@
       parts.push(`${st.name || id}·${PHASE_LABELS[p] || p}`)
     })
     return parts.join(' / ')
+  }
+
+  // 核心气泡 API：**插件访问说话气泡的唯一入口**（插件不得直接操作 DOM——
+  // 否则核心 UI 的显隐/皮肤/定位会被插件绕过，形成"关掉插件泡泡就没了"的隐性依赖）。
+  window.__mioPetBubble = {
+    show: (text, opts) => {
+      const o = opts || {}
+      return showSpeechBubble(
+        text,
+        Number(o.durationMs ?? o.duration_ms) || 0,
+        String(o.responseId || o.response_id || ''),
+        String(o.agentId || o.agent_id || ''),
+        String(o.accent || ''),
+      )
+    },
+    hide: () => hideSpeechBubble(),
+    isVisible: () => !speechBubble.hidden,
+    setEnabled: (on) => { settings.live2d_speech_bubble_enabled = on !== false },
   }
 
   start().catch((error) => {

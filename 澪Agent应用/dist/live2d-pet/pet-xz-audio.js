@@ -8,9 +8,6 @@
   window.__mioPetXzAudioLoaded = true
 
   // ---- DOM ----
-  var bubbleEl = document.getElementById('speech-bubble')
-  var bubbleTextEl = document.getElementById('speech-bubble-text')
-  var bubbleHideTimer = null
 
   // ---- 音频播放（48kHz 双声道 float32 planar，后端代理解码后的 PCM）----
   var audioCtx = null
@@ -92,17 +89,16 @@
     pump()
   }
 
-  // ---- 气泡（复用桌宠主窗现有 bubble DOM）----
+  // ---- 气泡（**只调核心气泡 API**，不直接操作 DOM）----
+  // 核心能力归桌宠主体：气泡的皮肤/定位/显隐/开关都由核心管理，插件只是"内容提供者"。
   function showBubble(text) {
-    if (!bubbleEl || !bubbleTextEl) return
-    bubbleTextEl.textContent = text || ''
-    bubbleEl.hidden = false
-    window.clearTimeout(bubbleHideTimer)
-    bubbleHideTimer = window.setTimeout(hideBubble, Math.max(4000, (text || '').length * 180))
+    var api = window.__mioPetBubble
+    if (!api) return                      // 核心未就绪：静默跳过（不制造反向依赖）
+    api.show(text, { durationMs: Math.max(4000, (text || '').length * 180) })
   }
   function hideBubble() {
-    window.clearTimeout(bubbleHideTimer)
-    if (bubbleEl) bubbleEl.hidden = true
+    var api = window.__mioPetBubble
+    if (api) api.hide()
   }
 
   // ---- 口型通知（live2d-pet.js 监听 mio-xz-speaking）----
@@ -237,7 +233,7 @@
     try {
       window.clearInterval(drainTimer); drainTimer = null
     } catch (_) {}
-    try { window.clearTimeout(bubbleHideTimer); bubbleHideTimer = null } catch (_) {}
+    try { var api = window.__mioPetBubble; if (api && api.isVisible) api.hide() } catch (_) {}
     try { window.clearInterval(pumpTimer); pumpTimer = null } catch (_) {}
     if (ws) {
       try { ws.onclose = null; ws.close() } catch (_) {}

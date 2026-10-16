@@ -1,5 +1,5 @@
 /* xiaozhi-chat-inject.js — Mio 原版私人空间对话页注入"小智图片提问"（图片暂存模式）
- * 1. composer 栏注入 📷 上传图片按钮（点击选图）
+ * 1. composer 栏注入 📷 上传图片按钮（点击选图；位置在**发送键左侧**，不占输入区最左）
  * 2. 支持 Ctrl+V 粘贴图片
  * 3. 图片**暂存**在输入框上方（缩略图可预览、可删除），点发送按钮（或 Enter）才发送
  * 4. 发送 → 后端 /api/xiaozhi/vision（小智官方云视觉，免费）
@@ -157,7 +157,7 @@
     sendPending()
   }, true)
 
-  // ---- 📷 上传按钮 ----
+  // ---- 📷 上传按钮（放在发送键左侧，用户裁决：不占输入区最左，让「小智已连接」靠左） ----
   function ensureBtn() {
     var composer = findComposer()
     if (!composer) return
@@ -167,9 +167,13 @@
     btn.className = 'icon-button xz-img-btn'
     btn.title = '上传图片让小智分析（点发送才发送）'
     btn.innerHTML = svgIcon
-    btn.style.cssText = 'order:-1;flex:none;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;cursor:pointer;'
+    btn.style.cssText = 'flex:none;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;cursor:pointer;'
     btn.addEventListener('click', pickImage)
-    composer.insertBefore(btn, composer.firstChild)
+    // 锚点必须是 composer 的**直接子元素**，否则 insertBefore 抛 NotFoundError
+    // （findComposer 可能回退到 .composer，此时 .send-button 在其孙子层）
+    var anchor = composer.querySelector('.send-button')
+    if (anchor && anchor.parentNode === composer) composer.insertBefore(btn, anchor)
+    else composer.appendChild(btn)
   }
 
   var fileInput = null

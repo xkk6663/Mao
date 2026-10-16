@@ -21,10 +21,34 @@
  *   {"kind":"ready",   "session","log","cwd","delegation_depth","events_replayed"}
  *   {"kind":"facts",   "facts":{...}}                     附着时的当前事实快照
  *   {"kind":"event",   "type","seq","time","data","facts"} 实时增量事件 + 折叠后事实
+ *   {"kind":"stream",  "session","turn","step","seq",...}  assistant 正文的**逐 token 增量**
  *   {"kind":"switch",  "session","log","from"}             活跃会话切换
  *   {"kind":"offline", "reason"}                           DSH 未运行 / 无会话可跟
  *   {"kind":"ping",    "ts"}                               保活心跳（5s）
  *   {"kind":"error",   "message"}                          内部错误（不退出）
+ *
+ * 关于 kind:"stream"（逐 token 流式）——**实测语义，别想当然**
+ * ----------------------------------------------------------
+ * DSH 的 ``assistant/message`` / ``assistant/attempt`` 事件携带 ``data.stream[]``，
+ * 其中 ``text-chunks`` 帧是真·逐 token 增量且**自带时基**::
+ *
+ *   {"type":"text-chunks","time0":<epoch_ms>,"index":0,
+ *    "dt":[41,0,0,15,...], "texts":["I","'ll"," look",...]}
+ *
+ * ``dt[i]`` = 第 i 块与第 i+1 块之间的毫秒间隔 ⇒ 可**按 DSH 原始节奏回放**。
+ * 同事件内的 ``block-end`` 帧带该 block 的**权威完整文本**（用于最终校正）。
+ *
+ * ⚠ 关键限制（实测 2 个会话、1131 个 stream 事件）：**整条 assistant/message
+ * 只落在同一个 zstd 追加帧里**（与紧随其后的 ``tool/call`` 同帧），也就是说
+ * 文本是**消息生成完成后**才落盘的，日志通道**拿不到"边生成边出字"**。
+ * 因此这里发的是「事后按原始节奏回放」，而不是实时增量。
+ * 真·实时增量只能走 Host WS ``/api/remote.mux`` → ``session/follow``
+ * （需凭据 cookie + 临时端口发现，见 dsh_adapter.py 模块文档"实测选型"）。
+ * 本进程只提供日志通道的事实；渲染端拿到的仍是同一条 agent_stream 消息，
+ * 后续换源不需要改渲染端。
+ *
+ * 另外：**只在增量跟随（poll）路径发 stream**，附着时的历史重放（attach）不发——
+ * 否则每次连上桌宠都会把几百条旧正文当实时流刷一遍。
  *
  * 用法
  * ----
@@ -575,6 +599,63 @@ function foldEvents(events) {
   return f
 }
 
+// ---------------------------------------------------------------------------
+// 逐 token 流式：从 assistant 事件的 stream[] 里抽出「增量 + 时基 + 权威全文」
+// ---------------------------------------------------------------------------
+/** 单个 zstd 追加帧内允许回放的最大块数（防病态日志把气泡拖死）。 */
+const STREAM_MAX_CHUNKS = 2000
+
+/**
+ * 从一个事件里抽出可回放的正文流。
+ *
+ * 返回 ``[{index, time0, dt, texts, finalText, totalMs}]``（可能为空数组）。
+ * 只认 ``text-chunks``（正文）：``reasoning-chunks`` 是模型的推理草稿，桌宠气泡
+ * 不该播它；``tool-call-chunks`` 是工具参数分片，更不该。
+ */
+function extractStreams(ev) {
+  const d = ev && ev.data
+  const stream = d && Array.isArray(d.stream) ? d.stream : null
+  if (!stream || !stream.length) return []
+  const chunks = new Map() // index -> text-chunks 帧
+  const finals = new Map() // index -> block-end 的权威文本
+  for (const item of stream) {
+    const c = (item && item.chunk) || item
+    if (!c || typeof c.type !== 'string') continue
+    if (c.type === 'text-chunks') {
+      const texts = Array.isArray(c.texts) ? c.texts.map((t) => String(t ?? '')) : []
+      if (!texts.length) continue
+      chunks.set(Number(c.index) || 0, { time0: Number(c.time0) || 0, dt: Array.isArray(c.dt) ? c.dt : [], texts })
+    } else if (c.type === 'block-end' && c.block && c.block.type === 'text') {
+      finals.set(Number(c.index) || 0, String(c.block.text ?? ''))
+    }
+  }
+  const out = []
+  for (const [index, ch] of chunks) {
+    let texts = ch.texts
+    // 封顶：超出部分合并为最后一块（宁可少几次重绘，也不能把气泡挂死）
+    if (texts.length > STREAM_MAX_CHUNKS) {
+      const head = texts.slice(0, STREAM_MAX_CHUNKS - 1)
+      head.push(texts.slice(STREAM_MAX_CHUNKS - 1).join(''))
+      texts = head
+    }
+    const dt = ch.dt.slice(0, Math.max(0, texts.length - 1)).map((v) => {
+      const n = Number(v)
+      return Number.isFinite(n) && n > 0 ? Math.min(n, 5000) : 0
+    })
+    let totalMs = 0
+    for (const v of dt) totalMs += v
+    out.push({
+      index,
+      time0: ch.time0,
+      dt,
+      texts,
+      finalText: finals.has(index) ? finals.get(index) : '',
+      totalMs,
+    })
+  }
+  return out
+}
+
 /** 对外暴露的 facts（去掉内部下划线字段）。 */
 function publicFacts(f) {
   const out = {}
@@ -604,6 +685,8 @@ class Follower {
     this.facts = initialFacts()
     this.attached = false
     this.replayed = 0
+    // 已发过 stream 的事件 seq（防日志截断/重读时同一段正文被回放两次）
+    this.streamSeqs = new Set()
   }
 
   /** 附着到候选日志：重放折叠出当前事实 → 发 ready + facts → 从 EOF 增量跟随。 */
@@ -635,6 +718,9 @@ class Follower {
     this.facts = foldEvents(decoded.events)
     this.replayed = decoded.events.length
     this.attached = true
+    // 附着时历史重放不发 stream（offset 直接落到 EOF，历史事件不会二次读到）；
+    // 这里清空去重集合，属于新附着的新起点。
+    this.streamSeqs = new Set()
     // 附着期间出现过的解码错误：用于识别"这个日志本身是坏的"
     this.sawDecodeError = false
 
@@ -737,6 +823,31 @@ class Follower {
         data: ev.data,
         facts: publicFacts(this.facts),
       })
+      // 逐 token 流式：**只在这里**（增量跟随）发，历史重放不发（见文件头说明）
+      if (ev.type === 'assistant/message' || ev.type === 'assistant/attempt') {
+        const key = `${this.sessionId}:${ev.seq}`
+        if (!this.streamSeqs.has(key)) {
+          this.streamSeqs.add(key)
+          if (this.streamSeqs.size > 500) this.streamSeqs.clear() // 防无限增长
+          for (const s of extractStreams(ev)) {
+            emit({
+              kind: 'stream',
+              session: this.sessionId,
+              turn: this.facts.turn,
+              step: this.facts.step,
+              seq: ev.seq,
+              time: ev.time,
+              index: s.index,
+              frame: 'text-chunks',
+              time0: s.time0,
+              dt: s.dt,
+              texts: s.texts,
+              final_text: s.finalText,
+              total_ms: s.totalMs,
+            })
+          }
+        }
+      }
     }
   }
 }
